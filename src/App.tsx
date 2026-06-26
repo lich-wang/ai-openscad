@@ -373,7 +373,10 @@ export default function App() {
       <section className="workspace">
         <aside className="panel controlPanel">
           <label>
-            <span>{tr("llmApiKey")}</span>
+            <div className="fieldHeader">
+              <span>{tr("llmApiKey")}</span>
+              <ApiKeyHint locale={locale} />
+            </div>
             <div className="keyInput">
               <KeyRound size={16} />
               <input
@@ -400,7 +403,10 @@ export default function App() {
           </label>
 
           <label>
-            <span>{tr("visionApiKey")}</span>
+            <div className="fieldHeader">
+              <span>{tr("visionApiKey")}</span>
+              <ApiKeyHint locale={locale} />
+            </div>
             <div className="keyInput">
               <KeyRound size={16} />
               <input
@@ -579,6 +585,33 @@ export default function App() {
         </aside>
       </section>
     </main>
+  );
+}
+
+function ApiKeyHint(props: { locale: Locale }) {
+  return (
+    <span className="keyHelp">
+      <button
+        aria-label={t(props.locale, "noApiKey")}
+        className="keyHelpButton"
+        type="button"
+      >
+        {t(props.locale, "noApiKey")}
+      </button>
+      <span className="keyHelpTooltip" role="tooltip">
+        <strong>{t(props.locale, "inviteTitle")}</strong>
+        <span>{t(props.locale, "inviteDescription")}</span>
+        <img
+          alt={t(props.locale, "inviteQrAlt")}
+          src="/mimo-invite-QRU857.png"
+        />
+        <span className="inviteCodeLine">
+          {t(props.locale, "inviteCodeLabel")}
+          <b>QRU857</b>
+        </span>
+        <span>{t(props.locale, "inviteInstruction")}</span>
+      </span>
+    </span>
   );
 }
 

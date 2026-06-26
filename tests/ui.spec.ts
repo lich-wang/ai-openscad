@@ -74,6 +74,13 @@ test("desktop workbench keeps controls visible and matches screenshot", async ({
   await expect(page.getByText("LLM tokens")).toBeVisible();
   await expect(page.getByText("Vision tokens")).toBeVisible();
 
+  await page.getByRole("button", { name: "No key?" }).first().hover();
+  const inviteTooltip = page.locator(".keyHelpTooltip").filter({ hasText: "QRU857" }).first();
+  await expect(inviteTooltip.locator(".inviteCodeLine")).toContainText("Invite code");
+  await expect(inviteTooltip.locator(".inviteCodeLine")).toContainText("QRU857");
+  await expect(inviteTooltip.getByAltText("Xiaomi MiMo invite QR code")).toBeVisible();
+  await page.mouse.move(900, 40);
+
   const controlBox = await page.locator(".controlPanel").boundingBox();
   const codeBox = await page.locator(".codePanel").boundingBox();
   const lastActionBox = await page
