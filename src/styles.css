@@ -396,6 +396,17 @@ textarea {
   grid-column: 1 / -1;
 }
 
+.pendingActionHint {
+  background: #fff8eb;
+  border: 1px solid #f0c57a;
+  border-radius: 6px;
+  color: #8a4b0f;
+  font-size: 13px;
+  grid-column: 1 / -1;
+  margin: 0;
+  padding: 9px 10px;
+}
+
 .buttonGrid.agentActions .secondaryAction {
   background: #eef2f7;
   border: 1px solid #cbd5e1;
@@ -424,6 +435,12 @@ textarea {
   background: #fff1f1;
   border-color: #f7b4b4;
   color: #a33a3a;
+}
+
+.status.warning {
+  background: #fff8eb;
+  border-color: #f0c57a;
+  color: #8a4b0f;
 }
 
 .panelHeader {
@@ -591,6 +608,14 @@ textarea {
 
 .revisionCard ul {
   padding-left: 18px;
+}
+
+.pendingRevisionNotice {
+  background: #fff8eb;
+  border: 1px solid #f0c57a;
+  border-radius: 6px;
+  color: #8a4b0f !important;
+  padding: 8px 10px;
 }
 
 .revisionCodeDisclosure {

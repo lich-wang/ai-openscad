@@ -62,6 +62,9 @@ export default function App() {
   const adapter = useMemo(() => new BrowserOpenScadAdapter(), []);
   const isBusy = busy !== "idle";
   const hasRenderedViews = Boolean(project.views.front && project.views.top && project.views.right);
+  const hasPendingRevision = Boolean(project.proposedCode.trim());
+  const compilerOutputForDisplay =
+    hasPendingRevision && busy === "idle" ? tr("revisionReady") : project.compilerOutput;
   const hasModelWork = Boolean(
     project.currentCode.trim() ||
       project.proposedCode.trim() ||
@@ -299,6 +302,7 @@ export default function App() {
       });
       setProject((current) => ({
         ...setProposedRevision(current, proposedCode, review),
+        compilerOutput: tr("revisionReady"),
         promptTrace: [...current.promptTrace, revisionTrace]
       }));
     });
@@ -332,6 +336,7 @@ export default function App() {
       });
       setProject((current) => ({
         ...setProposedRevision(current, proposedCode, project.review!),
+        compilerOutput: tr("revisionReady"),
         promptTrace: [...current.promptTrace, trace]
       }));
     });
@@ -461,7 +466,8 @@ export default function App() {
           </label>
           <button
             className="iconButton"
-            title={tr("exportProject")}
+            disabled={hasPendingRevision}
+            title={hasPendingRevision ? tr("exportProjectPending") : tr("exportProject")}
             onClick={() =>
               downloadText("ai-openscad-project.json", exportProject(project))
             }
@@ -539,11 +545,22 @@ export default function App() {
             </div>
           </div>
 
-          <Status busy={busy} error={error} locale={locale} />
+          <Status
+            busy={busy}
+            error={error}
+            locale={locale}
+            pendingRevision={hasPendingRevision}
+          />
         </aside>
 
         <section className="panel codePanel agentPanel">
-          <AgentRunPanel busy={busy} locale={locale} project={project} />
+          <AgentRunPanel
+            busy={busy}
+            compilerOutput={compilerOutputForDisplay}
+            locale={locale}
+            pendingRevision={hasPendingRevision}
+            project={project}
+          />
           <section className="agentComposer">
             <div className="panelHeader">
               <h2>{tr("agentComposer")}</h2>
@@ -588,7 +605,10 @@ export default function App() {
                   </button>
                 </>
               ) : null}
-              {project.review ? (
+              {project.review && hasPendingRevision ? (
+                <p className="pendingActionHint">{tr("pendingRevisionActionHint")}</p>
+              ) : null}
+              {project.review && !hasPendingRevision ? (
                 <>
                   <button className="primaryAction" disabled={isBusy} onClick={handleIterateAgain}>
                     <RefreshCw size={16} />
@@ -654,6 +674,7 @@ export default function App() {
                   ? `${tr("visualReview")}: ${project.review.summary}`
                   : tr("generatedCode")}
               </p>
+              <p className="pendingRevisionNotice">{tr("pendingRevisionNotice")}</p>
               {project.review?.issues.length ? (
                 <ul>
                   {project.review.issues.map((issue) => (
@@ -692,7 +713,7 @@ export default function App() {
 
           <section className="outputBlock">
             <h3>{tr("compiler")}</h3>
-            <pre>{project.compilerOutput || tr("noCompileOutput")}</pre>
+            <pre>{compilerOutputForDisplay || tr("noCompileOutput")}</pre>
           </section>
 
           <section className="outputBlock">
@@ -785,7 +806,9 @@ function ModelPicker(props: {
 
 function AgentRunPanel(props: {
   busy: BusyState;
+  compilerOutput: string;
   locale: Locale;
+  pendingRevision: boolean;
   project: ProjectState;
 }) {
   const latestTrace = props.project.promptTrace.slice(-4).reverse();
@@ -795,7 +818,9 @@ function AgentRunPanel(props: {
         <h2>{t(props.locale, "agentRun")}</h2>
         <span>
           {props.busy === "idle"
-            ? t(props.locale, "ready")
+            ? props.pendingRevision
+              ? t(props.locale, "revisionPending")
+              : t(props.locale, "ready")
             : busyStatusLabel(props.locale, props.busy)}
         </span>
       </div>
@@ -826,7 +851,7 @@ function AgentRunPanel(props: {
         {props.project.views.front || props.project.views.top || props.project.views.right ? (
           <article className="agentEvent">
             <h3>{t(props.locale, "draftRender")}</h3>
-            <p>{props.project.compilerOutput || t(props.locale, "compiledDraft")}</p>
+            <p>{props.compilerOutput || t(props.locale, "compiledDraft")}</p>
           </article>
         ) : null}
 
@@ -868,7 +893,12 @@ function AgentRunPanel(props: {
   );
 }
 
-function Status(props: { busy: BusyState; error: string; locale: Locale }) {
+function Status(props: {
+  busy: BusyState;
+  error: string;
+  locale: Locale;
+  pendingRevision: boolean;
+}) {
   if (props.error) {
     return <p className="status error">{props.error}</p>;
   }
@@ -878,6 +908,9 @@ function Status(props: { busy: BusyState; error: string; locale: Locale }) {
         {t(props.locale, "working")}: {busyStatusLabel(props.locale, props.busy)}
       </p>
     );
+  }
+  if (props.pendingRevision) {
+    return <p className="status warning">{t(props.locale, "revisionPending")}</p>;
   }
   return <p className="status">{t(props.locale, "ready")}</p>;
 }
