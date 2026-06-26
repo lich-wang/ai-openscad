@@ -41,6 +41,7 @@ export interface ProjectState {
   proposedCode: string;
   compilerOutput: string;
   review: VisionReview | null;
+  stl: string;
   views: {
     front: string;
     top: string;
@@ -74,6 +75,7 @@ export function createEmptyProject(): ProjectState {
     proposedCode: "",
     compilerOutput: "",
     review: null,
+    stl: "",
     views: {
       front: "",
       top: "",
@@ -178,6 +180,7 @@ export function importProject(serialized: string): ProjectState {
       top: parsed.views?.top ?? "",
       right: parsed.views?.right ?? ""
     },
+    stl: parsed.stl ?? "",
     iterations: parsed.iterations ?? [],
     promptTrace: parsed.promptTrace ?? []
   };

@@ -15,6 +15,7 @@ const project = {
     issues: ["杯口倒角不明显"],
     confidence: 0.86
   },
+  stl: "solid ui-test\nendsolid ui-test",
   views: {
     front:
       "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADElEQVR42mP8z8AARQAFAAH/AnH9zAAAAABJRU5ErkJggg==",
@@ -76,6 +77,7 @@ test("desktop workbench keeps controls visible and matches screenshot", async ({
   await expect(page.getByText("User Request")).toHaveCount(0);
   await expect(page.locator(".modelHistory")).toContainText("Models");
   await expect(page.locator(".modelHistory button")).toHaveCount(1);
+  await expect(page.locator(".resultPanel").getByRole("button", { name: /STL/i })).toBeVisible();
   await expect(page.getByRole("button", { name: /Final Export/i })).toBeVisible();
   await expect(page.getByText("LLM tokens")).toBeVisible();
   await expect(page.getByText("Vision tokens")).toBeVisible();

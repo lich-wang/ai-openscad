@@ -10,6 +10,7 @@ const project = {
   proposedCode: "",
   compilerOutput: "Compiled to STL in browser.",
   review: null,
+  stl: "",
   views: {
     front:
       "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADElEQVR42mP8z8AARQAFAAH/AnH9zAAAAABJRU5ErkJggg==",
@@ -135,6 +136,7 @@ test("generation streams code and automatically renders draft views", async ({ p
     timeout: 10000
   });
   await expect(page.locator(".viewTile img")).toHaveCount(3, { timeout: 30000 });
+  await expect(page.getByRole("button", { name: /STL/i })).toBeVisible();
   await expect(page.locator(".resultPanel").getByText("Draft precision was used for fast review.")).toBeVisible({
     timeout: 30000
   });
@@ -262,4 +264,28 @@ test("accepting a revision requires a fresh visual review before another iterati
   await expect(page.getByRole("button", { name: /^Review$/i })).toBeVisible();
   await expect(page.getByRole("button", { name: /Iterate Again/i })).toHaveCount(0);
   await expect(page.locator(".resultPanel").getByText("No review yet.")).toBeVisible();
+});
+
+test("invalid OpenSCAD render fails without leaving the page busy", async ({ page }) => {
+  await page.addInitScript((storedProject) => {
+    localStorage.setItem(
+      "ai-openscad.project",
+      JSON.stringify({
+        ...storedProject,
+        currentCode: "cube(",
+        stl: "solid previous\nendsolid previous",
+        review: null,
+        promptTrace: []
+      })
+    );
+  }, project);
+
+  await page.goto("/");
+  await page.getByRole("button", { name: /Rerender/i }).click();
+
+  await expect(page.locator(".controlPanel .status.error")).toBeVisible({
+    timeout: 30000
+  });
+  await expect(page.locator(".controlPanel .status")).not.toContainText("Working");
+  await expect(page.locator(".controlPanel").getByRole("button", { name: "New model" })).toBeEnabled();
 });

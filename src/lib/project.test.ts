@@ -12,6 +12,7 @@ describe("project persistence", () => {
     const project = createEmptyProject();
     project.requirement = "rounded organizer";
     project.currentCode = "cube([10, 10, 10]);";
+    project.stl = "solid organizer\nendsolid organizer";
     project.views.front = "data:image/png;base64,front";
     project.iterations.push({
       id: "iteration-1",
@@ -31,7 +32,8 @@ describe("project persistence", () => {
     expect(exported).not.toContain("sk-secret");
     expect(importProject(exported)).toMatchObject({
       requirement: "rounded organizer",
-      currentCode: "cube([10, 10, 10]);"
+      currentCode: "cube([10, 10, 10]);",
+      stl: "solid organizer\nendsolid organizer"
     });
   });
 

@@ -18,9 +18,7 @@ import {
   reviewViews
 } from "./lib/apiClient";
 import {
-  captureOrthographicViews,
-  downloadText,
-  type ViewCaptureStage
+  downloadText
 } from "./lib/capture";
 import { getBrowserLocale, t, type Locale, type MessageKey } from "./lib/i18n";
 import {
@@ -45,7 +43,7 @@ import {
   type PromptTraceEntry,
   type ProjectState
 } from "./lib/project";
-import { BrowserOpenScadAdapter } from "./lib/render";
+import { createRenderMcp, type RenderMcpStage } from "./lib/render";
 import {
   buildRenderPrecisionInstruction,
   normalizeOpenScadPrecision
@@ -68,7 +66,7 @@ export default function App() {
 
   const locale = getBrowserLocale();
   const tr = (key: MessageKey) => t(locale, key);
-  const adapter = useMemo(() => new BrowserOpenScadAdapter(), []);
+  const adapter = useMemo(() => createRenderMcp("web"), []);
   const isBusy = busy !== "idle";
   const hasRenderedViews = Boolean(project.views.front && project.views.top && project.views.right);
   const hasPendingRevision = Boolean(project.proposedCode.trim());
@@ -152,6 +150,8 @@ export default function App() {
         currentCode: "",
         proposedCode: "",
         review: null,
+        stl: "",
+        views: { front: "", top: "", right: "" },
         compilerOutput: tr("streamingCode")
       }));
       const { code, trace } = await generateOpenScad({
@@ -172,6 +172,8 @@ export default function App() {
         currentCode: code,
         proposedCode: "",
         review: null,
+        stl: "",
+        views: { front: "", top: "", right: "" },
         compilerOutput: tr("renderingDraft"),
         promptTrace: [...current.promptTrace, trace],
         updatedAt: new Date().toISOString(),
@@ -189,7 +191,7 @@ export default function App() {
       }));
       setBusy("compiling");
       const rendered = await compileDraftCode(code);
-      if (!rendered.ok || !rendered.views) {
+      if (!rendered.ok || !rendered.views || !rendered.stl) {
         setProject((current) => ({
           ...current,
           compilerOutput: rendered.diagnostics,
@@ -204,6 +206,7 @@ export default function App() {
         proposedCode: "",
         review: null,
         views: rendered.views,
+        stl: rendered.stl,
         compilerOutput: `${rendered.diagnostics}\n${tr("compiledDraft")}`,
         promptTrace: [...current.promptTrace, rendered.trace],
         updatedAt: new Date().toISOString(),
@@ -228,7 +231,7 @@ export default function App() {
         throw new Error(tr("missingCode"));
       }
       const rendered = await compileDraftCode(project.currentCode);
-      if (!rendered.ok || !rendered.views) {
+      if (!rendered.ok || !rendered.views || !rendered.stl) {
         setProject((current) => ({
           ...current,
           compilerOutput: rendered.diagnostics,
@@ -242,6 +245,7 @@ export default function App() {
         review: null,
         proposedCode: "",
         views: rendered.views,
+        stl: rendered.stl,
         compilerOutput: `${rendered.diagnostics}\n${tr("compiledDraft")}`,
         promptTrace: [...current.promptTrace, rendered.trace],
         updatedAt: new Date().toISOString(),
@@ -262,31 +266,33 @@ export default function App() {
 
   async function compileDraftCode(code: string) {
     await updateRenderStatus("renderPreparing");
-    await updateRenderStatus("renderCompiling");
     const draftCode = normalizeOpenScadPrecision(code, "draft");
-    const result = await adapter.compile(draftCode);
+    const result = await adapter.render({
+      source: draftCode,
+      onProgress: (stage) => updateRenderStatus(renderMcpStageMessageKey(stage))
+    });
     const trace = createPromptTraceEntry({
       phase: "compile",
-      modelId: "browser-openscad",
+      modelId: "render-mcp:web",
       systemPrompt: buildRenderPrecisionInstruction("draft"),
       userPrompt: tr("compileDraftTrace"),
       response: result.diagnostics
     });
-    if (!result.ok || !result.stl) {
+    if (!result.ok || !result.stl || !result.views) {
       return {
         ok: false,
         diagnostics: result.diagnostics,
         trace,
-        views: null
+        views: null,
+        stl: null
       };
     }
     return {
       ok: true,
       diagnostics: result.diagnostics,
       trace,
-      views: await captureOrthographicViews(result.stl, {
-        onProgress: (stage) => updateRenderStatus(renderStageMessageKey(stage))
-      })
+      views: result.views,
+      stl: result.stl
     };
   }
 
@@ -391,16 +397,19 @@ export default function App() {
         throw new Error(tr("missingCode"));
       }
       const finalCode = normalizeOpenScadPrecision(project.currentCode, "final");
-      await updateRenderStatus("renderCompiling");
-      const result = await adapter.compile(finalCode);
+      await updateRenderStatus("renderPreparing");
+      const result = await adapter.render({
+        source: finalCode,
+        onProgress: (stage) => updateRenderStatus(renderMcpStageMessageKey(stage))
+      });
       const trace = createPromptTraceEntry({
         phase: "final-export",
-        modelId: "browser-openscad",
+        modelId: "render-mcp:web",
         systemPrompt: buildRenderPrecisionInstruction("final"),
         userPrompt: tr("finalExportTrace"),
         response: result.diagnostics
       });
-      if (!result.ok || !result.stl) {
+      if (!result.ok || !result.stl || !result.views) {
         setProject((current) => ({
           ...current,
           compilerOutput: result.diagnostics,
@@ -409,14 +418,15 @@ export default function App() {
         }));
         throw new Error(result.diagnostics);
       }
-      const views = await captureOrthographicViews(result.stl, {
-        onProgress: (stage) => updateRenderStatus(renderStageMessageKey(stage))
-      });
+      const finalStl = result.stl;
+      const finalViews = result.views;
       downloadText("ai-openscad-final.scad", finalCode, "text/plain;charset=utf-8");
+      downloadText("ai-openscad-final.stl", finalStl, "model/stl;charset=utf-8");
       setProject((current) => ({
         ...current,
         currentCode: finalCode,
-        views,
+        views: finalViews,
+        stl: finalStl,
         compilerOutput: `${result.diagnostics}\n${tr("finalExportDone")}`,
         promptTrace: [...current.promptTrace, trace],
         updatedAt: new Date().toISOString()
@@ -432,7 +442,7 @@ export default function App() {
         throw new Error(tr("missingCode"));
       }
       const rendered = await compileDraftCode(accepted.currentCode);
-      if (!rendered.ok || !rendered.views) {
+      if (!rendered.ok || !rendered.views || !rendered.stl) {
         setProject((current) => ({
           ...current,
           compilerOutput: rendered.diagnostics,
@@ -444,6 +454,7 @@ export default function App() {
       setProject((current) => ({
         ...current,
         views: rendered.views,
+        stl: rendered.stl,
         review: null,
         compilerOutput: `${rendered.diagnostics}\n${tr("compiledDraft")}`,
         promptTrace: [...current.promptTrace, rendered.trace],
@@ -780,6 +791,52 @@ export default function App() {
             <ViewImage label={tr("right")} src={project.views.right} />
           </div>
 
+          {hasRenderedViews || project.stl ? (
+            <section className="renderAssetPanel" aria-label={tr("renderOutputs")}>
+              <span>{tr("renderOutputs")}</span>
+              <div className="renderAssetActions">
+                <button
+                  disabled={!project.views.front}
+                  onClick={() =>
+                    downloadDataUrl("ai-openscad-front.png", project.views.front)
+                  }
+                  type="button"
+                >
+                  <Download size={14} />
+                  {tr("downloadFrontPng")}
+                </button>
+                <button
+                  disabled={!project.views.top}
+                  onClick={() => downloadDataUrl("ai-openscad-top.png", project.views.top)}
+                  type="button"
+                >
+                  <Download size={14} />
+                  {tr("downloadTopPng")}
+                </button>
+                <button
+                  disabled={!project.views.right}
+                  onClick={() =>
+                    downloadDataUrl("ai-openscad-right.png", project.views.right)
+                  }
+                  type="button"
+                >
+                  <Download size={14} />
+                  {tr("downloadRightPng")}
+                </button>
+                <button
+                  disabled={!project.stl}
+                  onClick={() =>
+                    downloadText("ai-openscad-model.stl", project.stl, "model/stl;charset=utf-8")
+                  }
+                  type="button"
+                >
+                  <Download size={14} />
+                  {tr("downloadStl")}
+                </button>
+              </div>
+            </section>
+          ) : null}
+
           <section className="outputBlock">
             <h3>{tr("compiler")}</h3>
             <pre>{compilerOutputForDisplay || tr("noCompileOutput")}</pre>
@@ -1065,13 +1122,21 @@ function ViewImage(props: { label: string; src: string }) {
   );
 }
 
-function renderStageMessageKey(stage: ViewCaptureStage): MessageKey {
-  const keys: Record<ViewCaptureStage, MessageKey> = {
+function renderMcpStageMessageKey(stage: RenderMcpStage): MessageKey {
+  const keys: Record<RenderMcpStage, MessageKey> = {
+    compile: "renderCompiling",
     front: "renderFront",
     top: "renderTop",
     right: "renderRight"
   };
   return keys[stage];
+}
+
+function downloadDataUrl(filename: string, dataUrl: string): void {
+  const link = document.createElement("a");
+  link.href = dataUrl;
+  link.download = filename;
+  link.click();
 }
 
 function waitForPaint(): Promise<void> {
