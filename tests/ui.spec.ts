@@ -1,0 +1,92 @@
+import { expect, test } from "@playwright/test";
+
+const project = {
+  id: "project-ui-test",
+  title: "UI Test",
+  requirement: "生成一个30ML的杯子模型",
+  codeModelId: "mimo-v2.5",
+  visionModelId: "mimo-v2.5",
+  currentCode:
+    "$fn = 32;\nmodule cup() {\n  difference() {\n    cylinder(h=40, r=18);\n    translate([0,0,2]) cylinder(h=39, r=15);\n  }\n}\ncup();",
+  proposedCode: "",
+  compilerOutput: "Compiled to STL in browser.\nDraft precision was used for fast review.",
+  review: {
+    summary: "杯子主体正确，杯口需要更圆滑。",
+    issues: ["杯口倒角不明显"],
+    confidence: 0.86
+  },
+  views: {
+    front:
+      "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADElEQVR42mP8z8AARQAFAAH/AnH9zAAAAABJRU5ErkJggg==",
+    top:
+      "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADElEQVR42mP8z8AARQAFAAH/AnH9zAAAAABJRU5ErkJggg==",
+    right:
+      "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADElEQVR42mP8z8AARQAFAAH/AnH9zAAAAABJRU5ErkJggg=="
+  },
+  iterations: [
+    {
+      id: "generated",
+      createdAt: "2026-06-26T00:00:00.000Z",
+      requirement: "生成一个30ML的杯子模型",
+      code: "cube(10);",
+      modelId: "mimo-v2.5",
+      status: "generated"
+    }
+  ],
+  promptTrace: [
+    {
+      id: "trace-1",
+      createdAt: "2026-06-26T00:00:01.000Z",
+      phase: "code-generation",
+      modelId: "mimo-v2.5",
+      systemPrompt: "Generate OpenSCAD with draft precision.",
+      userPrompt: "生成一个30ML的杯子模型",
+      response: "$fn = 32; module cup() {}"
+    },
+    {
+      id: "trace-2",
+      createdAt: "2026-06-26T00:00:02.000Z",
+      phase: "compile",
+      modelId: "browser-openscad",
+      systemPrompt: "Render skill: draft compile and fast visual review.",
+      userPrompt: "Compile current OpenSCAD with draft precision.",
+      response: "Compiled to STL in browser."
+    }
+  ],
+  updatedAt: "2026-06-26T00:00:00.000Z"
+};
+
+test("desktop workbench keeps controls visible and matches screenshot", async ({
+  page
+}) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.addInitScript((storedProject) => {
+    localStorage.setItem("ai-openscad.api-key", "sk-test");
+    localStorage.setItem("ai-openscad.project", JSON.stringify(storedProject));
+  }, project);
+
+  await page.goto("/");
+
+  await expect(page.getByRole("heading", { name: "AI Prompt Trace" })).toBeVisible();
+  await expect(page.getByText("Draft preview uses low precision")).toBeVisible();
+  await expect(page.getByRole("button", { name: /Final Export/i })).toBeVisible();
+
+  const controlBox = await page.locator(".controlPanel").boundingBox();
+  const codeBox = await page.locator(".codePanel").boundingBox();
+  const lastActionBox = await page
+    .getByRole("button", { name: /Final Export/i })
+    .boundingBox();
+
+  expect(controlBox).not.toBeNull();
+  expect(codeBox).not.toBeNull();
+  expect(lastActionBox).not.toBeNull();
+  expect(lastActionBox!.x + lastActionBox!.width).toBeLessThanOrEqual(
+    controlBox!.x + controlBox!.width
+  );
+  expect(controlBox!.x + controlBox!.width).toBeLessThan(codeBox!.x);
+
+  await expect(page.locator(".workspace")).toHaveScreenshot("desktop-workbench.png", {
+    animations: "disabled",
+    maxDiffPixelRatio: 0.02
+  });
+});

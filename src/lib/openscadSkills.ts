@@ -1,22 +1,22 @@
+import { buildModelingInstruction } from "./modelSkill";
+import {
+  buildRenderPrecisionInstruction,
+  type RenderPrecision
+} from "./renderSkill";
+
 export const OPENSCAD_SKILL_CONTEXT = `
 You generate production-quality OpenSCAD code.
 
 Rules:
 - Return only OpenSCAD code unless explicitly asked for explanation.
-- Use millimeters as the unit.
-- Define named parameters at the top for all important dimensions.
-- Prefer stable constructive solid geometry with module boundaries.
 - Add $fn values for curved parts where needed.
 - Keep code deterministic and self-contained.
-- Use official OpenSCAD primitives and transforms correctly.
-- BOSL2 may be used with include <BOSL2/std.scad> when it clearly simplifies geometry.
-- If using libraries, keep includes at the top and avoid unknown external files.
-- Design models so front, top, and right orthographic views reveal the requested features.
-- Avoid non-manifold geometry and zero-thickness walls.
 `;
 
-export function buildCodeSystemPrompt(): string {
+export function buildCodeSystemPrompt(precision: RenderPrecision = "draft"): string {
   return `${OPENSCAD_SKILL_CONTEXT}
+${buildModelingInstruction()}
+${buildRenderPrecisionInstruction(precision)}
 
 Output requirements:
 - Produce valid OpenSCAD.
@@ -30,8 +30,10 @@ export function buildRevisionPrompt(input: {
   code: string;
   reviewSummary: string;
   issues: string[];
+  precision?: RenderPrecision;
 }): string {
   return `Revise this OpenSCAD model after visual review.
+${buildRenderPrecisionInstruction(input.precision ?? "draft")}
 
 Original requirement:
 ${input.requirement}

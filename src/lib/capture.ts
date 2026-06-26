@@ -71,8 +71,12 @@ export async function captureOrthographicViews(stl: string): Promise<ViewSet> {
   return views;
 }
 
-export function downloadText(filename: string, content: string): void {
-  const blob = new Blob([content], { type: "application/json;charset=utf-8" });
+export function downloadText(
+  filename: string,
+  content: string,
+  type = "application/json;charset=utf-8"
+): void {
+  const blob = new Blob([content], { type });
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = url;

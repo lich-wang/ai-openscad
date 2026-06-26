@@ -14,6 +14,7 @@ import { ChangeEvent, useEffect, useMemo, useState } from "react";
 import { generateOpenScad, proposeRevision, reviewViews } from "./lib/apiClient";
 import { captureOrthographicViews, downloadText } from "./lib/capture";
 import { CODE_MODEL_PRESETS } from "./lib/models";
+import { createPromptTraceEntry } from "./lib/promptTrace";
 import {
   createEmptyProject,
   exportProject,
@@ -22,12 +23,17 @@ import {
   loadProject,
   saveApiKey,
   saveProject,
+  type PromptTraceEntry,
   type ProjectState
 } from "./lib/project";
 import { BrowserOpenScadAdapter } from "./lib/render";
+import {
+  buildRenderPrecisionInstruction,
+  normalizeOpenScadPrecision
+} from "./lib/renderSkill";
 import { acceptRevision, rejectRevision, setProposedRevision } from "./lib/workflow";
 
-type BusyState = "idle" | "generating" | "compiling" | "reviewing";
+type BusyState = "idle" | "generating" | "compiling" | "reviewing" | "exporting";
 
 export default function App() {
   const [project, setProject] = useState<ProjectState>(() => loadProject());
@@ -70,16 +76,18 @@ export default function App() {
       if (!project.requirement.trim()) {
         throw new Error("Requirement is required.");
       }
-      const code = await generateOpenScad({
+      const { code, trace } = await generateOpenScad({
         apiKey,
         modelId: project.codeModelId,
-        requirement: project.requirement
+        requirement: project.requirement,
+        precision: "draft"
       });
       setProject((current) => ({
         ...current,
         currentCode: code,
         proposedCode: "",
         compilerOutput: "Generated OpenSCAD code.",
+        promptTrace: [...current.promptTrace, trace],
         updatedAt: new Date().toISOString(),
         iterations: [
           ...current.iterations,
@@ -101,11 +109,20 @@ export default function App() {
       if (!project.currentCode.trim()) {
         throw new Error("OpenSCAD code is required.");
       }
-      const result = await adapter.compile(project.currentCode);
+      const draftCode = normalizeOpenScadPrecision(project.currentCode, "draft");
+      const result = await adapter.compile(draftCode);
+      const trace = createPromptTraceEntry({
+        phase: "compile",
+        modelId: "browser-openscad",
+        systemPrompt: buildRenderPrecisionInstruction("draft"),
+        userPrompt: "Compile current OpenSCAD with draft precision for fast review.",
+        response: result.diagnostics
+      });
       if (!result.ok || !result.stl) {
         setProject((current) => ({
           ...current,
           compilerOutput: result.diagnostics,
+          promptTrace: [...current.promptTrace, trace],
           updatedAt: new Date().toISOString()
         }));
         throw new Error(result.diagnostics);
@@ -114,7 +131,8 @@ export default function App() {
       setProject((current) => ({
         ...current,
         views,
-        compilerOutput: result.diagnostics,
+        compilerOutput: `${result.diagnostics}\nDraft precision was used for fast review.`,
+        promptTrace: [...current.promptTrace, trace],
         updatedAt: new Date().toISOString(),
         iterations: [
           ...current.iterations,
@@ -137,20 +155,66 @@ export default function App() {
       if (!project.views.front || !project.views.top || !project.views.right) {
         throw new Error("Compile the model before review.");
       }
-      const review = await reviewViews({
+      const { review, trace: reviewTrace } = await reviewViews({
         apiKey,
         requirement: project.requirement,
         code: project.currentCode,
         images: [project.views.front, project.views.top, project.views.right]
       });
-      const proposedCode = await proposeRevision({
+      const { code: proposedCode, trace: revisionTrace } = await proposeRevision({
         apiKey,
         modelId: project.codeModelId,
         requirement: project.requirement,
         code: project.currentCode,
-        review
+        review,
+        precision: "draft"
       });
-      setProject((current) => setProposedRevision(current, proposedCode, review));
+      setProject((current) => ({
+        ...setProposedRevision(current, proposedCode, review),
+        promptTrace: [...current.promptTrace, reviewTrace, revisionTrace]
+      }));
+    });
+  }
+
+  async function handleHighPrecisionExport() {
+    const confirmed = window.confirm(
+      "Generate high precision final images and export SCAD? This can be slower than draft review."
+    );
+    if (!confirmed) {
+      return;
+    }
+    await runSafely("exporting", async () => {
+      if (!project.currentCode.trim()) {
+        throw new Error("OpenSCAD code is required.");
+      }
+      const finalCode = normalizeOpenScadPrecision(project.currentCode, "final");
+      const result = await adapter.compile(finalCode);
+      const trace = createPromptTraceEntry({
+        phase: "final-export",
+        modelId: "browser-openscad",
+        systemPrompt: buildRenderPrecisionInstruction("final"),
+        userPrompt: "User confirmed high precision final export.",
+        response: result.diagnostics
+      });
+      if (!result.ok || !result.stl) {
+        setProject((current) => ({
+          ...current,
+          compilerOutput: result.diagnostics,
+          promptTrace: [...current.promptTrace, trace],
+          updatedAt: new Date().toISOString()
+        }));
+        throw new Error(result.diagnostics);
+      }
+      const views = await captureOrthographicViews(result.stl);
+      downloadText("ai-openscad-final.scad", finalCode, "text/plain;charset=utf-8");
+      setProject((current) => ({
+        ...current,
+        currentCode: finalCode,
+        views,
+        compilerOutput: `${result.diagnostics}\nHigh precision final export generated.`,
+        promptTrace: [...current.promptTrace, trace],
+        updatedAt: new Date().toISOString()
+      }));
     });
   }
 
@@ -260,24 +324,32 @@ export default function App() {
               <Eye size={16} />
               Review
             </button>
+            <button disabled={isBusy} onClick={handleHighPrecisionExport}>
+              <Download size={16} />
+              Final Export
+            </button>
           </div>
 
           <Status busy={busy} error={error} />
         </aside>
 
         <section className="panel codePanel">
-          <div className="panelHeader">
-            <h2>
-              <Code2 size={18} />
-              OpenSCAD
-            </h2>
-          </div>
-          <textarea
-            className="codeEditor"
-            spellCheck={false}
-            value={project.currentCode}
-            onChange={(event) => updateProject({ currentCode: event.target.value })}
-          />
+          <PromptTracePanel entries={project.promptTrace} />
+          <section className="codeBlock">
+            <div className="panelHeader">
+              <h2>
+                <Code2 size={18} />
+                OpenSCAD
+              </h2>
+              <span className="precisionBadge">Draft preview uses low precision</span>
+            </div>
+            <textarea
+              className="codeEditor"
+              spellCheck={false}
+              value={project.currentCode}
+              onChange={(event) => updateProject({ currentCode: event.target.value })}
+            />
+          </section>
           {project.proposedCode ? (
             <div className="revisionArea">
               <div className="panelHeader compact">
@@ -368,6 +440,45 @@ function Status(props: { busy: BusyState; error: string }) {
     return <p className="status">Working: {props.busy}</p>;
   }
   return <p className="status">Ready</p>;
+}
+
+function PromptTracePanel(props: { entries: PromptTraceEntry[] }) {
+  const entries = props.entries.slice(-6).reverse();
+  return (
+    <section className="promptTrace" aria-label="AI prompt trace">
+      <div className="panelHeader">
+        <h2>AI Prompt Trace</h2>
+        <span>{props.entries.length} events</span>
+      </div>
+      {entries.length ? (
+        <div className="traceList">
+          {entries.map((entry) => (
+            <details key={entry.id} className="traceItem">
+              <summary>
+                <strong>{entry.phase}</strong>
+                <span>{entry.modelId}</span>
+                <time>{new Date(entry.createdAt).toLocaleTimeString()}</time>
+              </summary>
+              <TraceBlock title="System" value={entry.systemPrompt} />
+              <TraceBlock title="User" value={entry.userPrompt} />
+              {entry.response ? <TraceBlock title="Response" value={entry.response} /> : null}
+            </details>
+          ))}
+        </div>
+      ) : (
+        <p className="emptyTrace">Generate, compile, or review to see prompts here.</p>
+      )}
+    </section>
+  );
+}
+
+function TraceBlock(props: { title: string; value: string }) {
+  return (
+    <div className="traceBlock">
+      <span>{props.title}</span>
+      <pre>{props.value}</pre>
+    </div>
+  );
 }
 
 function ViewImage(props: { label: string; src: string }) {

@@ -93,9 +93,9 @@ button:disabled {
 .workspace {
   display: grid;
   gap: 16px;
-  grid-template-columns: minmax(260px, 320px) minmax(420px, 1fr) minmax(300px, 420px);
+  grid-template-columns: 320px minmax(520px, 1fr) 420px;
   margin: 0 auto;
-  max-width: 1680px;
+  max-width: 1720px;
 }
 
 .panel {
@@ -117,7 +117,7 @@ button:disabled {
 .codePanel {
   display: grid;
   gap: 12px;
-  grid-template-rows: auto minmax(380px, 1fr) auto;
+  grid-template-rows: minmax(180px, 250px) minmax(300px, 1fr) auto;
   min-height: calc(100vh - 104px);
   padding: 16px;
 }
@@ -179,13 +179,13 @@ textarea {
 }
 
 .requirementInput {
-  min-height: 180px;
+  min-height: 150px;
 }
 
 .buttonGrid {
   display: grid;
   gap: 8px;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
 .buttonGrid button,
@@ -193,7 +193,8 @@ textarea {
   background: #1f7a6d;
   color: #ffffff;
   min-height: 40px;
-  padding: 0 12px;
+  min-width: 0;
+  padding: 0 10px;
 }
 
 .buttonGrid button:nth-child(2) {
@@ -202,6 +203,10 @@ textarea {
 
 .buttonGrid button:nth-child(3) {
   background: #9a5b1f;
+}
+
+.buttonGrid button:nth-child(4) {
+  background: #6941c6;
 }
 
 .smallButton {
@@ -241,14 +246,26 @@ textarea {
   font-size: 15px;
 }
 
+.panelHeader span,
+.precisionBadge {
+  color: #667085;
+  font-size: 12px;
+}
+
 .panelHeader.compact {
   margin-top: 2px;
+}
+
+.codeBlock {
+  display: grid;
+  gap: 10px;
+  min-height: 0;
 }
 
 .codeEditor {
   font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
   font-size: 13px;
-  min-height: 360px;
+  min-height: 300px;
   width: 100%;
 }
 
@@ -259,7 +276,77 @@ textarea {
 
 .codeEditor.proposed {
   border-color: #a7d8cc;
-  min-height: 240px;
+  min-height: 180px;
+}
+
+.promptTrace {
+  border: 1px solid #e4e9f0;
+  border-radius: 6px;
+  display: grid;
+  gap: 10px;
+  min-height: 0;
+  overflow: hidden;
+  padding: 12px;
+}
+
+.traceList {
+  display: grid;
+  gap: 8px;
+  max-height: 190px;
+  overflow: auto;
+}
+
+.traceItem {
+  background: #f8fafc;
+  border: 1px solid #e4e9f0;
+  border-radius: 6px;
+  padding: 8px;
+}
+
+.traceItem summary {
+  align-items: center;
+  color: #344054;
+  cursor: pointer;
+  display: grid;
+  gap: 8px;
+  grid-template-columns: 1fr auto auto;
+  list-style-position: inside;
+}
+
+.traceItem summary span,
+.traceItem summary time {
+  color: #667085;
+  font-size: 12px;
+}
+
+.traceBlock {
+  display: grid;
+  gap: 5px;
+  margin-top: 8px;
+}
+
+.traceBlock span {
+  color: #344054;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.traceBlock pre {
+  background: #ffffff;
+  border: 1px solid #e4e9f0;
+  border-radius: 6px;
+  color: #344054;
+  font-size: 12px;
+  margin: 0;
+  max-height: 150px;
+  overflow: auto;
+  padding: 8px;
+  white-space: pre-wrap;
+}
+
+.emptyTrace {
+  color: #667085;
+  margin: 0;
 }
 
 .viewGrid {

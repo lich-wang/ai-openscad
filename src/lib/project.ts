@@ -14,6 +14,23 @@ export interface ProjectIteration {
   reviewSummary?: string;
 }
 
+export type PromptTracePhase =
+  | "code-generation"
+  | "compile"
+  | "vision-review"
+  | "revision"
+  | "final-export";
+
+export interface PromptTraceEntry {
+  id: string;
+  createdAt: string;
+  phase: PromptTracePhase;
+  modelId: string;
+  systemPrompt: string;
+  userPrompt: string;
+  response: string;
+}
+
 export interface ProjectState {
   id: string;
   title: string;
@@ -30,6 +47,7 @@ export interface ProjectState {
     right: string;
   };
   iterations: ProjectIteration[];
+  promptTrace: PromptTraceEntry[];
   updatedAt: string;
 }
 
@@ -53,6 +71,7 @@ export function createEmptyProject(): ProjectState {
       right: ""
     },
     iterations: [],
+    promptTrace: [],
     updatedAt: new Date().toISOString()
   };
 }
@@ -98,6 +117,7 @@ export function importProject(serialized: string): ProjectState {
       top: parsed.views?.top ?? "",
       right: parsed.views?.right ?? ""
     },
-    iterations: parsed.iterations ?? []
+    iterations: parsed.iterations ?? [],
+    promptTrace: parsed.promptTrace ?? []
   };
 }

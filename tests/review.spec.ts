@@ -67,6 +67,6 @@ test("review sends MiMo multimodal model and shows proposed revision", async ({
   await page.getByRole("button", { name: /review/i }).click();
 
   await expect(page.getByText("Proposed Revision")).toBeVisible();
-  await expect(page.getByText("杯子主体正确")).toBeVisible();
+  await expect(page.locator(".resultPanel").getByText("杯子主体正确", { exact: false })).toBeVisible();
   expect(visionModel).toBe("mimo-v2.5");
 });

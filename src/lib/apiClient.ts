@@ -5,7 +5,9 @@ import {
   buildVisionSystemPrompt,
   buildVisionUserPrompt
 } from "./openscadSkills";
-import type { VisionReview } from "./project";
+import type { PromptTraceEntry, VisionReview } from "./project";
+import { createPromptTraceEntry } from "./promptTrace";
+import type { RenderPrecision } from "./renderSkill";
 
 interface GatewayResponse {
   content: string;
@@ -15,15 +17,29 @@ export async function generateOpenScad(input: {
   apiKey: string;
   modelId: string;
   requirement: string;
-}): Promise<string> {
+  precision?: RenderPrecision;
+}): Promise<{ code: string; trace: PromptTraceEntry }> {
+  const systemPrompt = buildCodeSystemPrompt(input.precision ?? "draft");
   const request = createModelRequest({
     apiKey: input.apiKey,
     modelId: input.modelId,
     mode: "code",
-    systemPrompt: buildCodeSystemPrompt(),
+    systemPrompt,
     userPrompt: input.requirement
   });
-  return stripCodeFence(await sendGatewayRequest(request));
+  const response = await sendGatewayRequest(request);
+  const code = stripCodeFence(response);
+  return {
+    code,
+    trace: createPromptTraceEntry({
+      phase: input.precision === "final" ? "final-export" : "code-generation",
+      modelId: input.modelId,
+      systemPrompt,
+      userPrompt: input.requirement,
+      response: code,
+      apiKey: input.apiKey
+    })
+  };
 }
 
 export async function reviewViews(input: {
@@ -31,18 +47,31 @@ export async function reviewViews(input: {
   requirement: string;
   code: string;
   images: string[];
-}): Promise<VisionReview> {
+}): Promise<{ review: VisionReview; trace: PromptTraceEntry }> {
+  const systemPrompt = buildVisionSystemPrompt();
+  const userPrompt = buildVisionUserPrompt(input.requirement, input.code);
   const request = createModelRequest({
     apiKey: input.apiKey,
     modelId: "mimo-v2.5",
     mode: "vision",
-    systemPrompt: buildVisionSystemPrompt(),
-    userPrompt: buildVisionUserPrompt(input.requirement, input.code),
+    systemPrompt,
+    userPrompt,
     images: input.images,
     responseFormat: "json"
   });
   const content = await sendGatewayRequest(request);
-  return parseReview(content);
+  const review = parseReview(content);
+  return {
+    review,
+    trace: createPromptTraceEntry({
+      phase: "vision-review",
+      modelId: "mimo-v2.5",
+      systemPrompt,
+      userPrompt,
+      response: content,
+      apiKey: input.apiKey
+    })
+  };
 }
 
 export async function proposeRevision(input: {
@@ -51,20 +80,36 @@ export async function proposeRevision(input: {
   requirement: string;
   code: string;
   review: VisionReview;
-}): Promise<string> {
+  precision?: RenderPrecision;
+}): Promise<{ code: string; trace: PromptTraceEntry }> {
+  const systemPrompt = buildCodeSystemPrompt(input.precision ?? "draft");
+  const userPrompt = buildRevisionPrompt({
+    requirement: input.requirement,
+    code: input.code,
+    reviewSummary: input.review.summary,
+    issues: input.review.issues,
+    precision: input.precision ?? "draft"
+  });
   const request = createModelRequest({
     apiKey: input.apiKey,
     modelId: input.modelId,
     mode: "code",
-    systemPrompt: buildCodeSystemPrompt(),
-    userPrompt: buildRevisionPrompt({
-      requirement: input.requirement,
-      code: input.code,
-      reviewSummary: input.review.summary,
-      issues: input.review.issues
-    })
+    systemPrompt,
+    userPrompt
   });
-  return stripCodeFence(await sendGatewayRequest(request));
+  const response = await sendGatewayRequest(request);
+  const code = stripCodeFence(response);
+  return {
+    code,
+    trace: createPromptTraceEntry({
+      phase: input.precision === "final" ? "final-export" : "revision",
+      modelId: input.modelId,
+      systemPrompt,
+      userPrompt,
+      response: code,
+      apiKey: input.apiKey
+    })
+  };
 }
 
 async function sendGatewayRequest(request: ReturnType<typeof createModelRequest>) {
