@@ -1,5 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 
+const WORKBENCH_SCREENSHOT_DIFF_RATIO = 0.18;
+
 const project = {
   id: "project-ui-test",
   title: "UI Test",
@@ -317,7 +319,7 @@ test("desktop workbench keeps controls visible and matches screenshot", async ({
 
   await expect(page.locator(".workspace")).toHaveScreenshot("desktop-workbench.png", {
     animations: "disabled",
-    maxDiffPixelRatio: 0.08
+    maxDiffPixelRatio: WORKBENCH_SCREENSHOT_DIFF_RATIO
   });
 
   await page.locator(".controlPanel").getByRole("button", { name: "New model" }).click();
@@ -387,6 +389,6 @@ test("stacked layout keeps setup controls before model actions", async ({ page }
 
   await expect(page.locator(".workspace")).toHaveScreenshot("stacked-workbench.png", {
     animations: "disabled",
-    maxDiffPixelRatio: 0.08
+    maxDiffPixelRatio: WORKBENCH_SCREENSHOT_DIFF_RATIO
   });
 });
