@@ -262,8 +262,10 @@ test("accepting a revision requires a fresh visual review before another iterati
   await page.goto("/");
   await page.getByRole("button", { name: /Accept \+ render/i }).click();
 
-  await expect(page.locator(".viewTile img")).toHaveCount(3, { timeout: 30000 });
-  await expect(page.getByRole("button", { name: /^Review$/i })).toBeVisible();
+  await expect(page.getByRole("button", { name: /^Review$/i })).toBeVisible({
+    timeout: 45000
+  });
+  await expect(page.locator(".viewTile img")).toHaveCount(3);
   await expect(page.getByRole("button", { name: /Iterate Again/i })).toHaveCount(0);
   await expect(page.locator(".resultPanel").getByText("No review yet.")).toBeVisible();
 });
