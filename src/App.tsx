@@ -11,18 +11,25 @@ import {
   X
 } from "lucide-react";
 import { ChangeEvent, useEffect, useMemo, useState } from "react";
-import { generateOpenScad, proposeRevision, reviewViews } from "./lib/apiClient";
+import {
+  estimateTokenUsage,
+  generateOpenScad,
+  proposeRevision,
+  reviewViews
+} from "./lib/apiClient";
 import { captureOrthographicViews, downloadText } from "./lib/capture";
-import { CODE_MODEL_PRESETS } from "./lib/models";
+import { CODE_MODEL_PRESETS, VISION_MODEL_PRESETS } from "./lib/models";
 import { createPromptTraceEntry } from "./lib/promptTrace";
 import {
   createEmptyProject,
   exportProject,
   importProject,
-  loadApiKey,
+  loadLlmApiKey,
   loadProject,
-  saveApiKey,
+  loadVisionApiKey,
+  saveLlmApiKey,
   saveProject,
+  saveVisionApiKey,
   type PromptTraceEntry,
   type ProjectState
 } from "./lib/project";
@@ -37,7 +44,9 @@ type BusyState = "idle" | "generating" | "compiling" | "reviewing" | "exporting"
 
 export default function App() {
   const [project, setProject] = useState<ProjectState>(() => loadProject());
-  const [apiKey, setApiKey] = useState(() => loadApiKey());
+  const [llmApiKey, setLlmApiKey] = useState(() => loadLlmApiKey());
+  const [visionApiKey, setVisionApiKey] = useState(() => loadVisionApiKey());
+  const [iterationNotes, setIterationNotes] = useState("");
   const [busy, setBusy] = useState<BusyState>("idle");
   const [error, setError] = useState("");
 
@@ -49,8 +58,23 @@ export default function App() {
   }, [project]);
 
   useEffect(() => {
-    saveApiKey(apiKey);
-  }, [apiKey]);
+    saveLlmApiKey(llmApiKey);
+  }, [llmApiKey]);
+
+  useEffect(() => {
+    saveVisionApiKey(visionApiKey);
+  }, [visionApiKey]);
+
+  const tokenUsage = useMemo(() => {
+    const imageCount = [project.views.front, project.views.top, project.views.right].filter(
+      Boolean
+    ).length;
+    return estimateTokenUsage({
+      llmText: `${project.requirement}\n${project.currentCode}\n${project.review?.summary ?? ""}\n${iterationNotes}`,
+      visionText: `${project.requirement}\n${project.currentCode}`,
+      imageCount
+    });
+  }, [iterationNotes, project.currentCode, project.requirement, project.review, project.views]);
 
   async function runSafely(action: BusyState, task: () => Promise<void>) {
     setBusy(action);
@@ -64,23 +88,42 @@ export default function App() {
     }
   }
 
-  function requireApiKey() {
-    if (!apiKey.trim()) {
-      throw new Error("API key is required.");
+  function requireLlmApiKey() {
+    if (!llmApiKey.trim()) {
+      throw new Error("LLM API key is required.");
+    }
+  }
+
+  function requireVisionApiKey() {
+    if (!visionApiKey.trim()) {
+      throw new Error("Vision API key is required.");
     }
   }
 
   async function handleGenerate() {
     await runSafely("generating", async () => {
-      requireApiKey();
+      requireLlmApiKey();
       if (!project.requirement.trim()) {
         throw new Error("Requirement is required.");
       }
+      setProject((current) => ({
+        ...current,
+        currentCode: "",
+        proposedCode: "",
+        compilerOutput: "Streaming OpenSCAD from LLM..."
+      }));
       const { code, trace } = await generateOpenScad({
-        apiKey,
+        apiKey: llmApiKey,
         modelId: project.codeModelId,
         requirement: project.requirement,
-        precision: "draft"
+        precision: "draft",
+        onToken: (streamedCode) => {
+          setProject((current) => ({
+            ...current,
+            currentCode: streamedCode,
+            compilerOutput: "Streaming OpenSCAD from LLM..."
+          }));
+        }
       });
       setProject((current) => ({
         ...current,
@@ -151,27 +194,78 @@ export default function App() {
 
   async function handleReview() {
     await runSafely("reviewing", async () => {
-      requireApiKey();
       if (!project.views.front || !project.views.top || !project.views.right) {
         throw new Error("Compile the model before review.");
       }
+      requireVisionApiKey();
       const { review, trace: reviewTrace } = await reviewViews({
-        apiKey,
+        apiKey: visionApiKey,
+        modelId: project.visionModelId,
         requirement: project.requirement,
         code: project.currentCode,
         images: [project.views.front, project.views.top, project.views.right]
       });
+      setProject((current) => ({
+        ...current,
+        review,
+        promptTrace: [...current.promptTrace, reviewTrace],
+        compilerOutput: "Vision review complete. Streaming revision proposal..."
+      }));
+      requireLlmApiKey();
+      setProject((current) => ({
+        ...current,
+        proposedCode: ""
+      }));
       const { code: proposedCode, trace: revisionTrace } = await proposeRevision({
-        apiKey,
+        apiKey: llmApiKey,
         modelId: project.codeModelId,
         requirement: project.requirement,
         code: project.currentCode,
         review,
-        precision: "draft"
+        precision: "draft",
+        onToken: (streamedCode) => {
+          setProject((current) => ({
+            ...current,
+            proposedCode: streamedCode
+          }));
+        }
       });
       setProject((current) => ({
         ...setProposedRevision(current, proposedCode, review),
-        promptTrace: [...current.promptTrace, reviewTrace, revisionTrace]
+        promptTrace: [...current.promptTrace, revisionTrace]
+      }));
+    });
+  }
+
+  async function handleIterateAgain() {
+    await runSafely("generating", async () => {
+      requireLlmApiKey();
+      if (!project.review) {
+        throw new Error("Run vision review before iterating again.");
+      }
+      setProject((current) => ({
+        ...current,
+        proposedCode: "",
+        compilerOutput: "Streaming review-driven iteration from LLM..."
+      }));
+      const { code: proposedCode, trace } = await proposeRevision({
+        apiKey: llmApiKey,
+        modelId: project.codeModelId,
+        requirement: project.requirement,
+        code: project.currentCode,
+        review: project.review,
+        userNotes: iterationNotes,
+        precision: "draft",
+        onToken: (streamedCode) => {
+          setProject((current) => ({
+            ...current,
+            proposedCode: streamedCode
+          }));
+        }
+      });
+      setProject((current) => ({
+        ...setProposedRevision(current, proposedCode, project.review!),
+        promptTrace: [...current.promptTrace, trace]
       }));
     });
   }
@@ -275,12 +369,12 @@ export default function App() {
       <section className="workspace">
         <aside className="panel controlPanel">
           <label>
-            <span>API Key</span>
+            <span>LLM API Key</span>
             <div className="keyInput">
               <KeyRound size={16} />
               <input
-                value={apiKey}
-                onChange={(event) => setApiKey(event.target.value)}
+                value={llmApiKey}
+                onChange={(event) => setLlmApiKey(event.target.value)}
                 placeholder="sk-..."
                 type="password"
               />
@@ -288,12 +382,39 @@ export default function App() {
           </label>
 
           <label>
-            <span>Code Model</span>
+            <span>LLM Model</span>
             <select
               value={project.codeModelId}
               onChange={(event) => updateProject({ codeModelId: event.target.value })}
             >
               {CODE_MODEL_PRESETS.map((model) => (
+                <option key={model.id} value={model.id}>
+                  {model.label}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <label>
+            <span>Vision API Key</span>
+            <div className="keyInput">
+              <KeyRound size={16} />
+              <input
+                value={visionApiKey}
+                onChange={(event) => setVisionApiKey(event.target.value)}
+                placeholder="sk-..."
+                type="password"
+              />
+            </div>
+          </label>
+
+          <label>
+            <span>Vision Model</span>
+            <select
+              value={project.visionModelId}
+              onChange={(event) => updateProject({ visionModelId: event.target.value })}
+            >
+              {VISION_MODEL_PRESETS.map((model) => (
                 <option key={model.id} value={model.id}>
                   {model.label}
                 </option>
@@ -311,6 +432,27 @@ export default function App() {
             />
           </label>
 
+          <label>
+            <span>Iteration Notes</span>
+            <textarea
+              className="iterationInput"
+              value={iterationNotes}
+              onChange={(event) => setIterationNotes(event.target.value)}
+              placeholder="结合评审结果再次修改，例如：杯壁再薄一点，把手更大..."
+            />
+          </label>
+
+          <div className="tokenPanel">
+            <div>
+              <span>LLM tokens</span>
+              <strong>{tokenUsage.llmTokens}</strong>
+            </div>
+            <div>
+              <span>Vision tokens</span>
+              <strong>{tokenUsage.visionTokens}</strong>
+            </div>
+          </div>
+
           <div className="buttonGrid">
             <button disabled={isBusy} onClick={handleGenerate}>
               <Send size={16} />
@@ -323,6 +465,10 @@ export default function App() {
             <button disabled={isBusy} onClick={handleReview}>
               <Eye size={16} />
               Review
+            </button>
+            <button disabled={isBusy} onClick={handleIterateAgain}>
+              <RefreshCw size={16} />
+              Iterate Again
             </button>
             <button disabled={isBusy} onClick={handleHighPrecisionExport}>
               <Download size={16} />

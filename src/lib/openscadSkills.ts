@@ -1,4 +1,5 @@
 import { buildModelingInstruction } from "./modelSkill";
+import { buildLanguageInstruction } from "./languageSkill";
 import {
   buildRenderPrecisionInstruction,
   type RenderPrecision
@@ -13,8 +14,12 @@ Rules:
 - Keep code deterministic and self-contained.
 `;
 
-export function buildCodeSystemPrompt(precision: RenderPrecision = "draft"): string {
+export function buildCodeSystemPrompt(
+  precision: RenderPrecision = "draft",
+  sourceText = ""
+): string {
   return `${OPENSCAD_SKILL_CONTEXT}
+${buildLanguageInstruction(sourceText)}
 ${buildModelingInstruction()}
 ${buildRenderPrecisionInstruction(precision)}
 
@@ -30,10 +35,12 @@ export function buildRevisionPrompt(input: {
   code: string;
   reviewSummary: string;
   issues: string[];
+  userNotes?: string;
   precision?: RenderPrecision;
 }): string {
   return `Revise this OpenSCAD model after visual review.
 ${buildRenderPrecisionInstruction(input.precision ?? "draft")}
+${buildLanguageInstruction(`${input.requirement}\n${input.userNotes ?? ""}`)}
 
 Original requirement:
 ${input.requirement}
@@ -49,11 +56,15 @@ ${input.reviewSummary}
 Issues:
 ${input.issues.map((issue) => `- ${issue}`).join("\n") || "- No specific issues"}
 
+User iteration notes:
+${input.userNotes?.trim() || "No extra user notes."}
+
 Return the complete revised OpenSCAD code only.`;
 }
 
-export function buildVisionSystemPrompt(): string {
+export function buildVisionSystemPrompt(requirement = ""): string {
   return `You review OpenSCAD-generated 3D models from front, top, and right orthographic views.
+${buildLanguageInstruction(requirement)}
 Return JSON with keys: summary, issues, confidence. The issues value must be an array of strings and confidence must be 0 to 1.`;
 }
 

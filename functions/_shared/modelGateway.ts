@@ -9,6 +9,7 @@ interface GatewayBody {
   messages: GatewayMessage[];
   temperature?: number;
   responseFormat?: "json";
+  stream?: boolean;
 }
 
 const providers: Record<
@@ -66,7 +67,7 @@ export async function proxyModelRequest(request: Request): Promise<Response> {
     model: upstreamModel,
     messages: body.messages,
     temperature: body.temperature ?? 0.3,
-    stream: false
+    stream: body.stream === true
   };
 
   if (body.responseFormat === "json") {
@@ -82,11 +83,22 @@ export async function proxyModelRequest(request: Request): Promise<Response> {
     body: JSON.stringify(upstreamBody)
   });
 
-  const text = await upstream.text();
   if (!upstream.ok) {
+    const text = await upstream.text();
     return normalizedError(summarizeUpstreamError(text), upstream.status);
   }
 
+  if (body.stream === true) {
+    return new Response(upstream.body, {
+      status: upstream.status,
+      headers: {
+        "Content-Type": "text/event-stream; charset=utf-8",
+        "Cache-Control": "no-cache"
+      }
+    });
+  }
+
+  const text = await upstream.text();
   let parsed: { choices?: Array<{ message?: { content?: string } }> };
   try {
     parsed = JSON.parse(text) as typeof parsed;

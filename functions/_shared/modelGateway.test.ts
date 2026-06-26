@@ -49,4 +49,47 @@ describe("proxyModelRequest", () => {
     ) as { model: string };
     expect(upstreamBody.model).toBe("mimo-v2.5");
   });
+
+  it("proxies streaming chat completions as event streams", async () => {
+    const upstreamStream = new ReadableStream({
+      start(controller) {
+        controller.enqueue(
+          new TextEncoder().encode(
+            'data: {"choices":[{"delta":{"content":"cube"}}]}\n\n'
+          )
+        );
+        controller.close();
+      }
+    });
+    const fetchMock = vi.fn(async () => {
+      return new Response(upstreamStream, {
+        status: 200,
+        headers: { "Content-Type": "text/event-stream" }
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const response = await proxyModelRequest(
+      new Request("https://example.com/api/llm", {
+        method: "POST",
+        headers: {
+          Authorization: "Bearer sk-user",
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          provider: "mimo",
+          model: "mimo-v2.5-pro",
+          stream: true,
+          messages: [{ role: "user", content: "make cube" }]
+        })
+      })
+    );
+
+    const upstreamBody = JSON.parse(
+      String(fetchMock.mock.calls[0]?.[1]?.body)
+    ) as { stream: boolean };
+    expect(upstreamBody.stream).toBe(true);
+    expect(response.headers.get("Content-Type")).toContain("text/event-stream");
+    expect(await response.text()).toContain("cube");
+  });
 });

@@ -52,6 +52,8 @@ export interface ProjectState {
 }
 
 const API_KEY_STORAGE_KEY = "ai-openscad.api-key";
+const LLM_API_KEY_STORAGE_KEY = "ai-openscad.llm-api-key";
+const VISION_API_KEY_STORAGE_KEY = "ai-openscad.vision-api-key";
 const PROJECT_STORAGE_KEY = "ai-openscad.project";
 
 export function createEmptyProject(): ProjectState {
@@ -82,6 +84,22 @@ export function saveApiKey(apiKey: string): void {
 
 export function loadApiKey(): string {
   return localStorage.getItem(API_KEY_STORAGE_KEY) ?? "";
+}
+
+export function saveLlmApiKey(apiKey: string): void {
+  localStorage.setItem(LLM_API_KEY_STORAGE_KEY, apiKey);
+}
+
+export function loadLlmApiKey(): string {
+  return localStorage.getItem(LLM_API_KEY_STORAGE_KEY) ?? loadApiKey();
+}
+
+export function saveVisionApiKey(apiKey: string): void {
+  localStorage.setItem(VISION_API_KEY_STORAGE_KEY, apiKey);
+}
+
+export function loadVisionApiKey(): string {
+  return localStorage.getItem(VISION_API_KEY_STORAGE_KEY) ?? loadApiKey();
 }
 
 export function saveProject(project: ProjectState): void {

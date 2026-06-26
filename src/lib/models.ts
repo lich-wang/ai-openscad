@@ -25,6 +25,7 @@ export interface GatewayBody {
   messages: ChatMessage[];
   temperature: number;
   responseFormat?: "json";
+  stream?: boolean;
 }
 
 export interface GatewayRequest {
@@ -77,6 +78,7 @@ export function createModelRequest(input: {
   userPrompt: string;
   images?: string[];
   responseFormat?: "json";
+  stream?: boolean;
 }): GatewayRequest {
   const preset = getModelPreset(input.modelId, input.mode);
   const content: ChatMessage["content"] = input.images?.length
@@ -103,7 +105,8 @@ export function createModelRequest(input: {
         { role: "user", content }
       ],
       temperature: input.mode === "vision" ? 0.2 : 0.35,
-      responseFormat: input.responseFormat
+      responseFormat: input.responseFormat,
+      stream: input.stream
     }
   };
 }

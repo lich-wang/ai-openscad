@@ -61,7 +61,8 @@ test("desktop workbench keeps controls visible and matches screenshot", async ({
 }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.addInitScript((storedProject) => {
-    localStorage.setItem("ai-openscad.api-key", "sk-test");
+    localStorage.setItem("ai-openscad.llm-api-key", "sk-llm");
+    localStorage.setItem("ai-openscad.vision-api-key", "sk-vision");
     localStorage.setItem("ai-openscad.project", JSON.stringify(storedProject));
   }, project);
 
@@ -70,6 +71,8 @@ test("desktop workbench keeps controls visible and matches screenshot", async ({
   await expect(page.getByRole("heading", { name: "AI Prompt Trace" })).toBeVisible();
   await expect(page.getByText("Draft preview uses low precision")).toBeVisible();
   await expect(page.getByRole("button", { name: /Final Export/i })).toBeVisible();
+  await expect(page.getByText("LLM tokens")).toBeVisible();
+  await expect(page.getByText("Vision tokens")).toBeVisible();
 
   const controlBox = await page.locator(".controlPanel").boundingBox();
   const codeBox = await page.locator(".codePanel").boundingBox();
