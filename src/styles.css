@@ -73,7 +73,6 @@ button:disabled {
   margin: 3px 0 0;
 }
 
-.topbarActions,
 .inlineActions {
   display: flex;
   gap: 8px;
@@ -97,6 +96,46 @@ button:disabled {
   pointer-events: none;
   position: absolute;
   width: 1px;
+}
+
+.projectTools {
+  border-top: 1px solid #e4e9f0;
+  display: grid;
+  gap: 8px;
+  margin-top: auto;
+  padding-top: 10px;
+}
+
+.projectTools > span {
+  color: #667085;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.projectToolActions {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.projectToolButton {
+  align-items: center;
+  background: #f8fafc;
+  border: 1px solid #d7dee8;
+  border-radius: 6px;
+  color: #475467;
+  display: inline-flex;
+  font-size: 12px;
+  font-weight: 700;
+  gap: 6px;
+  justify-content: center;
+  min-height: 34px;
+  padding: 0 8px;
+}
+
+.projectToolButton:disabled {
+  background: #f3f6f8;
+  color: #98a2b3;
 }
 
 .workspace {

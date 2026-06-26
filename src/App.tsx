@@ -459,22 +459,6 @@ export default function App() {
           <h1>{tr("browserLanguageTitle")}</h1>
           <p>{tr("subtitle")}</p>
         </div>
-        <div className="topbarActions">
-          <label className="iconButton fileButton" title={tr("importProject")}>
-            <FileUp size={18} />
-            <input accept="application/json" type="file" onChange={handleImport} />
-          </label>
-          <button
-            className="iconButton"
-            disabled={hasPendingRevision}
-            title={hasPendingRevision ? tr("exportProjectPending") : tr("exportProject")}
-            onClick={() =>
-              downloadText("ai-openscad-project.json", exportProject(project))
-            }
-          >
-            <Download size={18} />
-          </button>
-        </div>
       </header>
 
       <section className="workspace">
@@ -551,6 +535,28 @@ export default function App() {
             locale={locale}
             pendingRevision={hasPendingRevision}
           />
+
+          <section className="projectTools">
+            <span>{tr("projectFiles")}</span>
+            <div className="projectToolActions">
+              <label className="projectToolButton fileButton" title={tr("importProject")}>
+                <FileUp size={15} />
+                <span>{tr("importProject")}</span>
+                <input accept="application/json" type="file" onChange={handleImport} />
+              </label>
+              <button
+                className="projectToolButton"
+                disabled={hasPendingRevision}
+                title={hasPendingRevision ? tr("exportProjectPending") : tr("exportProject")}
+                onClick={() =>
+                  downloadText("ai-openscad-project.json", exportProject(project))
+                }
+              >
+                <Download size={15} />
+                <span>{tr("exportProject")}</span>
+              </button>
+            </div>
+          </section>
         </aside>
 
         <section className="panel codePanel agentPanel">

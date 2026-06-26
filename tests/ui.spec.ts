@@ -69,6 +69,8 @@ test("desktop workbench keeps controls visible and matches screenshot", async ({
   await page.goto("/");
 
   await expect(page.getByRole("heading", { name: "Agent Run" })).toBeVisible();
+  await expect(page.locator(".topbarActions")).toHaveCount(0);
+  await expect(page.locator(".projectTools").getByText("Project files")).toBeVisible();
   await expect(page.locator(".agentComposer").getByText("Draft preview uses low precision")).toBeVisible();
   await expect(page.getByText("User Request")).toBeVisible();
   await expect(page.getByRole("button", { name: /Final Export/i })).toBeVisible();

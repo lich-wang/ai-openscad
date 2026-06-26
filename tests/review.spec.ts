@@ -82,7 +82,8 @@ test("review sends MiMo multimodal model and shows proposed revision", async ({
     page.getByText("The preview still shows the reviewed draft. Accept + render before export.")
   ).toBeVisible();
   await expect(page.getByRole("button", { name: /Final Export/i })).toHaveCount(0);
-  await expect(page.locator(".topbarActions button").last()).toBeDisabled();
+  await expect(page.locator(".topbarActions")).toHaveCount(0);
+  await expect(page.locator(".projectTools button").last()).toBeDisabled();
   await expect(page.locator(".resultPanel").getByText("杯子主体正确", { exact: false })).toBeVisible();
   expect(visionModel).toBe("mimo-v2.5");
   expect(llmStream).toBe(true);
