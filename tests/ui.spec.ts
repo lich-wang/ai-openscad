@@ -75,6 +75,7 @@ test("desktop workbench keeps controls visible and matches screenshot", async ({
   await expect(page.getByText("LLM tokens")).toBeVisible();
   await expect(page.getByText("Vision tokens")).toBeVisible();
   await expect(page.locator("select")).toHaveCount(0);
+  await expect(page.locator(".controlPanel").getByRole("button", { name: "New model" })).toBeVisible();
   await expect(page.locator(".codeDisclosure")).not.toHaveAttribute("open", "");
 
   const helpButton = page.getByRole("button", { name: "No key?" }).first();
@@ -118,4 +119,8 @@ test("desktop workbench keeps controls visible and matches screenshot", async ({
     animations: "disabled",
     maxDiffPixelRatio: 0.02
   });
+
+  page.once("dialog", (dialog) => dialog.accept());
+  await page.locator(".controlPanel").getByRole("button", { name: "New model" }).click();
+  await expect(page.locator(".requirementInput")).toHaveValue("");
 });

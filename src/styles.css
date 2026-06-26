@@ -127,6 +127,16 @@ button:disabled {
   padding: 14px;
 }
 
+.controlPanel {
+  overflow: visible;
+  position: relative;
+  z-index: 5;
+}
+
+.resultPanel {
+  overflow: hidden;
+}
+
 .codePanel {
   display: grid;
   gap: 10px;
@@ -166,6 +176,13 @@ label > span,
   position: relative;
 }
 
+.newModelButton {
+  background: #111827;
+  color: #ffffff;
+  min-height: 38px;
+  width: 100%;
+}
+
 .keyHelpButton {
   background: #f3f6fb;
   border: 1px solid #d5deea;
@@ -178,28 +195,24 @@ label > span,
 }
 
 .keyHelpTooltip {
-  background: #fffaf3;
+  background: #ffffff;
   border: 1px solid #e8c99d;
   border-radius: 8px;
-  box-shadow: 0 18px 40px rgba(16, 24, 40, 0.18);
+  box-shadow: 0 22px 54px rgba(16, 24, 40, 0.24);
   color: #3b2a19;
   display: grid;
   gap: 10px;
   left: 0;
   opacity: 0;
-  padding: 14px;
+  padding: 16px;
   pointer-events: none;
   position: absolute;
   right: auto;
   top: calc(100% + 8px);
-  transform: translateY(-4px);
-  transition:
-    opacity 120ms ease,
-    transform 120ms ease,
-    visibility 120ms ease;
+  transform: translateY(0);
   visibility: hidden;
-  width: 340px;
-  z-index: 30;
+  width: min(420px, calc(100vw - 44px));
+  z-index: 2000;
 }
 
 .keyHelp:hover .keyHelpTooltip,
@@ -228,7 +241,7 @@ label > span,
   border-radius: 6px;
   object-fit: cover;
   object-position: left bottom;
-  width: 180px;
+  width: 220px;
 }
 
 .controlPanel .keyHelpTooltip {
@@ -371,7 +384,22 @@ textarea {
 }
 
 .agentActions {
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.agentActions .primaryAction {
+  background: #0f766e;
+  font-weight: 800;
+}
+
+.agentActions .primaryAction:only-child {
+  grid-column: 1 / -1;
+}
+
+.buttonGrid.agentActions .secondaryAction {
+  background: #eef2f7;
+  border: 1px solid #cbd5e1;
+  color: #344054;
 }
 
 .smallButton {
@@ -546,6 +574,29 @@ textarea {
   gap: 10px;
 }
 
+.revisionCard {
+  background: #f8fafc;
+  border: 1px solid #b9dfd4;
+  border-radius: 8px;
+  padding: 12px;
+}
+
+.revisionCard p,
+.revisionCard ul {
+  color: #475467;
+  font-size: 13px;
+  line-height: 1.45;
+  margin: 0;
+}
+
+.revisionCard ul {
+  padding-left: 18px;
+}
+
+.revisionCodeDisclosure {
+  background: #ffffff;
+}
+
 .codeEditor.proposed {
   border-color: #a7d8cc;
   min-height: 180px;
@@ -627,6 +678,10 @@ textarea {
   grid-template-columns: repeat(3, 1fr);
 }
 
+.viewGrid .viewTile:first-child {
+  grid-column: 1 / -1;
+}
+
 .viewTile {
   border: 1px solid #d7dee8;
   border-radius: 6px;
@@ -641,6 +696,11 @@ textarea {
   background: #f8fafc;
   display: block;
   width: 100%;
+}
+
+.viewGrid .viewTile:first-child img,
+.viewGrid .viewTile:first-child div {
+  aspect-ratio: 16 / 9;
 }
 
 .viewTile figcaption {

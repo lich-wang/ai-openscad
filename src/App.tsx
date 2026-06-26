@@ -61,6 +61,15 @@ export default function App() {
   const tr = (key: MessageKey) => t(locale, key);
   const adapter = useMemo(() => new BrowserOpenScadAdapter(), []);
   const isBusy = busy !== "idle";
+  const hasRenderedViews = Boolean(project.views.front && project.views.top && project.views.right);
+  const hasModelWork = Boolean(
+    project.currentCode.trim() ||
+      project.proposedCode.trim() ||
+      project.views.front ||
+      project.views.top ||
+      project.views.right ||
+      project.review
+  );
 
   useEffect(() => {
     saveProject(project);
@@ -368,6 +377,53 @@ export default function App() {
     });
   }
 
+  async function handleAcceptRevision() {
+    await runSafely("compiling", async () => {
+      const accepted = acceptRevision(project);
+      setProject(accepted);
+      if (!accepted.currentCode.trim()) {
+        throw new Error(tr("missingCode"));
+      }
+      const rendered = await compileDraftCode(accepted.currentCode);
+      if (!rendered.ok || !rendered.views) {
+        setProject((current) => ({
+          ...current,
+          compilerOutput: rendered.diagnostics,
+          promptTrace: [...current.promptTrace, rendered.trace],
+          updatedAt: new Date().toISOString()
+        }));
+        throw new Error(rendered.diagnostics);
+      }
+      setProject((current) => ({
+        ...current,
+        views: rendered.views,
+        compilerOutput: `${rendered.diagnostics}\n${tr("compiledDraft")}`,
+        promptTrace: [...current.promptTrace, rendered.trace],
+        updatedAt: new Date().toISOString(),
+        iterations: [
+          ...current.iterations,
+          {
+            id: crypto.randomUUID(),
+            createdAt: new Date().toISOString(),
+            requirement: current.requirement,
+            code: accepted.currentCode,
+            modelId: current.codeModelId,
+            status: "compiled"
+          }
+        ]
+      }));
+    });
+  }
+
+  function handleNewModel() {
+    if (hasModelWork && !window.confirm(tr("newModelConfirm"))) {
+      return;
+    }
+    setProject(createEmptyProject());
+    setIterationNotes("");
+    setError("");
+  }
+
   function updateProject(patch: Partial<ProjectState>) {
     setProject((current) => ({
       ...current,
@@ -399,13 +455,6 @@ export default function App() {
           <p>{tr("subtitle")}</p>
         </div>
         <div className="topbarActions">
-          <button
-            className="iconButton"
-            title={tr("newProject")}
-            onClick={() => setProject(createEmptyProject())}
-          >
-            <RefreshCw size={18} />
-          </button>
           <label className="iconButton fileButton" title={tr("importProject")}>
             <FileUp size={18} />
             <input accept="application/json" type="file" onChange={handleImport} />
@@ -424,6 +473,15 @@ export default function App() {
 
       <section className="workspace">
         <aside className="panel controlPanel">
+          <button
+            className="newModelButton"
+            title={tr("newModelHint")}
+            onClick={handleNewModel}
+          >
+            <RefreshCw size={16} />
+            {tr("newModel")}
+          </button>
+
           <label>
             <div className="fieldHeader">
               <span>{tr("llmApiKey")}</span>
@@ -504,26 +562,52 @@ export default function App() {
               placeholder={tr("iterationPlaceholder")}
             />
             <div className="buttonGrid agentActions">
-              <button disabled={isBusy} onClick={handleGenerate}>
-                <Send size={16} />
-                {tr("generate")}
-              </button>
-              <button disabled={isBusy} onClick={handleCompile}>
-                <Play size={16} />
-                {tr("rerender")}
-              </button>
-              <button disabled={isBusy} onClick={handleReview}>
-                <Eye size={16} />
-                {tr("review")}
-              </button>
-              <button disabled={isBusy} onClick={handleIterateAgain}>
-                <RefreshCw size={16} />
-                {tr("iterateAgain")}
-              </button>
-              <button disabled={isBusy} onClick={handleHighPrecisionExport}>
-                <Download size={16} />
-                {tr("finalExport")}
-              </button>
+              {!hasRenderedViews ? (
+                <button className="primaryAction" disabled={isBusy} onClick={handleGenerate}>
+                  <Send size={16} />
+                  {tr("generate")}
+                </button>
+              ) : null}
+              {hasRenderedViews && !project.review ? (
+                <>
+                  <button className="primaryAction" disabled={isBusy} onClick={handleReview}>
+                    <Eye size={16} />
+                    {tr("review")}
+                  </button>
+                  <button className="secondaryAction" disabled={isBusy} onClick={handleCompile}>
+                    <Play size={16} />
+                    {tr("rerender")}
+                  </button>
+                  <button
+                    className="secondaryAction"
+                    disabled={isBusy}
+                    onClick={handleHighPrecisionExport}
+                  >
+                    <Download size={16} />
+                    {tr("finalExport")}
+                  </button>
+                </>
+              ) : null}
+              {project.review ? (
+                <>
+                  <button className="primaryAction" disabled={isBusy} onClick={handleIterateAgain}>
+                    <RefreshCw size={16} />
+                    {tr("iterateAgain")}
+                  </button>
+                  <button className="secondaryAction" disabled={isBusy} onClick={handleCompile}>
+                    <Play size={16} />
+                    {tr("rerender")}
+                  </button>
+                  <button
+                    className="secondaryAction"
+                    disabled={isBusy}
+                    onClick={handleHighPrecisionExport}
+                  >
+                    <Download size={16} />
+                    {tr("finalExport")}
+                  </button>
+                </>
+              ) : null}
             </div>
           </section>
 
@@ -544,13 +628,14 @@ export default function App() {
           </details>
 
           {project.proposedCode ? (
-            <div className="revisionArea">
+            <div className="revisionArea revisionCard">
               <div className="panelHeader compact">
                 <h2>{tr("proposedRevision")}</h2>
                 <div className="inlineActions">
                   <button
                     className="smallButton success"
-                    onClick={() => setProject((current) => acceptRevision(current))}
+                    disabled={isBusy}
+                    onClick={handleAcceptRevision}
                   >
                     <Check size={15} />
                     {tr("accept")}
@@ -564,12 +649,33 @@ export default function App() {
                   </button>
                 </div>
               </div>
-              <textarea
-                className="codeEditor proposed"
-                spellCheck={false}
-                value={project.proposedCode}
-                onChange={(event) => updateProject({ proposedCode: event.target.value })}
-              />
+              <p>
+                {project.review
+                  ? `${tr("visualReview")}: ${project.review.summary}`
+                  : tr("generatedCode")}
+              </p>
+              {project.review?.issues.length ? (
+                <ul>
+                  {project.review.issues.map((issue) => (
+                    <li key={issue}>{issue}</li>
+                  ))}
+                </ul>
+              ) : null}
+              <details className="codeDisclosure revisionCodeDisclosure">
+                <summary>
+                  <span>
+                    <Code2 size={17} />
+                    {tr("codeDetails")}
+                  </span>
+                  <small>{tr("proposedRevision")}</small>
+                </summary>
+                <textarea
+                  className="codeEditor proposed"
+                  spellCheck={false}
+                  value={project.proposedCode}
+                  onChange={(event) => updateProject({ proposedCode: event.target.value })}
+                />
+              </details>
             </div>
           ) : null}
         </section>

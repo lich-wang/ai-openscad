@@ -74,7 +74,7 @@ test("review sends MiMo multimodal model and shows proposed revision", async ({
   await page.goto("/");
   await page.getByRole("button", { name: /review/i }).click();
 
-  await expect(page.getByText("Proposed Revision")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Proposed Revision" })).toBeVisible();
   await expect(page.locator(".resultPanel").getByText("杯子主体正确", { exact: false })).toBeVisible();
   expect(visionModel).toBe("mimo-v2.5");
   expect(llmStream).toBe(true);
@@ -213,7 +213,7 @@ test("iterate again combines review feedback and user notes", async ({ page }) =
   await page.locator(".iterationInput").fill("把把手再大一点");
   await page.getByRole("button", { name: /Iterate Again/i }).click();
 
-  await expect(page.getByText("Proposed Revision")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Proposed Revision" })).toBeVisible();
   await expect(page.locator(".codeEditor.proposed")).toHaveValue(/revised/);
   expect(prompt).toContain("杯口太厚");
   expect(prompt).toContain("杯壁需要更薄");
