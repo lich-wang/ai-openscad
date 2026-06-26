@@ -44,12 +44,11 @@ document.
 The first screen is the working app, not a landing page. It is organized into
 three columns:
 
-- Left control panel: model keys, model selection, token estimate, project import
-  and export, and local model history.
+- Left control panel: new model action, local model history directly beneath it,
+  compact model keys, model selection, and project import/export.
 - Center agent panel: run timeline, requirement composer, workflow actions, and
   advanced OpenSCAD code editing.
-- Right result panel: front/top/right views, asset downloads, compiler output,
-  visual review output, and recent history.
+- Right result panel: large front/top/right views and asset downloads.
 
 ### Main Workflow
 
@@ -75,6 +74,57 @@ three columns:
 - Accepting a revision clears the old review, forcing a fresh review for the new
   rendered model.
 - OpenSCAD code remains editable through the advanced code panel.
+- The workbench shows the current workflow stage across the top of the agent
+  panel: code generation, model rendering, and model review.
+- Visual review output belongs in the center agent run stream and its correction
+  prompt is copied into the editable composer; the right result panel does not
+  duplicate review text, compiler logs, or history.
+- The primary composer action follows project state: generate before rendering,
+  review after rendering, and iterate again after review.
+- Token estimates and duplicate ready status badges are hidden from the normal
+  workbench surface to keep more room for model history and the three views.
+
+Workbench acceptance criteria:
+
+- Left panel order is stable on desktop: new model button, local model list for
+  navigation, basic settings, then project import/export. The local model list
+  scrolls internally when it grows and is distinct from run history.
+- Token estimates are removed from the normal workbench surface. Busy progress,
+  pending revision warnings, and errors remain visible through the agent stage
+  strip and center agent stream.
+- The stage strip is informational and not interactive. It has exactly three
+  stages: code generation, model rendering, and model review. Each stage can
+  show waiting, active, complete, or blocked/error state, and the rendering stage
+  becomes active during the automatic render after generation.
+- The composer primary action is disabled while any generation, render, review,
+  or export task is running. It shows Generate when no rendered views exist,
+  Review when views exist and there is no current review, and Iterate Again
+  after review when no pending revision is waiting for acceptance. Missing
+  inputs, provider-key failures, compile failures, and review failures appear in
+  the center stream without changing the right panel contract. While a pending
+  revision is waiting for acceptance, the composer shows an acceptance hint
+  instead of Generate, Review, or Iterate Again; the user must accept or reject
+  the revision before continuing the main workflow.
+- The center agent stream remains the place for generated code, compiler output,
+  render progress, render errors, review summary, review issues, confidence,
+  correction prompt, iteration events, and prompt trace.
+- The right result panel contains only the three orthographic views and asset
+  download controls. It must not contain compiler logs, review text, prompt
+  trace, or iteration history. On desktop, the front view is the largest view,
+  top and right views stay visible below it, and the panel reserves most of its
+  height for images rather than text. The view grid should use at least half of
+  the visible right-panel height at a 1440 px desktop viewport.
+- Manual OpenSCAD edits can be recompiled with the secondary rerender action
+  whenever code exists. Rerender failures appear in the center stream and keep
+  the workbench interactive.
+- Stage strip and action states use text labels plus visual treatment, not color
+  alone, and preserve keyboard focus order from left panel to agent panel to
+  result panel.
+- Screenshot and E2E coverage should assert the stage strip, left-panel ordering,
+  hidden token/duplicate ready UI, right-panel ownership, enlarged views, and
+  primary action transitions across generate, render, review, pending-revision,
+  rerender-failure, and iterate states, including non-color state labels and
+  keyboard focus order.
 
 ## Feature Inventory
 
@@ -294,8 +344,28 @@ Deployment target:
 
 - Cloudflare Pages project: `ai-openscad`
 - Production domain: `https://ai.openscad.tech`
-- Required Cloudflare setting: `MiMo_KEY` or `MIMO_KEY` is optional and is used
-  only when the user has not supplied a browser key.
+- GitHub Actions workflow: `.github/workflows/deploy.yml`
+  - Pull requests run `npm test`, `npm run test:e2e`, and `npm run build`.
+    The clean runner installs dependencies with `npm ci`, sets up Node 20, and
+    installs Chromium with `npx playwright install --with-deps chromium`.
+  - Pushes to `main` execute the same checks, then deploy with
+    `npx wrangler pages deploy dist --project-name ai-openscad --branch main`.
+  - Manual `workflow_dispatch` production deploys are restricted to the `main`
+    branch and use the same command. Manual runs from other refs run checks and
+    skip production deploy.
+  - Cloudflare Pages production branch for the `ai-openscad` project must be
+    `main`.
+  - The `deploy / checks` job should be configured as a required
+    branch-protection status before merging to `main`.
+  - Required GitHub repository secrets:
+    - `CLOUDFLARE_API_TOKEN`
+    - `CLOUDFLARE_ACCOUNT_ID`
+  - `CLOUDFLARE_API_TOKEN` must be scoped with permission to edit/deploy the
+    target Cloudflare Pages project in the account identified by
+    `CLOUDFLARE_ACCOUNT_ID`.
+- Optional Cloudflare Pages environment variable: `MiMo_KEY` or `MIMO_KEY` is
+  used only when the user has not supplied a browser key. It is configured in
+  Cloudflare Pages, not as a GitHub Actions secret.
 
 After deployment:
 

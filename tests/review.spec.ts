@@ -23,6 +23,10 @@ const project = {
   updatedAt: "2026-06-26T00:00:00.000Z"
 };
 
+function delay(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
 test("review sends MiMo multimodal model and shows editable correction prompt", async ({
   page
 }) => {
@@ -42,6 +46,7 @@ test("review sends MiMo multimodal model and shows editable correction prompt", 
     };
     visionModel = body.model;
     expect(JSON.stringify(body.messages[1].content)).toContain("image_url");
+    await delay(250);
     await route.fulfill({
       status: 200,
       contentType: "application/json",
@@ -67,16 +72,25 @@ test("review sends MiMo multimodal model and shows editable correction prompt", 
   });
 
   await page.goto("/");
-  await page.getByRole("button", { name: /review/i }).click();
+  const reviewButton = page.getByRole("button", { name: /^Review$/i });
+  await reviewButton.click();
+  await expect(reviewButton).toBeDisabled();
+  await expect(page.locator('.workflowStage[data-stage="review"]')).toContainText("Active");
 
   await expect(page.getByRole("heading", { name: "Proposed Revision" })).toHaveCount(0);
-  await expect(page.locator(".resultPanel").getByText("Vision review complete.")).toBeVisible();
-  await expect(page.locator(".controlPanel .status").getByText("Ready")).toBeVisible();
+  await expect(page.locator(".agentRun").getByText("Vision review complete.")).toBeVisible();
+  await expect(page.locator('.workflowStage[data-stage="review"]')).toContainText("Complete");
+  await expect(page.locator(".controlPanel .status")).toHaveCount(0);
   await expect(page.getByRole("button", { name: /Iterate Again/i })).toBeVisible();
   await expect(page.getByRole("button", { name: /Final Export/i })).toBeVisible();
   await expect(page.locator(".topbarActions")).toHaveCount(0);
   await expect(page.locator(".projectTools button").last()).toBeEnabled();
-  await expect(page.locator(".resultPanel").getByText("杯子主体正确", { exact: false })).toBeVisible();
+  await expect(page.locator(".resultPanel").getByText("杯子主体正确", { exact: false })).toHaveCount(0);
+  await expect(
+    page.locator(".agentEvent", { has: page.getByRole("heading", { name: "Visual Review" }) })
+      .getByText("杯子主体正确", { exact: false })
+  ).toBeVisible();
+  await expect(page.locator(".resultPanel .outputBlock")).toHaveCount(0);
   await expect(page.locator(".agentInput")).toHaveValue(/增加杯口圆角倒角/);
   await expect(
     page.locator(".agentRun .correctionPromptPreview").getByText("保持30ML杯子容量", {
@@ -108,6 +122,7 @@ test("generation streams code and automatically renders draft views", async ({ p
   await page.route("**/api/llm", async (route) => {
     const body = route.request().postDataJSON() as { stream?: boolean };
     streamRequested = body.stream === true;
+    await delay(250);
     await route.fulfill({
       status: 200,
       contentType: "text/event-stream",
@@ -124,19 +139,26 @@ test("generation streams code and automatically renders draft views", async ({ p
 
   await page.goto("/");
   const requestPromise = page.waitForRequest("**/api/llm");
-  await page.getByRole("button", { name: /^Generate$/i }).click();
+  const generateButton = page.getByRole("button", { name: /^Generate$/i });
+  await generateButton.click();
+  await expect(generateButton).toBeDisabled();
+  await expect(page.locator('.workflowStage[data-stage="code"]')).toContainText("Active");
   await requestPromise;
 
   await expect(page.locator(".codeEditor").first()).toHaveValue(/cube\(10\);/);
   await expect(page.locator(".agentCodePreview")).toContainText("cube(10);");
-  await expect(page.locator(".resultPanel").getByText("Preparing draft render...")).toBeVisible({
+  await expect(page.locator('.workflowStage[data-stage="render"]')).toContainText("Active", {
+    timeout: 10000
+  });
+  await expect(page.locator(".agentRun").getByText("Preparing draft render...")).toBeVisible({
     timeout: 10000
   });
   await expect(page.locator(".viewTile img")).toHaveCount(3, { timeout: 30000 });
   await expect(page.getByRole("button", { name: /STL/i })).toBeVisible();
-  await expect(page.locator(".resultPanel").getByText("Draft precision was used for fast review.")).toBeVisible({
+  await expect(page.locator(".agentRun").getByText("Draft precision was used for fast review.")).toBeVisible({
     timeout: 30000
   });
+  await expect(page.locator('.workflowStage[data-stage="render"]')).toContainText("Complete");
   expect(streamRequested).toBe(true);
 });
 
@@ -260,6 +282,34 @@ test("accepting a revision requires a fresh visual review before another iterati
   }, project);
 
   await page.goto("/");
+  await expect(page.locator(".agentActions").getByRole("button", { name: /^Generate$/i })).toHaveCount(0);
+  await expect(page.locator(".agentActions").getByRole("button", { name: /^Review$/i })).toHaveCount(0);
+  await expect(page.locator(".agentActions").getByRole("button", { name: /Iterate Again/i })).toHaveCount(0);
+  await expect(page.locator(".pendingActionHint")).toContainText("Accept");
+  await page.getByRole("button", { name: /^Reject$/i }).click();
+  await expect(page.getByRole("button", { name: /Iterate Again/i })).toBeVisible();
+
+  await page.evaluate((storedProject) => {
+    const pendingProject = {
+      ...storedProject,
+      proposedCode: "cube(10);",
+      review: {
+        summary: "旧评审：杯口太厚",
+        issues: ["旧问题"],
+        correctionPrompt: "根据旧问题继续修正杯口厚度。",
+        confidence: 0.74
+      },
+      promptTrace: []
+    };
+    localStorage.setItem(
+      "ai-openscad.project",
+      JSON.stringify(pendingProject)
+    );
+    localStorage.setItem("ai-openscad.projects", JSON.stringify([pendingProject]));
+    localStorage.setItem("ai-openscad.active-project-id", pendingProject.id);
+  }, project);
+  await page.reload();
+  await expect(page.locator(".pendingActionHint")).toContainText("Accept");
   await page.getByRole("button", { name: /Accept \+ render/i }).click();
 
   await expect(page.getByRole("button", { name: /^Review$/i })).toBeVisible({
@@ -267,7 +317,29 @@ test("accepting a revision requires a fresh visual review before another iterati
   });
   await expect(page.locator(".viewTile img")).toHaveCount(3);
   await expect(page.getByRole("button", { name: /Iterate Again/i })).toHaveCount(0);
-  await expect(page.locator(".resultPanel").getByText("No review yet.")).toBeVisible();
+  await expect(page.locator(".resultPanel").getByText("No review yet.")).toHaveCount(0);
+  await expect(page.locator('.workflowStage[data-stage="review"]')).toContainText("Waiting");
+});
+
+test("pending revision without review still blocks the main workflow", async ({ page }) => {
+  await page.addInitScript((storedProject) => {
+    localStorage.setItem(
+      "ai-openscad.project",
+      JSON.stringify({
+        ...storedProject,
+        proposedCode: "cube(10);",
+        review: null,
+        promptTrace: []
+      })
+    );
+  }, project);
+
+  await page.goto("/");
+
+  await expect(page.locator(".pendingActionHint")).toContainText("Accept");
+  await expect(page.locator(".agentActions").getByRole("button", { name: /^Generate$/i })).toHaveCount(0);
+  await expect(page.locator(".agentActions").getByRole("button", { name: /^Review$/i })).toHaveCount(0);
+  await expect(page.locator(".agentActions").getByRole("button", { name: /Iterate Again/i })).toHaveCount(0);
 });
 
 test("invalid OpenSCAD render fails without leaving the page busy", async ({ page }) => {
@@ -287,9 +359,36 @@ test("invalid OpenSCAD render fails without leaving the page busy", async ({ pag
   await page.goto("/");
   await page.getByRole("button", { name: /Rerender/i }).click();
 
-  await expect(page.locator(".controlPanel .status.error")).toBeVisible({
+  await expect(page.locator(".agentRun").getByRole("alert")).toBeVisible({
     timeout: 30000
   });
-  await expect(page.locator(".controlPanel .status")).not.toContainText("Working");
+  await expect(page.locator('.workflowStage[data-stage="render"]')).toContainText("Error");
+  await expect(page.locator(".controlPanel .status")).toHaveCount(0);
   await expect(page.locator(".controlPanel").getByRole("button", { name: "New model" })).toBeEnabled();
+});
+
+test("rerender remains available after code exists without rendered views", async ({ page }) => {
+  await page.addInitScript((storedProject) => {
+    localStorage.setItem(
+      "ai-openscad.project",
+      JSON.stringify({
+        ...storedProject,
+        currentCode: "cube(",
+        stl: "",
+        views: { front: "", top: "", right: "" },
+        review: null,
+        promptTrace: []
+      })
+    );
+  }, project);
+
+  await page.goto("/");
+  await page.getByRole("button", { name: /Rerender/i }).click();
+
+  await expect(page.locator(".agentRun").getByRole("alert")).toBeVisible({
+    timeout: 30000
+  });
+  await expect(page.locator('.workflowStage[data-stage="render"]')).toContainText("Error");
+  await page.locator(".controlPanel").getByRole("button", { name: "New model" }).click();
+  await expect(page.locator('.workflowStage[data-stage="render"]')).not.toContainText("Error");
 });

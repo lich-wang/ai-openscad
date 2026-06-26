@@ -71,6 +71,14 @@ test("desktop workbench keeps controls visible and matches screenshot", async ({
   await page.goto("/");
 
   await expect(page.getByRole("heading", { name: "Agent Run" })).toBeVisible();
+  await expect(page.locator(".workflowStageStrip")).toBeVisible();
+  await expect(page.locator(".workflowStage")).toHaveCount(3);
+  await expect(page.locator(".workflowStage").nth(0)).toContainText("Code generation");
+  await expect(page.locator(".workflowStage").nth(1)).toContainText("Model rendering");
+  await expect(page.locator(".workflowStage").nth(2)).toContainText("Model review");
+  await expect(page.locator(".workflowStage").nth(0)).toContainText("Complete");
+  await expect(page.locator(".workflowStage").nth(1)).toContainText("Complete");
+  await expect(page.locator(".workflowStage").nth(2)).toContainText("Complete");
   await expect(page.locator(".topbarActions")).toHaveCount(0);
   await expect(page.locator(".projectTools").getByText("Project files")).toBeVisible();
   await expect(page.locator(".agentComposer").getByText("Draft preview uses low precision")).toBeVisible();
@@ -80,15 +88,31 @@ test("desktop workbench keeps controls visible and matches screenshot", async ({
   await expect(page.locator(".modelHistory button")).toHaveCount(1);
   await expect(page.locator(".resultPanel").getByRole("button", { name: /STL/i })).toBeVisible();
   await expect(page.getByRole("button", { name: /Final Export/i })).toBeVisible();
-  await expect(page.getByText("LLM tokens")).toBeVisible();
-  await expect(page.getByText("Vision tokens")).toBeVisible();
+  await expect(page.getByText("LLM tokens")).toHaveCount(0);
+  await expect(page.getByText("Vision tokens")).toHaveCount(0);
+  await expect(page.locator(".controlPanel .status")).toHaveCount(0);
+  await expect(page.locator(".resultPanel .outputBlock")).toHaveCount(0);
+  await expect(page.locator(".resultPanel")).not.toContainText("Compiler");
+  await expect(page.locator(".resultPanel")).not.toContainText("Review");
+  await expect(page.locator(".resultPanel")).not.toContainText("History");
+  await expect(page.locator(".agentRun").getByText("AI Prompt Trace")).toBeVisible();
+  await expect(page.locator(".resultPanel").getByText("AI Prompt Trace")).toHaveCount(0);
   await expect(page.locator(".sidebarSettings")).toHaveAttribute("open", "");
   await expect(page.locator(".controlPanel .modelHistory")).toBeVisible();
-  const settingsBoxBefore = await page.locator(".sidebarSettings").boundingBox();
+  const newButtonBoxBefore = await page
+    .locator(".controlPanel")
+    .getByRole("button", { name: "New model" })
+    .boundingBox();
   const historyBoxBefore = await page.locator(".controlPanel .modelHistory").boundingBox();
+  const settingsBoxBefore = await page.locator(".sidebarSettings").boundingBox();
+  const projectToolsBoxBefore = await page.locator(".projectTools").boundingBox();
+  expect(newButtonBoxBefore).not.toBeNull();
   expect(settingsBoxBefore).not.toBeNull();
   expect(historyBoxBefore).not.toBeNull();
-  expect(historyBoxBefore!.y).toBeGreaterThan(settingsBoxBefore!.y);
+  expect(projectToolsBoxBefore).not.toBeNull();
+  expect(historyBoxBefore!.y).toBeGreaterThan(newButtonBoxBefore!.y);
+  expect(settingsBoxBefore!.y).toBeGreaterThan(historyBoxBefore!.y);
+  expect(projectToolsBoxBefore!.y).toBeGreaterThan(settingsBoxBefore!.y);
   await page.locator(".sidebarSettings summary").click();
   await expect(page.locator(".controlPanel").getByText("LLM API Key")).toBeHidden();
   await page.locator(".sidebarSettings summary").click();
@@ -115,6 +139,8 @@ test("desktop workbench keeps controls visible and matches screenshot", async ({
   const controlBox = await page.locator(".controlPanel").boundingBox();
   const codeBox = await page.locator(".codePanel").boundingBox();
   const composerBox = await page.locator(".agentComposer").boundingBox();
+  const resultBox = await page.locator(".resultPanel").boundingBox();
+  const viewGridBox = await page.locator(".viewGrid").boundingBox();
   const lastActionBox = await page
     .getByRole("button", { name: /Final Export/i })
     .boundingBox();
@@ -122,6 +148,8 @@ test("desktop workbench keeps controls visible and matches screenshot", async ({
   expect(controlBox).not.toBeNull();
   expect(codeBox).not.toBeNull();
   expect(composerBox).not.toBeNull();
+  expect(resultBox).not.toBeNull();
+  expect(viewGridBox).not.toBeNull();
   expect(lastActionBox).not.toBeNull();
   const pageHeight = await page.evaluate(() =>
     Math.max(document.documentElement.scrollHeight, document.body.scrollHeight)
@@ -132,6 +160,52 @@ test("desktop workbench keeps controls visible and matches screenshot", async ({
     composerBox!.x + composerBox!.width
   );
   expect(controlBox!.x + controlBox!.width).toBeLessThan(codeBox!.x);
+  expect(viewGridBox!.height).toBeGreaterThanOrEqual(resultBox!.height * 0.5);
+  const frontBox = await page.locator(".viewTile").first().boundingBox();
+  const topBox = await page.locator(".viewTile").nth(1).boundingBox();
+  const rightBox = await page.locator(".viewTile").nth(2).boundingBox();
+  expect(frontBox).not.toBeNull();
+  expect(topBox).not.toBeNull();
+  expect(rightBox).not.toBeNull();
+  expect(frontBox!.width * frontBox!.height).toBeGreaterThan(
+    topBox!.width * topBox!.height
+  );
+  expect(topBox!.y).toBeGreaterThan(frontBox!.y);
+  expect(rightBox!.y).toBeGreaterThan(frontBox!.y);
+
+  await page.locator(".controlPanel").getByRole("button", { name: "New model" }).focus();
+  const focusedPanels: string[] = [];
+  for (let index = 0; index < 30; index += 1) {
+    focusedPanels.push(
+      await page.evaluate(() => {
+        const active = document.activeElement;
+        if (!active) {
+          return "";
+        }
+        if (active.closest(".controlPanel")) {
+          return "controlPanel";
+        }
+        if (active.closest(".codePanel")) {
+          return "codePanel";
+        }
+        if (active.closest(".resultPanel")) {
+          return "resultPanel";
+        }
+        return "";
+      })
+    );
+    if (focusedPanels.includes("resultPanel")) {
+      break;
+    }
+    await page.keyboard.press("Tab");
+  }
+  expect(focusedPanels.indexOf("controlPanel")).toBeGreaterThanOrEqual(0);
+  expect(focusedPanels.indexOf("codePanel")).toBeGreaterThan(
+    focusedPanels.indexOf("controlPanel")
+  );
+  expect(focusedPanels.indexOf("resultPanel")).toBeGreaterThan(
+    focusedPanels.indexOf("codePanel")
+  );
 
   await expect(page.locator(".workspace")).toHaveScreenshot("desktop-workbench.png", {
     animations: "disabled",
@@ -141,8 +215,41 @@ test("desktop workbench keeps controls visible and matches screenshot", async ({
   await page.locator(".controlPanel").getByRole("button", { name: "New model" }).click();
   await expect(page.locator(".modelHistory button")).toHaveCount(2);
   const settingsBoxAfter = await page.locator(".sidebarSettings").boundingBox();
-  expect(Math.abs(settingsBoxAfter!.y - settingsBoxBefore!.y)).toBeLessThanOrEqual(2);
+  const historyBoxAfter = await page.locator(".controlPanel .modelHistory").boundingBox();
+  expect(historyBoxAfter!.y).toBeLessThan(settingsBoxAfter!.y);
   await expect(page.locator(".agentInput")).toHaveValue("");
   await page.locator(".modelHistory button", { hasText: "生成一个30ML的杯子模型" }).click();
   await expect(page.locator(".agentInput")).toHaveValue("生成一个30ML的杯子模型");
+});
+
+test("model history scrolls internally without displacing settings", async ({ page }) => {
+  const projects = Array.from({ length: 14 }, (_, index) => ({
+    ...project,
+    id: `project-history-${index}`,
+    requirement: `模型 ${index + 1}`,
+    updatedAt: new Date(Date.UTC(2026, 5, 26, 0, index)).toISOString()
+  }));
+
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.addInitScript((storedProjects) => {
+    localStorage.setItem("ai-openscad.projects", JSON.stringify(storedProjects));
+    localStorage.setItem("ai-openscad.active-project-id", storedProjects[0].id);
+  }, projects);
+
+  await page.goto("/");
+
+  const historyBox = await page.locator(".modelHistory").boundingBox();
+  const listMetrics = await page.locator(".modelList").evaluate((element) => ({
+    clientHeight: element.clientHeight,
+    scrollHeight: element.scrollHeight
+  }));
+  const settingsBox = await page.locator(".sidebarSettings").boundingBox();
+  const projectToolsBox = await page.locator(".projectTools").boundingBox();
+
+  expect(historyBox).not.toBeNull();
+  expect(settingsBox).not.toBeNull();
+  expect(projectToolsBox).not.toBeNull();
+  expect(listMetrics.scrollHeight).toBeGreaterThan(listMetrics.clientHeight);
+  expect(historyBox!.y).toBeLessThan(settingsBox!.y);
+  expect(projectToolsBox!.y).toBeGreaterThan(settingsBox!.y);
 });

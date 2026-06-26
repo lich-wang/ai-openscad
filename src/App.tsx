@@ -10,9 +10,8 @@ import {
   Send,
   X
 } from "lucide-react";
-import { ChangeEvent, useEffect, useMemo, useState } from "react";
+import { ChangeEvent, useEffect, useMemo, useRef, useState } from "react";
 import {
-  estimateTokenUsage,
   generateOpenScad,
   proposeRevision,
   reviewViews
@@ -39,8 +38,6 @@ import {
   saveProject,
   saveVisionApiKey,
   upsertProjectList,
-  type ProjectIteration,
-  type PromptTraceEntry,
   type ProjectState
 } from "./lib/project";
 import { createRenderMcp, type RenderMcpStage } from "./lib/render";
@@ -51,6 +48,8 @@ import {
 import { acceptRevision, rejectRevision } from "./lib/workflow";
 
 type BusyState = "idle" | "generating" | "compiling" | "reviewing" | "exporting";
+type WorkflowStage = "code" | "render" | "review";
+type WorkflowStageState = "waiting" | "active" | "complete" | "error";
 
 export default function App() {
   const [initialWorkspace] = useState(() => loadProjectWorkspace());
@@ -62,7 +61,9 @@ export default function App() {
   const [visionApiKey, setVisionApiKey] = useState(() => loadVisionApiKey());
   const [busy, setBusy] = useState<BusyState>("idle");
   const [error, setError] = useState("");
+  const [errorStage, setErrorStage] = useState<WorkflowStage | "">("");
   const [renderStatus, setRenderStatus] = useState("");
+  const busyRef = useRef<BusyState>("idle");
 
   const locale = getBrowserLocale();
   const tr = (key: MessageKey) => t(locale, key);
@@ -73,6 +74,13 @@ export default function App() {
   const compilerOutputForDisplay =
     renderStatus ||
     (hasPendingRevision && busy === "idle" ? tr("revisionReady") : project.compilerOutput);
+  const workflowStages = buildWorkflowStages({
+    busy,
+    errorStage,
+    hasCode: Boolean(project.currentCode.trim() || project.proposedCode.trim()),
+    hasRenderedViews,
+    hasReview: Boolean(project.review)
+  });
   const hasModelWork = Boolean(
     project.currentCode.trim() ||
       project.proposedCode.trim() ||
@@ -95,33 +103,23 @@ export default function App() {
     saveVisionApiKey(visionApiKey);
   }, [visionApiKey]);
 
-  const tokenUsage = useMemo(() => {
-    const imageCount = [project.views.front, project.views.top, project.views.right].filter(
-      Boolean
-    ).length;
-    return estimateTokenUsage({
-      llmText: `${project.requirement}\n${project.currentCode}\n${project.proposedCode}\n${project.review?.summary ?? ""}`,
-      visionText: `${project.requirement}\n${project.currentCode}`,
-      imageCount
-    });
-  }, [
-    project.currentCode,
-    project.proposedCode,
-    project.requirement,
-    project.review,
-    project.views
-  ]);
+  function updateBusy(nextBusy: BusyState) {
+    busyRef.current = nextBusy;
+    setBusy(nextBusy);
+  }
 
   async function runSafely(action: BusyState, task: () => Promise<void>) {
-    setBusy(action);
+    updateBusy(action);
     setError("");
+    setErrorStage("");
     try {
       await task();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
+      setErrorStage(workflowStageForBusy(busyRef.current === "idle" ? action : busyRef.current));
     } finally {
       setRenderStatus("");
-      setBusy("idle");
+      updateBusy("idle");
     }
   }
 
@@ -189,7 +187,7 @@ export default function App() {
           }
         ]
       }));
-      setBusy("compiling");
+      updateBusy("compiling");
       const rendered = await compileDraftCode(code);
       if (!rendered.ok || !rendered.views || !rendered.stl) {
         setProject((current) => ({
@@ -394,7 +392,7 @@ export default function App() {
           }
         ]
       }));
-      setBusy("compiling");
+      updateBusy("compiling");
       const rendered = await compileDraftCode(code);
       if (!rendered.ok || !rendered.views || !rendered.stl) {
         setProject((current) => ({
@@ -522,6 +520,7 @@ export default function App() {
     setProjectList((current) => upsertProjectList(current, next));
     setProject(next);
     setError("");
+    setErrorStage("");
   }
 
   function handleSelectProject(projectId: string) {
@@ -531,6 +530,7 @@ export default function App() {
     }
     setProject(selected);
     setError("");
+    setErrorStage("");
   }
 
   function updateProject(patch: Partial<ProjectState>) {
@@ -552,6 +552,7 @@ export default function App() {
         setProjectList((current) => upsertProjectList(current, imported));
         setProject(imported);
         setError("");
+        setErrorStage("");
       })
       .catch((caught) => {
         setError(caught instanceof Error ? caught.message : String(caught));
@@ -577,6 +578,23 @@ export default function App() {
             <RefreshCw size={16} />
             {tr("newModel")}
           </button>
+
+          <section className="modelHistory">
+            <span>{tr("models")}</span>
+            <div className="modelList">
+              {projectList.map((item) => (
+                <button
+                  aria-pressed={item.id === project.id}
+                  key={item.id}
+                  onClick={() => handleSelectProject(item.id)}
+                  type="button"
+                >
+                  <strong>{projectTitle(item, tr("untitledModel"))}</strong>
+                  <small>{new Date(item.updatedAt).toLocaleTimeString()}</small>
+                </button>
+              ))}
+            </div>
+          </section>
 
           <details className="sidebarSettings" open>
             <summary>
@@ -629,26 +647,8 @@ export default function App() {
                 value={project.visionModelId}
                 onChange={(visionModelId) => updateProject({ visionModelId })}
               />
-
-              <div className="tokenPanel">
-                <div>
-                  <span>{tr("llmTokens")}</span>
-                  <strong>{tokenUsage.llmTokens}</strong>
-                </div>
-                <div>
-                  <span>{tr("visionTokens")}</span>
-                  <strong>{tokenUsage.visionTokens}</strong>
-                </div>
-              </div>
             </div>
           </details>
-
-          <Status
-            busy={busy}
-            error={error}
-            locale={locale}
-            pendingRevision={hasPendingRevision}
-          />
 
           <section className="projectTools">
             <span>{tr("projectFiles")}</span>
@@ -671,29 +671,14 @@ export default function App() {
               </button>
             </div>
           </section>
-
-          <section className="modelHistory">
-            <span>{tr("models")}</span>
-            <div className="modelList">
-              {projectList.map((item) => (
-                <button
-                  aria-pressed={item.id === project.id}
-                  key={item.id}
-                  onClick={() => handleSelectProject(item.id)}
-                  type="button"
-                >
-                  <strong>{projectTitle(item, tr("untitledModel"))}</strong>
-                  <small>{new Date(item.updatedAt).toLocaleTimeString()}</small>
-                </button>
-              ))}
-            </div>
-          </section>
         </aside>
 
         <section className="panel codePanel agentPanel">
+          <WorkflowStageStrip locale={locale} stages={workflowStages} />
           <AgentRunPanel
             busy={busy}
             compilerOutput={compilerOutputForDisplay}
+            error={error}
             locale={locale}
             pendingRevision={hasPendingRevision}
             project={project}
@@ -710,13 +695,22 @@ export default function App() {
               placeholder={tr("requirementPlaceholder")}
             />
             <div className="buttonGrid agentActions">
-              {!hasRenderedViews ? (
+              {hasPendingRevision ? (
+                <p className="pendingActionHint">{tr("pendingRevisionActionHint")}</p>
+              ) : null}
+              {!hasPendingRevision && !hasRenderedViews ? (
                 <button className="primaryAction" disabled={isBusy} onClick={handleGenerate}>
                   <Send size={16} />
                   {tr("generate")}
                 </button>
               ) : null}
-              {hasRenderedViews && !project.review ? (
+              {!hasPendingRevision && !hasRenderedViews && project.currentCode.trim() ? (
+                <button className="secondaryAction" disabled={isBusy} onClick={handleCompile}>
+                  <Play size={16} />
+                  {tr("rerender")}
+                </button>
+              ) : null}
+              {!hasPendingRevision && hasRenderedViews && !project.review ? (
                 <>
                   <button className="primaryAction" disabled={isBusy} onClick={handleReview}>
                     <Eye size={16} />
@@ -736,10 +730,7 @@ export default function App() {
                   </button>
                 </>
               ) : null}
-              {project.review && hasPendingRevision ? (
-                <p className="pendingActionHint">{tr("pendingRevisionActionHint")}</p>
-              ) : null}
-              {project.review && !hasPendingRevision ? (
+              {!hasPendingRevision && project.review ? (
                 <>
                   <button className="primaryAction" disabled={isBusy} onClick={handleIterateAgain}>
                     <RefreshCw size={16} />
@@ -887,46 +878,6 @@ export default function App() {
               </div>
             </section>
           ) : null}
-
-          <section className="outputBlock">
-            <h3>{tr("compiler")}</h3>
-            <pre>{compilerOutputForDisplay || tr("noCompileOutput")}</pre>
-          </section>
-
-          <section className="outputBlock">
-            <h3>{tr("review")}</h3>
-            {project.review ? (
-              <>
-                <p>{project.review.summary}</p>
-                <ul>
-                  {project.review.issues.map((issue) => (
-                    <li key={issue}>{issue}</li>
-                  ))}
-                </ul>
-                <p className="confidence">
-                  {tr("confidence")} {Math.round(project.review.confidence * 100)}%
-                </p>
-                <div className="correctionPromptPreview">
-                  <span>{tr("correctionPrompt")}</span>
-                  <p>{project.review.correctionPrompt}</p>
-                </div>
-              </>
-            ) : (
-              <p>{tr("noReview")}</p>
-            )}
-          </section>
-
-          <section className="outputBlock historyBlock">
-            <h3>{tr("history")}</h3>
-            <ol>
-              {project.iterations.slice(-8).map((iteration) => (
-                <li key={iteration.id}>
-                  <span>{iterationStatusLabel(locale, iteration.status)}</span>
-                  <time>{new Date(iteration.createdAt).toLocaleTimeString()}</time>
-                </li>
-              ))}
-            </ol>
-          </section>
         </aside>
       </section>
     </main>
@@ -985,9 +936,38 @@ function ModelPicker(props: {
   );
 }
 
+function WorkflowStageStrip(props: {
+  locale: Locale;
+  stages: Array<{ id: WorkflowStage; state: WorkflowStageState }>;
+}) {
+  const labelKeys: Record<WorkflowStage, MessageKey> = {
+    code: "stageCode",
+    render: "stageRender",
+    review: "stageReview"
+  };
+  return (
+    <ol className="workflowStageStrip" aria-label={t(props.locale, "workflowStages")}>
+      {props.stages.map((stage) => (
+        <li
+          className={`workflowStage ${stage.state}`}
+          data-stage={stage.id}
+          data-state={stage.state}
+          key={stage.id}
+        >
+          <span className="workflowStageName">{t(props.locale, labelKeys[stage.id])}</span>
+          <span className="workflowStageState">
+            {workflowStageStateLabel(props.locale, stage.state)}
+          </span>
+        </li>
+      ))}
+    </ol>
+  );
+}
+
 function AgentRunPanel(props: {
   busy: BusyState;
   compilerOutput: string;
+  error: string;
   locale: Locale;
   pendingRevision: boolean;
   project: ProjectState;
@@ -1007,6 +987,13 @@ function AgentRunPanel(props: {
         </span>
       </div>
       <div className="agentTimeline">
+        {props.error ? (
+          <article className="agentEvent agentError" role="alert">
+            <h3>{t(props.locale, "workflowError")}</h3>
+            <p>{props.error}</p>
+          </article>
+        ) : null}
+
         <article className="agentEvent">
           <h3>{t(props.locale, "agentThinking")}</h3>
           <p>
@@ -1025,7 +1012,10 @@ function AgentRunPanel(props: {
           </article>
         ) : null}
 
-        {props.project.views.front || props.project.views.top || props.project.views.right ? (
+        {props.compilerOutput ||
+        props.project.views.front ||
+        props.project.views.top ||
+        props.project.views.right ? (
           <article className="agentEvent">
             <h3>{t(props.locale, "draftRender")}</h3>
             <p>{props.compilerOutput || t(props.locale, "compiledDraft")}</p>
@@ -1045,6 +1035,9 @@ function AgentRunPanel(props: {
               <span>{t(props.locale, "correctionPrompt")}</span>
               <p>{props.project.review.correctionPrompt}</p>
             </div>
+            <p className="confidence">
+              {t(props.locale, "confidence")} {Math.round(props.project.review.confidence * 100)}%
+            </p>
           </article>
         ) : null}
 
@@ -1074,28 +1067,6 @@ function AgentRunPanel(props: {
   );
 }
 
-function Status(props: {
-  busy: BusyState;
-  error: string;
-  locale: Locale;
-  pendingRevision: boolean;
-}) {
-  if (props.error) {
-    return <p className="status error">{props.error}</p>;
-  }
-  if (props.busy !== "idle") {
-    return (
-      <p className="status">
-        {t(props.locale, "working")}: {busyStatusLabel(props.locale, props.busy)}
-      </p>
-    );
-  }
-  if (props.pendingRevision) {
-    return <p className="status warning">{t(props.locale, "revisionPending")}</p>;
-  }
-  return <p className="status">{t(props.locale, "ready")}</p>;
-}
-
 function busyStatusLabel(locale: Locale, busy: Exclude<BusyState, "idle">): string {
   const keys: Record<Exclude<BusyState, "idle">, MessageKey> = {
     generating: "busyGenerating",
@@ -1106,19 +1077,63 @@ function busyStatusLabel(locale: Locale, busy: Exclude<BusyState, "idle">): stri
   return t(locale, keys[busy]);
 }
 
-function iterationStatusLabel(
-  locale: Locale,
-  status: ProjectIteration["status"]
-): string {
-  const keys: Record<ProjectIteration["status"], MessageKey> = {
-    generated: "iterationGenerated",
-    compiled: "iterationCompiled",
-    reviewed: "iterationReviewed",
-    accepted: "iterationAccepted",
-    rejected: "iterationRejected",
-    error: "iterationError"
+function workflowStageForBusy(busy: BusyState): WorkflowStage {
+  if (busy === "generating") {
+    return "code";
+  }
+  if (busy === "reviewing") {
+    return "review";
+  }
+  return "render";
+}
+
+function workflowStageStateLabel(locale: Locale, state: WorkflowStageState): string {
+  const keys: Record<WorkflowStageState, MessageKey> = {
+    waiting: "stageWaiting",
+    active: "stageActive",
+    complete: "stageComplete",
+    error: "stageError"
   };
-  return t(locale, keys[status]);
+  return t(locale, keys[state]);
+}
+
+function buildWorkflowStages(args: {
+  busy: BusyState;
+  errorStage: WorkflowStage | "";
+  hasCode: boolean;
+  hasRenderedViews: boolean;
+  hasReview: boolean;
+}): Array<{ id: WorkflowStage; state: WorkflowStageState }> {
+  const activeStage = args.busy === "idle" ? "" : workflowStageForBusy(args.busy);
+  return [
+    {
+      id: "code",
+      state: workflowStageState("code", args.errorStage, activeStage, args.hasCode)
+    },
+    {
+      id: "render",
+      state: workflowStageState("render", args.errorStage, activeStage, args.hasRenderedViews)
+    },
+    {
+      id: "review",
+      state: workflowStageState("review", args.errorStage, activeStage, args.hasReview)
+    }
+  ];
+}
+
+function workflowStageState(
+  stage: WorkflowStage,
+  errorStage: WorkflowStage | "",
+  activeStage: WorkflowStage | "",
+  complete: boolean
+): WorkflowStageState {
+  if (errorStage === stage) {
+    return "error";
+  }
+  if (activeStage === stage) {
+    return "active";
+  }
+  return complete ? "complete" : "waiting";
 }
 
 function projectTitle(project: ProjectState, fallback: string): string {
@@ -1127,40 +1142,6 @@ function projectTitle(project: ProjectState, fallback: string): string {
     return fallback;
   }
   return requirement.length > 28 ? `${requirement.slice(0, 28)}...` : requirement;
-}
-
-function PromptTracePanel(props: { entries: PromptTraceEntry[]; locale: Locale }) {
-  const entries = props.entries.slice(-6).reverse();
-  return (
-    <section className="promptTrace" aria-label={t(props.locale, "aiPromptTrace")}>
-      <div className="panelHeader">
-        <h2>{t(props.locale, "aiPromptTrace")}</h2>
-        <span>
-          {props.entries.length} {t(props.locale, "events")}
-        </span>
-      </div>
-      {entries.length ? (
-        <div className="traceList">
-          {entries.map((entry) => (
-            <details key={entry.id} className="traceItem">
-              <summary>
-                <strong>{entry.phase}</strong>
-                <span>{entry.modelId}</span>
-                <time>{new Date(entry.createdAt).toLocaleTimeString()}</time>
-              </summary>
-              <TraceBlock title={t(props.locale, "system")} value={entry.systemPrompt} />
-              <TraceBlock title={t(props.locale, "user")} value={entry.userPrompt} />
-              {entry.response ? (
-                <TraceBlock title={t(props.locale, "response")} value={entry.response} />
-              ) : null}
-            </details>
-          ))}
-        </div>
-      ) : (
-        <p className="emptyTrace">{t(props.locale, "emptyTrace")}</p>
-      )}
-    </section>
-  );
 }
 
 function TraceBlock(props: { title: string; value: string }) {
@@ -1175,7 +1156,7 @@ function TraceBlock(props: { title: string; value: string }) {
 function ViewImage(props: { label: string; src: string }) {
   return (
     <figure className="viewTile">
-      {props.src ? <img alt={`${props.label} view`} src={props.src} /> : <div />}
+      {props.src ? <img alt={props.label} src={props.src} /> : <div />}
       <figcaption>{props.label}</figcaption>
     </figure>
   );

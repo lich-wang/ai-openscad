@@ -178,7 +178,7 @@ button:disabled {
 .codePanel {
   display: grid;
   gap: 10px;
-  grid-template-rows: minmax(0, 1fr) auto auto auto;
+  grid-template-rows: auto minmax(0, 1fr) auto auto auto;
   min-height: 0;
   overflow: hidden;
   padding: 14px;
@@ -193,8 +193,7 @@ label {
 label > span,
 .fieldGroup > span,
 .fieldHeader > span,
-.panelHeader h2,
-.outputBlock h3 {
+.panelHeader h2 {
   color: #344054;
   font-size: 13px;
   font-weight: 700;
@@ -263,8 +262,7 @@ label > span,
   border-radius: 8px;
   display: grid;
   gap: 8px;
-  margin-top: auto;
-  min-height: 118px;
+  min-height: 128px;
   overflow: hidden;
   padding: 10px;
 }
@@ -278,7 +276,7 @@ label > span,
 .modelList {
   display: grid;
   gap: 6px;
-  max-height: 190px;
+  max-height: min(250px, 32vh);
   overflow: auto;
 }
 
@@ -521,6 +519,66 @@ textarea {
   grid-column: 1 / -1;
 }
 
+.workflowStageStrip {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.workflowStage {
+  background: #f8fafc;
+  border: 1px solid #d7dee8;
+  border-radius: 8px;
+  display: grid;
+  gap: 4px;
+  min-height: 66px;
+  padding: 10px 12px;
+}
+
+.workflowStageName {
+  color: #1f2937;
+  font-size: 14px;
+  font-weight: 800;
+  line-height: 1.2;
+}
+
+.workflowStageState {
+  color: #667085;
+  font-size: 12px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.workflowStage.active {
+  background: #e9f7f3;
+  border-color: #77c7b6;
+}
+
+.workflowStage.active .workflowStageState {
+  color: #0f766e;
+}
+
+.workflowStage.complete {
+  background: #f0f7ff;
+  border-color: #9ec5f8;
+}
+
+.workflowStage.complete .workflowStageState {
+  color: #2457a7;
+}
+
+.workflowStage.error {
+  background: #fff1f1;
+  border-color: #f7b4b4;
+}
+
+.workflowStage.error .workflowStageState {
+  color: #a33a3a;
+}
+
 .pendingActionHint {
   background: #fff8eb;
   border: 1px solid #f0c57a;
@@ -576,27 +634,6 @@ textarea {
 
 .smallButton.success {
   background: #1f7a6d;
-}
-
-.status {
-  background: #edf7f4;
-  border: 1px solid #a7d8cc;
-  border-radius: 6px;
-  color: #15594e;
-  margin: 0;
-  padding: 8px 10px;
-}
-
-.status.error {
-  background: #fff1f1;
-  border-color: #f7b4b4;
-  color: #a33a3a;
-}
-
-.status.warning {
-  background: #fff8eb;
-  border-color: #f0c57a;
-  color: #8a4b0f;
 }
 
 .panelHeader {
@@ -670,6 +707,16 @@ textarea {
 
 .agentEvent ul {
   padding-left: 18px;
+}
+
+.agentError {
+  background: #fff1f1;
+  border-color: #f7b4b4;
+}
+
+.agentError h3,
+.agentError p {
+  color: #a33a3a;
 }
 
 .correctionPromptPreview {
@@ -889,7 +936,10 @@ textarea {
 .viewGrid {
   display: grid;
   gap: 8px;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-rows: minmax(0, 1.35fr) minmax(0, 1fr);
+  flex: 1;
+  min-height: 0;
 }
 
 .viewGrid .viewTile:first-child {
@@ -899,6 +949,8 @@ textarea {
 .viewTile {
   border: 1px solid #d7dee8;
   border-radius: 6px;
+  display: flex;
+  flex-direction: column;
   margin: 0;
   min-width: 0;
   overflow: hidden;
@@ -906,15 +958,13 @@ textarea {
 
 .viewTile img,
 .viewTile div {
-  aspect-ratio: 4 / 3;
   background: #f8fafc;
   display: block;
+  flex: 1;
+  height: 100%;
+  min-height: 0;
+  object-fit: contain;
   width: 100%;
-}
-
-.viewGrid .viewTile:first-child img,
-.viewGrid .viewTile:first-child div {
-  aspect-ratio: 16 / 9;
 }
 
 .viewTile figcaption {
@@ -925,55 +975,9 @@ textarea {
   text-align: center;
 }
 
-.outputBlock {
-  border-top: 1px solid #e4e9f0;
-  display: grid;
-  gap: 7px;
-  padding-top: 10px;
-}
-
-.outputBlock p,
-.outputBlock ul,
-.outputBlock ol {
-  color: #475467;
-  margin: 0;
-}
-
-.outputBlock ul,
-.outputBlock ol {
-  padding-left: 20px;
-}
-
-.outputBlock pre {
-  background: #f7f8fa;
-  border: 1px solid #e4e9f0;
-  border-radius: 6px;
-  color: #344054;
-  margin: 0;
-  max-height: 150px;
-  overflow: auto;
-  padding: 10px;
-  white-space: pre-wrap;
-}
-
 .confidence {
   color: #1f7a6d;
   font-weight: 700;
-}
-
-.historyBlock li {
-  display: flex;
-  gap: 8px;
-  justify-content: space-between;
-}
-
-.historyBlock span {
-  color: #344054;
-  font-weight: 700;
-}
-
-.historyBlock time {
-  color: #667085;
 }
 
 @media (max-width: 1180px) {
