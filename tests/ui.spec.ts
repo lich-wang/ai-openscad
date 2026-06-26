@@ -68,41 +68,49 @@ test("desktop workbench keeps controls visible and matches screenshot", async ({
 
   await page.goto("/");
 
-  await expect(page.getByRole("heading", { name: "AI Prompt Trace" })).toBeVisible();
-  await expect(page.getByText("Draft preview uses low precision")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Agent Run" })).toBeVisible();
+  await expect(page.locator(".agentComposer").getByText("Draft preview uses low precision")).toBeVisible();
+  await expect(page.getByText("User Request")).toBeVisible();
   await expect(page.getByRole("button", { name: /Final Export/i })).toBeVisible();
   await expect(page.getByText("LLM tokens")).toBeVisible();
   await expect(page.getByText("Vision tokens")).toBeVisible();
   await expect(page.locator("select")).toHaveCount(0);
+  await expect(page.locator(".codeDisclosure")).not.toHaveAttribute("open", "");
 
-  await page.getByRole("button", { name: "No key?" }).first().hover();
+  const helpButton = page.getByRole("button", { name: "No key?" }).first();
+  await helpButton.hover();
   const inviteTooltip = page.locator(".keyHelpTooltip").filter({ hasText: "QRU857" }).first();
   await expect(inviteTooltip.locator(".inviteCodeLine")).toContainText("Invite code");
   await expect(inviteTooltip.locator(".inviteCodeLine")).toContainText("QRU857");
   await expect(inviteTooltip.getByAltText("Xiaomi MiMo invite QR code")).toBeVisible();
+  const helpBox = await helpButton.boundingBox();
   const inviteBox = await inviteTooltip.boundingBox();
   const qrBox = await inviteTooltip
     .getByAltText("Xiaomi MiMo invite QR code")
     .boundingBox();
+  expect(inviteBox!.x).toBeGreaterThanOrEqual(helpBox!.x);
   expect(inviteBox?.width).toBeGreaterThanOrEqual(330);
   expect(qrBox?.width).toBeGreaterThanOrEqual(168);
   await page.mouse.move(900, 40);
 
   const controlBox = await page.locator(".controlPanel").boundingBox();
   const codeBox = await page.locator(".codePanel").boundingBox();
+  const composerBox = await page.locator(".agentComposer").boundingBox();
   const lastActionBox = await page
     .getByRole("button", { name: /Final Export/i })
     .boundingBox();
 
   expect(controlBox).not.toBeNull();
   expect(codeBox).not.toBeNull();
+  expect(composerBox).not.toBeNull();
   expect(lastActionBox).not.toBeNull();
   const pageHeight = await page.evaluate(() =>
     Math.max(document.documentElement.scrollHeight, document.body.scrollHeight)
   );
   expect(pageHeight).toBeLessThanOrEqual(900);
+  expect(lastActionBox!.x).toBeGreaterThanOrEqual(composerBox!.x);
   expect(lastActionBox!.x + lastActionBox!.width).toBeLessThanOrEqual(
-    controlBox!.x + controlBox!.width
+    composerBox!.x + composerBox!.width
   );
   expect(controlBox!.x + controlBox!.width).toBeLessThan(codeBox!.x);
 

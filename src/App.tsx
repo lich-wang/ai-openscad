@@ -140,7 +140,7 @@ export default function App() {
         ...current,
         currentCode: code,
         proposedCode: "",
-        compilerOutput: tr("generatedCode"),
+        compilerOutput: tr("renderingDraft"),
         promptTrace: [...current.promptTrace, trace],
         updatedAt: new Date().toISOString(),
         iterations: [
@@ -155,6 +155,36 @@ export default function App() {
           }
         ]
       }));
+      const rendered = await compileDraftCode(code);
+      if (!rendered.ok || !rendered.views) {
+        setProject((current) => ({
+          ...current,
+          compilerOutput: rendered.diagnostics,
+          promptTrace: [...current.promptTrace, rendered.trace],
+          updatedAt: new Date().toISOString()
+        }));
+        throw new Error(rendered.diagnostics);
+      }
+      setProject((current) => ({
+        ...current,
+        currentCode: code,
+        proposedCode: "",
+        views: rendered.views,
+        compilerOutput: `${rendered.diagnostics}\n${tr("compiledDraft")}`,
+        promptTrace: [...current.promptTrace, rendered.trace],
+        updatedAt: new Date().toISOString(),
+        iterations: [
+          ...current.iterations,
+          {
+            id: crypto.randomUUID(),
+            createdAt: new Date().toISOString(),
+            requirement: current.requirement,
+            code,
+            modelId: current.codeModelId,
+            status: "compiled"
+          }
+        ]
+      }));
     });
   }
 
@@ -163,30 +193,21 @@ export default function App() {
       if (!project.currentCode.trim()) {
         throw new Error(tr("missingCode"));
       }
-      const draftCode = normalizeOpenScadPrecision(project.currentCode, "draft");
-      const result = await adapter.compile(draftCode);
-      const trace = createPromptTraceEntry({
-        phase: "compile",
-        modelId: "browser-openscad",
-        systemPrompt: buildRenderPrecisionInstruction("draft"),
-        userPrompt: tr("compileDraftTrace"),
-        response: result.diagnostics
-      });
-      if (!result.ok || !result.stl) {
+      const rendered = await compileDraftCode(project.currentCode);
+      if (!rendered.ok || !rendered.views) {
         setProject((current) => ({
           ...current,
-          compilerOutput: result.diagnostics,
-          promptTrace: [...current.promptTrace, trace],
+          compilerOutput: rendered.diagnostics,
+          promptTrace: [...current.promptTrace, rendered.trace],
           updatedAt: new Date().toISOString()
         }));
-        throw new Error(result.diagnostics);
+        throw new Error(rendered.diagnostics);
       }
-      const views = await captureOrthographicViews(result.stl);
       setProject((current) => ({
         ...current,
-        views,
-        compilerOutput: `${result.diagnostics}\n${tr("compiledDraft")}`,
-        promptTrace: [...current.promptTrace, trace],
+        views: rendered.views,
+        compilerOutput: `${rendered.diagnostics}\n${tr("compiledDraft")}`,
+        promptTrace: [...current.promptTrace, rendered.trace],
         updatedAt: new Date().toISOString(),
         iterations: [
           ...current.iterations,
@@ -201,6 +222,32 @@ export default function App() {
         ]
       }));
     });
+  }
+
+  async function compileDraftCode(code: string) {
+    const draftCode = normalizeOpenScadPrecision(code, "draft");
+    const result = await adapter.compile(draftCode);
+    const trace = createPromptTraceEntry({
+      phase: "compile",
+      modelId: "browser-openscad",
+      systemPrompt: buildRenderPrecisionInstruction("draft"),
+      userPrompt: tr("compileDraftTrace"),
+      response: result.diagnostics
+    });
+    if (!result.ok || !result.stl) {
+      return {
+        ok: false,
+        diagnostics: result.diagnostics,
+        trace,
+        views: null
+      };
+    }
+    return {
+      ok: true,
+      diagnostics: result.diagnostics,
+      trace,
+      views: await captureOrthographicViews(result.stl)
+    };
   }
 
   async function handleReview() {
@@ -423,26 +470,6 @@ export default function App() {
             onChange={(visionModelId) => updateProject({ visionModelId })}
           />
 
-          <label className="growLabel">
-            <span>{tr("requirement")}</span>
-            <textarea
-              className="requirementInput"
-              value={project.requirement}
-              onChange={(event) => updateProject({ requirement: event.target.value })}
-              placeholder={tr("requirementPlaceholder")}
-            />
-          </label>
-
-          <label>
-            <span>{tr("iterationNotes")}</span>
-            <textarea
-              className="iterationInput"
-              value={iterationNotes}
-              onChange={(event) => setIterationNotes(event.target.value)}
-              placeholder={tr("iterationPlaceholder")}
-            />
-          </label>
-
           <div className="tokenPanel">
             <div>
               <span>{tr("llmTokens")}</span>
@@ -454,49 +481,68 @@ export default function App() {
             </div>
           </div>
 
-          <div className="buttonGrid">
-            <button disabled={isBusy} onClick={handleGenerate}>
-              <Send size={16} />
-              {tr("generate")}
-            </button>
-            <button disabled={isBusy} onClick={handleCompile}>
-              <Play size={16} />
-              {tr("compile")}
-            </button>
-            <button disabled={isBusy} onClick={handleReview}>
-              <Eye size={16} />
-              {tr("review")}
-            </button>
-            <button disabled={isBusy} onClick={handleIterateAgain}>
-              <RefreshCw size={16} />
-              {tr("iterateAgain")}
-            </button>
-            <button disabled={isBusy} onClick={handleHighPrecisionExport}>
-              <Download size={16} />
-              {tr("finalExport")}
-            </button>
-          </div>
-
           <Status busy={busy} error={error} locale={locale} />
         </aside>
 
-        <section className="panel codePanel">
-          <PromptTracePanel entries={project.promptTrace} locale={locale} />
-          <section className="codeBlock">
+        <section className="panel codePanel agentPanel">
+          <AgentRunPanel busy={busy} locale={locale} project={project} />
+          <section className="agentComposer">
             <div className="panelHeader">
-              <h2>
-                <Code2 size={18} />
-                {tr("openscad")}
-              </h2>
-              <span className="precisionBadge">{tr("draftPrecision")}</span>
+              <h2>{tr("agentComposer")}</h2>
+              <span>{tr("draftPrecision")}</span>
             </div>
+            <textarea
+              className="requirementInput"
+              value={project.requirement}
+              onChange={(event) => updateProject({ requirement: event.target.value })}
+              placeholder={tr("requirementPlaceholder")}
+            />
+            <textarea
+              className="iterationInput"
+              value={iterationNotes}
+              onChange={(event) => setIterationNotes(event.target.value)}
+              placeholder={tr("iterationPlaceholder")}
+            />
+            <div className="buttonGrid agentActions">
+              <button disabled={isBusy} onClick={handleGenerate}>
+                <Send size={16} />
+                {tr("generate")}
+              </button>
+              <button disabled={isBusy} onClick={handleCompile}>
+                <Play size={16} />
+                {tr("rerender")}
+              </button>
+              <button disabled={isBusy} onClick={handleReview}>
+                <Eye size={16} />
+                {tr("review")}
+              </button>
+              <button disabled={isBusy} onClick={handleIterateAgain}>
+                <RefreshCw size={16} />
+                {tr("iterateAgain")}
+              </button>
+              <button disabled={isBusy} onClick={handleHighPrecisionExport}>
+                <Download size={16} />
+                {tr("finalExport")}
+              </button>
+            </div>
+          </section>
+
+          <details className="codeDisclosure">
+            <summary>
+              <span>
+                <Code2 size={17} />
+                {tr("codeDetails")}
+              </span>
+              <small>{tr("draftPrecision")}</small>
+            </summary>
             <textarea
               className="codeEditor"
               spellCheck={false}
               value={project.currentCode}
               onChange={(event) => updateProject({ currentCode: event.target.value })}
             />
-          </section>
+          </details>
+
           {project.proposedCode ? (
             <div className="revisionArea">
               <div className="panelHeader compact">
@@ -628,6 +674,91 @@ function ModelPicker(props: {
         ))}
       </div>
     </div>
+  );
+}
+
+function AgentRunPanel(props: {
+  busy: BusyState;
+  locale: Locale;
+  project: ProjectState;
+}) {
+  const latestTrace = props.project.promptTrace.slice(-4).reverse();
+  return (
+    <section className="agentRun">
+      <div className="panelHeader">
+        <h2>{t(props.locale, "agentRun")}</h2>
+        <span>
+          {props.busy === "idle"
+            ? t(props.locale, "ready")
+            : busyStatusLabel(props.locale, props.busy)}
+        </span>
+      </div>
+      <div className="agentTimeline">
+        <article className="agentEvent userEvent">
+          <h3>{t(props.locale, "userRequest")}</h3>
+          <p>{props.project.requirement || t(props.locale, "missingRequirement")}</p>
+        </article>
+
+        <article className="agentEvent">
+          <h3>{t(props.locale, "agentThinking")}</h3>
+          <p>
+            {props.busy === "generating"
+              ? t(props.locale, "streamingCode")
+              : props.project.currentCode
+                ? t(props.locale, "generatedCode")
+                : t(props.locale, "emptyTrace")}
+          </p>
+        </article>
+
+        {props.project.currentCode ? (
+          <article className="agentEvent">
+            <h3>{t(props.locale, "generatedOutput")}</h3>
+            <p>{t(props.locale, "codeDetails")}</p>
+          </article>
+        ) : null}
+
+        {props.project.views.front || props.project.views.top || props.project.views.right ? (
+          <article className="agentEvent">
+            <h3>{t(props.locale, "draftRender")}</h3>
+            <p>{props.project.compilerOutput || t(props.locale, "compiledDraft")}</p>
+          </article>
+        ) : null}
+
+        {props.project.review ? (
+          <article className="agentEvent">
+            <h3>{t(props.locale, "visualReview")}</h3>
+            <p>{props.project.review.summary}</p>
+            <ul>
+              {props.project.review.issues.map((issue) => (
+                <li key={issue}>{issue}</li>
+              ))}
+            </ul>
+          </article>
+        ) : null}
+
+        {latestTrace.length ? (
+          <article className="agentEvent traceEvent">
+            <h3>{t(props.locale, "aiPromptTrace")}</h3>
+            <div className="traceList compactTraceList">
+              {latestTrace.map((entry) => (
+                <details key={entry.id} className="traceItem">
+                  <summary>
+                    <strong>{entry.phase}</strong>
+                    <span>{entry.modelId}</span>
+                    <time>{new Date(entry.createdAt).toLocaleTimeString()}</time>
+                  </summary>
+                  <TraceBlock title={t(props.locale, "system")} value={entry.systemPrompt} />
+                  <TraceBlock title={t(props.locale, "user")} value={entry.userPrompt} />
+                  {entry.response ? (
+                    <TraceBlock title={t(props.locale, "response")} value={entry.response} />
+                  ) : null}
+                </details>
+              ))}
+            </div>
+          </article>
+        ) : null}
+      </div>
+    </section>
   );
 }
 

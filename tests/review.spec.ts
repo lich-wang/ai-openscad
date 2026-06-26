@@ -80,7 +80,7 @@ test("review sends MiMo multimodal model and shows proposed revision", async ({
   expect(llmStream).toBe(true);
 });
 
-test("generation requests streaming output and fills the editor", async ({ page }) => {
+test("generation streams code and automatically renders draft views", async ({ page }) => {
   await page.addInitScript((storedProject) => {
     localStorage.setItem("ai-openscad.llm-api-key", "sk-llm");
     localStorage.setItem("ai-openscad.vision-api-key", "sk-vision");
@@ -105,9 +105,9 @@ test("generation requests streaming output and fills the editor", async ({ page 
       status: 200,
       contentType: "text/event-stream",
       body: [
-        'data: {"choices":[{"delta":{"content":"module streamed"}}]}',
+        'data: {"choices":[{"delta":{"content":"cube"}}]}',
         "",
-        'data: {"choices":[{"delta":{"content":"_cup() {}"}}]}',
+        'data: {"choices":[{"delta":{"content":"(10);"}}]}',
         "",
         "data: [DONE]",
         ""
@@ -120,7 +120,11 @@ test("generation requests streaming output and fills the editor", async ({ page 
   await page.getByRole("button", { name: /^Generate$/i }).click();
   await requestPromise;
 
-  await expect(page.locator(".codeEditor").first()).toHaveValue(/streamed_cup/);
+  await expect(page.locator(".codeEditor").first()).toHaveValue(/cube\(10\);/);
+  await expect(page.locator(".viewTile img")).toHaveCount(3, { timeout: 30000 });
+  await expect(page.locator(".resultPanel").getByText("Draft precision was used for fast review.")).toBeVisible({
+    timeout: 30000
+  });
   expect(streamRequested).toBe(true);
 });
 

@@ -31,7 +31,8 @@ test.describe("browser locale", () => {
       await page.goto("/");
 
       await expect(page.getByText("Text to code to model to visual review.")).toBeVisible();
-      await expect(page.getByText("Requirement")).toBeVisible();
+      await expect(page.getByRole("heading", { name: "Agent Run" })).toBeVisible();
+      await expect(page.getByText("Tell the agent what to build")).toBeVisible();
       await expect(page.getByText("Vision Model")).toBeVisible();
       await expect(page.getByRole("button", { name: /^Generate$/ })).toBeVisible();
       await expect(page.getByText("Generate, compile, or review to see prompts here.")).toBeVisible();
@@ -47,7 +48,8 @@ test.describe("browser locale", () => {
       await page.goto("/");
 
       await expect(page.getByText("文本生成代码，代码生成模型，再用视觉评审迭代。")).toBeVisible();
-      await expect(page.getByText("需求")).toBeVisible();
+      await expect(page.getByRole("heading", { name: "Agent 运行" })).toBeVisible();
+      await expect(page.getByText("告诉 Agent 要做什么")).toBeVisible();
       await expect(page.getByText("图像识别模型")).toBeVisible();
       await expect(page.getByRole("button", { name: /^生成$/ })).toBeVisible();
       await expect(page.getByText("生成、编译或评审后会在这里显示提示词。")).toBeVisible();
