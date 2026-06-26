@@ -44,8 +44,8 @@ document.
 The first screen is the working app, not a landing page. It is organized into
 three columns:
 
-- Left control panel: new model action, local model history directly beneath it,
-  compact model keys, model selection, and project import/export.
+- Left control panel: basic settings and project import/export first, then the
+  new model action and local model list.
 - Center agent panel: run timeline, requirement composer, workflow actions, and
   advanced OpenSCAD code editing.
 - Right result panel: large front/top/right views and asset downloads.
@@ -82,13 +82,14 @@ three columns:
 - The primary composer action follows project state: generate before rendering,
   review after rendering, and iterate again after review.
 - Token estimates and duplicate ready status badges are hidden from the normal
-  workbench surface to keep more room for model history and the three views.
+  workbench surface to keep more room for the model list and the three views.
 
 Workbench acceptance criteria:
 
-- Left panel order is stable on desktop: new model button, local model list for
-  navigation, basic settings, then project import/export. The local model list
-  scrolls internally when it grows and is distinct from run history.
+- Left panel order is stable on desktop and in narrower stacked layouts: basic
+  settings, project import/export, new model button, then the local model list
+  for navigation. The local model list scrolls internally when it grows and is
+  distinct from run history.
 - Token estimates are removed from the normal workbench surface. Busy progress,
   pending revision warnings, and errors remain visible through the agent stage
   strip and center agent stream.
@@ -120,11 +121,11 @@ Workbench acceptance criteria:
 - Stage strip and action states use text labels plus visual treatment, not color
   alone, and preserve keyboard focus order from left panel to agent panel to
   result panel.
-- Screenshot and E2E coverage should assert the stage strip, left-panel ordering,
-  hidden token/duplicate ready UI, right-panel ownership, enlarged views, and
-  primary action transitions across generate, render, review, pending-revision,
-  rerender-failure, and iterate states, including non-color state labels and
-  keyboard focus order.
+- Screenshot and E2E coverage should assert the stage strip, left-panel ordering
+  on desktop and narrower stacked layouts, hidden token/duplicate ready UI,
+  right-panel ownership, enlarged views, and primary action transitions across
+  generate, render, review, pending-revision, rerender-failure, and iterate
+  states, including non-color state labels and keyboard focus order.
 
 ## Feature Inventory
 
@@ -268,7 +269,8 @@ The app should preserve these guarantees:
 - Review requests include rendered images.
 - Review does not trigger text generation.
 - New iterations clear stale review state.
-- Screenshot tests protect the desktop workbench layout.
+- Screenshot and E2E tests protect the desktop workbench layout and the
+  left-panel order in narrower stacked layouts.
 
 ## Local Development
 
@@ -318,7 +320,8 @@ The current test suite covers:
 - Review-driven iteration without automatic LLM calls during review.
 - Revision accept/reject behavior.
 - Invalid OpenSCAD error handling.
-- Desktop workbench screenshot coverage.
+- Desktop workbench screenshot coverage and narrow stacked left-panel order
+  coverage.
 - Model gateway behavior.
 
 ## Current Non-Goals

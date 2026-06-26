@@ -570,32 +570,6 @@ export default function App() {
 
       <section className="workspace">
         <aside className="panel controlPanel">
-          <button
-            className="newModelButton"
-            title={tr("newModelHint")}
-            onClick={handleNewModel}
-          >
-            <RefreshCw size={16} />
-            {tr("newModel")}
-          </button>
-
-          <section className="modelHistory">
-            <span>{tr("models")}</span>
-            <div className="modelList">
-              {projectList.map((item) => (
-                <button
-                  aria-pressed={item.id === project.id}
-                  key={item.id}
-                  onClick={() => handleSelectProject(item.id)}
-                  type="button"
-                >
-                  <strong>{projectTitle(item, tr("untitledModel"))}</strong>
-                  <small>{new Date(item.updatedAt).toLocaleTimeString()}</small>
-                </button>
-              ))}
-            </div>
-          </section>
-
           <details className="sidebarSettings" open>
             <summary>
               <span>{tr("basicSettings")}</span>
@@ -669,6 +643,32 @@ export default function App() {
                 <Download size={15} />
                 <span>{tr("exportProject")}</span>
               </button>
+            </div>
+          </section>
+
+          <button
+            className="newModelButton"
+            title={tr("newModelHint")}
+            onClick={handleNewModel}
+          >
+            <RefreshCw size={16} />
+            {tr("newModel")}
+          </button>
+
+          <section className="modelHistory">
+            <span>{tr("models")}</span>
+            <div className="modelList">
+              {projectList.map((item) => (
+                <button
+                  aria-pressed={item.id === project.id}
+                  key={item.id}
+                  onClick={() => handleSelectProject(item.id)}
+                  type="button"
+                >
+                  <strong>{projectTitle(item, tr("untitledModel"))}</strong>
+                  <small>{new Date(item.updatedAt).toLocaleTimeString()}</small>
+                </button>
+              ))}
             </div>
           </section>
         </aside>

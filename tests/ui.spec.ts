@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 
 const project = {
   id: "project-ui-test",
@@ -58,6 +58,126 @@ const project = {
   updatedAt: "2026-06-26T00:00:00.000Z"
 };
 
+async function expectLeftPanelOrder(page: Page) {
+  const classOrder = await page.locator(".controlPanel").evaluate((panel) =>
+    Array.from(panel.children)
+      .filter((child) =>
+        child.classList.contains("sidebarSettings") ||
+        child.classList.contains("projectTools") ||
+        child.classList.contains("newModelButton") ||
+        child.classList.contains("modelHistory")
+      )
+      .map((child) => {
+        if (child.classList.contains("sidebarSettings")) {
+          return "settings";
+        }
+        if (child.classList.contains("projectTools")) {
+          return "projectFiles";
+        }
+        if (child.classList.contains("newModelButton")) {
+          return "newModel";
+        }
+        return "models";
+      })
+  );
+
+  expect(classOrder).toEqual(["settings", "projectFiles", "newModel", "models"]);
+  await expect(page.locator(".sidebarSettings summary")).toContainText("Basic settings");
+  await expect(page.locator(".projectTools")).toContainText("Project files");
+  await expect(
+    page.locator(".controlPanel").getByRole("button", { name: "New model" })
+  ).toBeVisible();
+  await expect(page.locator(".modelHistory")).toContainText("Models");
+}
+
+async function expectLeftPanelVisualStack(page: Page) {
+  const settingsBox = await page.locator(".sidebarSettings").boundingBox();
+  const projectToolsBox = await page.locator(".projectTools").boundingBox();
+  const newModelBox = await page
+    .locator(".controlPanel")
+    .getByRole("button", { name: "New model" })
+    .boundingBox();
+  const historyBox = await page.locator(".modelHistory").boundingBox();
+
+  expect(settingsBox).not.toBeNull();
+  expect(projectToolsBox).not.toBeNull();
+  expect(newModelBox).not.toBeNull();
+  expect(historyBox).not.toBeNull();
+  expect(projectToolsBox!.y).toBeGreaterThanOrEqual(
+    settingsBox!.y + settingsBox!.height - 1
+  );
+  expect(newModelBox!.y).toBeGreaterThanOrEqual(
+    projectToolsBox!.y + projectToolsBox!.height - 1
+  );
+  expect(historyBox!.y).toBeGreaterThanOrEqual(
+    newModelBox!.y + newModelBox!.height - 1
+  );
+}
+
+async function addStoredProjects(page: Page, count: number) {
+  const projects = Array.from({ length: count }, (_, index) => ({
+    ...project,
+    id: `project-history-${index}`,
+    requirement: `模型 ${index + 1}`,
+    updatedAt: new Date(Date.UTC(2026, 5, 26, 0, index)).toISOString()
+  }));
+
+  await page.addInitScript((storedProjects) => {
+    localStorage.setItem("ai-openscad.projects", JSON.stringify(storedProjects));
+    localStorage.setItem("ai-openscad.active-project-id", storedProjects[0].id);
+  }, projects);
+}
+
+async function expectStackedFocusOrder(page: Page) {
+  const focusedSections: string[] = [];
+
+  await page.keyboard.press("Tab");
+  for (let index = 0; index < 50; index += 1) {
+    focusedSections.push(
+      await page.evaluate(() => {
+        const active = document.activeElement;
+        if (!active) {
+          return "";
+        }
+        if (active.closest(".sidebarSettings")) {
+          return "settings";
+        }
+        if (active.closest(".projectTools")) {
+          return "projectFiles";
+        }
+        if (active.closest(".newModelButton")) {
+          return "newModel";
+        }
+        if (active.closest(".modelHistory")) {
+          return "models";
+        }
+        if (active.closest(".codePanel")) {
+          return "codePanel";
+        }
+        return "";
+      })
+    );
+    if (focusedSections.includes("codePanel")) {
+      break;
+    }
+    await page.keyboard.press("Tab");
+  }
+
+  expect(focusedSections.indexOf("settings")).toBeGreaterThanOrEqual(0);
+  expect(focusedSections.indexOf("projectFiles")).toBeGreaterThan(
+    focusedSections.indexOf("settings")
+  );
+  expect(focusedSections.indexOf("newModel")).toBeGreaterThan(
+    focusedSections.indexOf("projectFiles")
+  );
+  expect(focusedSections.indexOf("models")).toBeGreaterThan(
+    focusedSections.indexOf("newModel")
+  );
+  expect(focusedSections.indexOf("codePanel")).toBeGreaterThan(
+    focusedSections.indexOf("models")
+  );
+}
+
 test("desktop workbench keeps controls visible and matches screenshot", async ({
   page
 }) => {
@@ -99,20 +219,8 @@ test("desktop workbench keeps controls visible and matches screenshot", async ({
   await expect(page.locator(".resultPanel").getByText("AI Prompt Trace")).toHaveCount(0);
   await expect(page.locator(".sidebarSettings")).toHaveAttribute("open", "");
   await expect(page.locator(".controlPanel .modelHistory")).toBeVisible();
-  const newButtonBoxBefore = await page
-    .locator(".controlPanel")
-    .getByRole("button", { name: "New model" })
-    .boundingBox();
-  const historyBoxBefore = await page.locator(".controlPanel .modelHistory").boundingBox();
-  const settingsBoxBefore = await page.locator(".sidebarSettings").boundingBox();
-  const projectToolsBoxBefore = await page.locator(".projectTools").boundingBox();
-  expect(newButtonBoxBefore).not.toBeNull();
-  expect(settingsBoxBefore).not.toBeNull();
-  expect(historyBoxBefore).not.toBeNull();
-  expect(projectToolsBoxBefore).not.toBeNull();
-  expect(historyBoxBefore!.y).toBeGreaterThan(newButtonBoxBefore!.y);
-  expect(settingsBoxBefore!.y).toBeGreaterThan(historyBoxBefore!.y);
-  expect(projectToolsBoxBefore!.y).toBeGreaterThan(settingsBoxBefore!.y);
+  await expectLeftPanelOrder(page);
+  await expectLeftPanelVisualStack(page);
   await page.locator(".sidebarSettings summary").click();
   await expect(page.locator(".controlPanel").getByText("LLM API Key")).toBeHidden();
   await page.locator(".sidebarSettings summary").click();
@@ -214,42 +322,71 @@ test("desktop workbench keeps controls visible and matches screenshot", async ({
 
   await page.locator(".controlPanel").getByRole("button", { name: "New model" }).click();
   await expect(page.locator(".modelHistory button")).toHaveCount(2);
-  const settingsBoxAfter = await page.locator(".sidebarSettings").boundingBox();
-  const historyBoxAfter = await page.locator(".controlPanel .modelHistory").boundingBox();
-  expect(historyBoxAfter!.y).toBeLessThan(settingsBoxAfter!.y);
+  await expectLeftPanelOrder(page);
+  await expectLeftPanelVisualStack(page);
   await expect(page.locator(".agentInput")).toHaveValue("");
   await page.locator(".modelHistory button", { hasText: "生成一个30ML的杯子模型" }).click();
   await expect(page.locator(".agentInput")).toHaveValue("生成一个30ML的杯子模型");
 });
 
-test("model history scrolls internally without displacing settings", async ({ page }) => {
-  const projects = Array.from({ length: 14 }, (_, index) => ({
-    ...project,
-    id: `project-history-${index}`,
-    requirement: `模型 ${index + 1}`,
-    updatedAt: new Date(Date.UTC(2026, 5, 26, 0, index)).toISOString()
-  }));
-
+test("model history scrolls internally below setup controls", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
-  await page.addInitScript((storedProjects) => {
-    localStorage.setItem("ai-openscad.projects", JSON.stringify(storedProjects));
-    localStorage.setItem("ai-openscad.active-project-id", storedProjects[0].id);
-  }, projects);
+  await addStoredProjects(page, 14);
 
   await page.goto("/");
 
-  const historyBox = await page.locator(".modelHistory").boundingBox();
   const listMetrics = await page.locator(".modelList").evaluate((element) => ({
     clientHeight: element.clientHeight,
     scrollHeight: element.scrollHeight
   }));
-  const settingsBox = await page.locator(".sidebarSettings").boundingBox();
-  const projectToolsBox = await page.locator(".projectTools").boundingBox();
 
-  expect(historyBox).not.toBeNull();
-  expect(settingsBox).not.toBeNull();
-  expect(projectToolsBox).not.toBeNull();
+  await expectLeftPanelOrder(page);
+  await expectLeftPanelVisualStack(page);
   expect(listMetrics.scrollHeight).toBeGreaterThan(listMetrics.clientHeight);
-  expect(historyBox!.y).toBeLessThan(settingsBox!.y);
-  expect(projectToolsBox!.y).toBeGreaterThan(settingsBox!.y);
+});
+
+test("stacked layout keeps setup controls before model actions", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 900 });
+  await addStoredProjects(page, 14);
+
+  await page.goto("/");
+
+  const listMetrics = await page.locator(".modelList").evaluate((element) => ({
+    clientHeight: element.clientHeight,
+    scrollHeight: element.scrollHeight
+  }));
+  const pageWidth = await page.evaluate(() => ({
+    clientWidth: document.documentElement.clientWidth,
+    scrollWidth: document.documentElement.scrollWidth
+  }));
+
+  await expectLeftPanelOrder(page);
+  await expectLeftPanelVisualStack(page);
+  await expectStackedFocusOrder(page);
+  expect(listMetrics.scrollHeight).toBeGreaterThan(listMetrics.clientHeight);
+  expect(pageWidth.scrollWidth).toBeLessThanOrEqual(pageWidth.clientWidth);
+
+  const helpButton = page.getByRole("button", { name: "No key?" }).first();
+  await helpButton.hover();
+  const inviteTooltip = page.locator(".keyHelpTooltip").filter({ hasText: "QRU857" }).first();
+  await expect(inviteTooltip).toBeVisible();
+  const tooltipBox = await inviteTooltip.boundingBox();
+  const viewport = page.viewportSize();
+  const pageWidthWithTooltip = await page.evaluate(() => ({
+    clientWidth: document.documentElement.clientWidth,
+    scrollWidth: document.documentElement.scrollWidth
+  }));
+  expect(tooltipBox).not.toBeNull();
+  expect(viewport).not.toBeNull();
+  expect(tooltipBox!.x).toBeGreaterThanOrEqual(0);
+  expect(tooltipBox!.x + tooltipBox!.width).toBeLessThanOrEqual(viewport!.width);
+  expect(pageWidthWithTooltip.scrollWidth).toBeLessThanOrEqual(
+    pageWidthWithTooltip.clientWidth
+  );
+  await page.mouse.move(0, 0);
+
+  await expect(page.locator(".workspace")).toHaveScreenshot("stacked-workbench.png", {
+    animations: "disabled",
+    maxDiffPixelRatio: 0.08
+  });
 });

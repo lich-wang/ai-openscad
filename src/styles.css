@@ -153,6 +153,7 @@ button:disabled {
   border: 1px solid #d7dee8;
   border-radius: 8px;
   box-shadow: 0 12px 30px rgba(16, 24, 40, 0.06);
+  min-width: 0;
 }
 
 .controlPanel,
@@ -1017,5 +1018,10 @@ textarea {
 
   .codeEditor {
     min-height: 300px;
+  }
+
+  .controlPanel .keyHelpTooltip {
+    left: auto;
+    right: 0;
   }
 }
