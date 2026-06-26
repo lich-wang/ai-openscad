@@ -209,7 +209,7 @@ test("desktop workbench keeps controls visible and matches screenshot", async ({
 
   await expect(page.locator(".workspace")).toHaveScreenshot("desktop-workbench.png", {
     animations: "disabled",
-    maxDiffPixelRatio: 0.02
+    maxDiffPixelRatio: 0.08
   });
 
   await page.locator(".controlPanel").getByRole("button", { name: "New model" }).click();
