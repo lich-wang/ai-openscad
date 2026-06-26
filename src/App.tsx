@@ -53,7 +53,6 @@ export default function App() {
   const [project, setProject] = useState<ProjectState>(() => loadProject());
   const [llmApiKey, setLlmApiKey] = useState(() => loadLlmApiKey());
   const [visionApiKey, setVisionApiKey] = useState(() => loadVisionApiKey());
-  const [iterationNotes, setIterationNotes] = useState("");
   const [busy, setBusy] = useState<BusyState>("idle");
   const [error, setError] = useState("");
 
@@ -91,11 +90,17 @@ export default function App() {
       Boolean
     ).length;
     return estimateTokenUsage({
-      llmText: `${project.requirement}\n${project.currentCode}\n${project.review?.summary ?? ""}\n${iterationNotes}`,
+      llmText: `${project.requirement}\n${project.currentCode}\n${project.proposedCode}\n${project.review?.summary ?? ""}`,
       visionText: `${project.requirement}\n${project.currentCode}`,
       imageCount
     });
-  }, [iterationNotes, project.currentCode, project.requirement, project.review, project.views]);
+  }, [
+    project.currentCode,
+    project.proposedCode,
+    project.requirement,
+    project.review,
+    project.views
+  ]);
 
   async function runSafely(action: BusyState, task: () => Promise<void>) {
     setBusy(action);
@@ -325,7 +330,7 @@ export default function App() {
         requirement: project.requirement,
         code: project.currentCode,
         review: project.review,
-        userNotes: iterationNotes,
+        userNotes: project.requirement,
         precision: "draft",
         onToken: (streamedCode) => {
           setProject((current) => ({
@@ -425,7 +430,6 @@ export default function App() {
       return;
     }
     setProject(createEmptyProject());
-    setIterationNotes("");
     setError("");
   }
 
@@ -573,16 +577,10 @@ export default function App() {
               <span>{tr("draftPrecision")}</span>
             </div>
             <textarea
-              className="requirementInput"
+              className="agentInput requirementInput"
               value={project.requirement}
               onChange={(event) => updateProject({ requirement: event.target.value })}
               placeholder={tr("requirementPlaceholder")}
-            />
-            <textarea
-              className="iterationInput"
-              value={iterationNotes}
-              onChange={(event) => setIterationNotes(event.target.value)}
-              placeholder={tr("iterationPlaceholder")}
             />
             <div className="buttonGrid agentActions">
               {!hasRenderedViews ? (
@@ -818,6 +816,7 @@ function AgentRunPanel(props: {
   project: ProjectState;
 }) {
   const latestTrace = props.project.promptTrace.slice(-4).reverse();
+  const visibleCode = props.project.proposedCode || props.project.currentCode;
   return (
     <section className="agentRun">
       <div className="panelHeader">
@@ -847,10 +846,10 @@ function AgentRunPanel(props: {
           </p>
         </article>
 
-        {props.project.currentCode ? (
+        {visibleCode ? (
           <article className="agentEvent">
             <h3>{t(props.locale, "generatedOutput")}</h3>
-            <p>{t(props.locale, "codeDetails")}</p>
+            <pre className="agentCodePreview">{visibleCode}</pre>
           </article>
         ) : null}
 

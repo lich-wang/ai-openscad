@@ -130,6 +130,7 @@ test("generation streams code and automatically renders draft views", async ({ p
   await requestPromise;
 
   await expect(page.locator(".codeEditor").first()).toHaveValue(/cube\(10\);/);
+  await expect(page.locator(".agentCodePreview")).toContainText("cube(10);");
   await expect(page.locator(".viewTile img")).toHaveCount(3, { timeout: 30000 });
   await expect(page.locator(".resultPanel").getByText("Draft precision was used for fast review.")).toBeVisible({
     timeout: 30000
@@ -219,11 +220,12 @@ test("iterate again combines review feedback and user notes", async ({ page }) =
   });
 
   await page.goto("/");
-  await page.locator(".iterationInput").fill("把把手再大一点");
+  await page.locator(".agentInput").fill("生成一个30ML的杯子模型，把把手再大一点");
   await page.getByRole("button", { name: /Iterate Again/i }).click();
 
   await expect(page.getByRole("heading", { name: "Proposed Revision" })).toBeVisible();
   await expect(page.locator(".codeEditor.proposed")).toHaveValue(/revised/);
+  await expect(page.locator(".agentCodePreview")).toContainText("revised");
   expect(prompt).toContain("杯口太厚");
   expect(prompt).toContain("杯壁需要更薄");
   expect(prompt).toContain("把把手再大一点");

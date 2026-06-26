@@ -363,11 +363,7 @@ textarea {
 }
 
 .requirementInput {
-  min-height: 112px;
-}
-
-.iterationInput {
-  min-height: 58px;
+  min-height: 140px;
 }
 
 .tokenPanel {
@@ -553,6 +549,20 @@ textarea {
 
 .agentEvent ul {
   padding-left: 18px;
+}
+
+.agentCodePreview {
+  background: #0f172a;
+  border-radius: 6px;
+  color: #d1fae5;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+  line-height: 1.45;
+  margin: 0;
+  max-height: 190px;
+  overflow: auto;
+  padding: 10px;
+  white-space: pre-wrap;
 }
 
 .userEvent {

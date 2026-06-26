@@ -72,6 +72,7 @@ test("desktop workbench keeps controls visible and matches screenshot", async ({
   await expect(page.locator(".topbarActions")).toHaveCount(0);
   await expect(page.locator(".projectTools").getByText("Project files")).toBeVisible();
   await expect(page.locator(".agentComposer").getByText("Draft preview uses low precision")).toBeVisible();
+  await expect(page.locator(".agentComposer textarea")).toHaveCount(1);
   await expect(page.getByText("User Request")).toBeVisible();
   await expect(page.getByRole("button", { name: /Final Export/i })).toBeVisible();
   await expect(page.getByText("LLM tokens")).toBeVisible();
@@ -124,5 +125,5 @@ test("desktop workbench keeps controls visible and matches screenshot", async ({
 
   page.once("dialog", (dialog) => dialog.accept());
   await page.locator(".controlPanel").getByRole("button", { name: "New model" }).click();
-  await expect(page.locator(".requirementInput")).toHaveValue("");
+  await expect(page.locator(".agentInput")).toHaveValue("");
 });
