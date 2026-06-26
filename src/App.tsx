@@ -17,7 +17,11 @@ import {
   proposeRevision,
   reviewViews
 } from "./lib/apiClient";
-import { captureOrthographicViews, downloadText } from "./lib/capture";
+import {
+  captureOrthographicViews,
+  downloadText,
+  type ViewCaptureStage
+} from "./lib/capture";
 import { getBrowserLocale, t, type Locale, type MessageKey } from "./lib/i18n";
 import {
   CODE_MODEL_PRESETS,
@@ -60,6 +64,7 @@ export default function App() {
   const [visionApiKey, setVisionApiKey] = useState(() => loadVisionApiKey());
   const [busy, setBusy] = useState<BusyState>("idle");
   const [error, setError] = useState("");
+  const [renderStatus, setRenderStatus] = useState("");
 
   const locale = getBrowserLocale();
   const tr = (key: MessageKey) => t(locale, key);
@@ -68,7 +73,8 @@ export default function App() {
   const hasRenderedViews = Boolean(project.views.front && project.views.top && project.views.right);
   const hasPendingRevision = Boolean(project.proposedCode.trim());
   const compilerOutputForDisplay =
-    hasPendingRevision && busy === "idle" ? tr("revisionReady") : project.compilerOutput;
+    renderStatus ||
+    (hasPendingRevision && busy === "idle" ? tr("revisionReady") : project.compilerOutput);
   const hasModelWork = Boolean(
     project.currentCode.trim() ||
       project.proposedCode.trim() ||
@@ -116,6 +122,7 @@ export default function App() {
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
     } finally {
+      setRenderStatus("");
       setBusy("idle");
     }
   }
@@ -144,6 +151,7 @@ export default function App() {
         ...current,
         currentCode: "",
         proposedCode: "",
+        review: null,
         compilerOutput: tr("streamingCode")
       }));
       const { code, trace } = await generateOpenScad({
@@ -163,6 +171,7 @@ export default function App() {
         ...current,
         currentCode: code,
         proposedCode: "",
+        review: null,
         compilerOutput: tr("renderingDraft"),
         promptTrace: [...current.promptTrace, trace],
         updatedAt: new Date().toISOString(),
@@ -178,6 +187,7 @@ export default function App() {
           }
         ]
       }));
+      setBusy("compiling");
       const rendered = await compileDraftCode(code);
       if (!rendered.ok || !rendered.views) {
         setProject((current) => ({
@@ -192,6 +202,7 @@ export default function App() {
         ...current,
         currentCode: code,
         proposedCode: "",
+        review: null,
         views: rendered.views,
         compilerOutput: `${rendered.diagnostics}\n${tr("compiledDraft")}`,
         promptTrace: [...current.promptTrace, rendered.trace],
@@ -228,6 +239,8 @@ export default function App() {
       }
       setProject((current) => ({
         ...current,
+        review: null,
+        proposedCode: "",
         views: rendered.views,
         compilerOutput: `${rendered.diagnostics}\n${tr("compiledDraft")}`,
         promptTrace: [...current.promptTrace, rendered.trace],
@@ -248,6 +261,8 @@ export default function App() {
   }
 
   async function compileDraftCode(code: string) {
+    await updateRenderStatus("renderPreparing");
+    await updateRenderStatus("renderCompiling");
     const draftCode = normalizeOpenScadPrecision(code, "draft");
     const result = await adapter.compile(draftCode);
     const trace = createPromptTraceEntry({
@@ -269,8 +284,21 @@ export default function App() {
       ok: true,
       diagnostics: result.diagnostics,
       trace,
-      views: await captureOrthographicViews(result.stl)
+      views: await captureOrthographicViews(result.stl, {
+        onProgress: (stage) => updateRenderStatus(renderStageMessageKey(stage))
+      })
     };
+  }
+
+  async function updateRenderStatus(key: MessageKey) {
+    const message = tr(key);
+    setRenderStatus(message);
+    setProject((current) => ({
+      ...current,
+      compilerOutput: message,
+      updatedAt: new Date().toISOString()
+    }));
+    await waitForPaint();
   }
 
   async function handleReview() {
@@ -363,6 +391,7 @@ export default function App() {
         throw new Error(tr("missingCode"));
       }
       const finalCode = normalizeOpenScadPrecision(project.currentCode, "final");
+      await updateRenderStatus("renderCompiling");
       const result = await adapter.compile(finalCode);
       const trace = createPromptTraceEntry({
         phase: "final-export",
@@ -380,7 +409,9 @@ export default function App() {
         }));
         throw new Error(result.diagnostics);
       }
-      const views = await captureOrthographicViews(result.stl);
+      const views = await captureOrthographicViews(result.stl, {
+        onProgress: (stage) => updateRenderStatus(renderStageMessageKey(stage))
+      });
       downloadText("ai-openscad-final.scad", finalCode, "text/plain;charset=utf-8");
       setProject((current) => ({
         ...current,
@@ -413,6 +444,7 @@ export default function App() {
       setProject((current) => ({
         ...current,
         views: rendered.views,
+        review: null,
         compilerOutput: `${rendered.diagnostics}\n${tr("compiledDraft")}`,
         promptTrace: [...current.promptTrace, rendered.trace],
         updatedAt: new Date().toISOString(),
@@ -1031,4 +1063,25 @@ function ViewImage(props: { label: string; src: string }) {
       <figcaption>{props.label}</figcaption>
     </figure>
   );
+}
+
+function renderStageMessageKey(stage: ViewCaptureStage): MessageKey {
+  const keys: Record<ViewCaptureStage, MessageKey> = {
+    front: "renderFront",
+    top: "renderTop",
+    right: "renderRight"
+  };
+  return keys[stage];
+}
+
+function waitForPaint(): Promise<void> {
+  return new Promise((resolve) => {
+    if (typeof requestAnimationFrame === "function") {
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => setTimeout(resolve, 120));
+      });
+      return;
+    }
+    setTimeout(resolve, 120);
+  });
 }

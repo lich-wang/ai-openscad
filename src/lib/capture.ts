@@ -7,7 +7,12 @@ export interface ViewSet {
   right: string;
 }
 
-export async function captureOrthographicViews(stl: string): Promise<ViewSet> {
+export type ViewCaptureStage = "front" | "top" | "right";
+
+export async function captureOrthographicViews(
+  stl: string,
+  options: { onProgress?: (stage: ViewCaptureStage) => Promise<void> | void } = {}
+): Promise<ViewSet> {
   const loader = new STLLoader();
   const bytes = new TextEncoder().encode(stl);
   const geometry = loader.parse(bytes.buffer);
@@ -59,11 +64,14 @@ export async function captureOrthographicViews(stl: string): Promise<ViewSet> {
     return renderer.domElement.toDataURL("image/png");
   };
 
-  const views = {
-    front: render(new THREE.Vector3(0, -1, 0)),
-    top: render(new THREE.Vector3(0, 0, 1)),
-    right: render(new THREE.Vector3(1, 0, 0))
-  };
+  await options.onProgress?.("front");
+  const front = render(new THREE.Vector3(0, -1, 0));
+  await options.onProgress?.("top");
+  const top = render(new THREE.Vector3(0, 0, 1));
+  await options.onProgress?.("right");
+  const right = render(new THREE.Vector3(1, 0, 0));
+
+  const views = { front, top, right };
 
   renderer.dispose();
   geometry.dispose();

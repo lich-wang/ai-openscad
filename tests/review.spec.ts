@@ -131,6 +131,9 @@ test("generation streams code and automatically renders draft views", async ({ p
 
   await expect(page.locator(".codeEditor").first()).toHaveValue(/cube\(10\);/);
   await expect(page.locator(".agentCodePreview")).toContainText("cube(10);");
+  await expect(page.locator(".resultPanel").getByText("Preparing draft render...")).toBeVisible({
+    timeout: 10000
+  });
   await expect(page.locator(".viewTile img")).toHaveCount(3, { timeout: 30000 });
   await expect(page.locator(".resultPanel").getByText("Draft precision was used for fast review.")).toBeVisible({
     timeout: 30000
@@ -229,4 +232,34 @@ test("iterate again combines review feedback and user notes", async ({ page }) =
   expect(prompt).toContain("杯口太厚");
   expect(prompt).toContain("杯壁需要更薄");
   expect(prompt).toContain("把把手再大一点");
+});
+
+test("accepting a revision requires a fresh visual review before another iteration", async ({
+  page
+}) => {
+  await page.addInitScript((storedProject) => {
+    localStorage.setItem("ai-openscad.llm-api-key", "sk-llm");
+    localStorage.setItem("ai-openscad.vision-api-key", "sk-vision");
+    localStorage.setItem(
+      "ai-openscad.project",
+      JSON.stringify({
+        ...storedProject,
+        proposedCode: "cube(10);",
+        review: {
+          summary: "旧评审：杯口太厚",
+          issues: ["旧问题"],
+          confidence: 0.74
+        },
+        promptTrace: []
+      })
+    );
+  }, project);
+
+  await page.goto("/");
+  await page.getByRole("button", { name: /Accept \+ render/i }).click();
+
+  await expect(page.locator(".viewTile img")).toHaveCount(3, { timeout: 30000 });
+  await expect(page.getByRole("button", { name: /^Review$/i })).toBeVisible();
+  await expect(page.getByRole("button", { name: /Iterate Again/i })).toHaveCount(0);
+  await expect(page.locator(".resultPanel").getByText("No review yet.")).toBeVisible();
 });
