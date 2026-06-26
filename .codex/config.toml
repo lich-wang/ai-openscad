@@ -1,0 +1,51 @@
+# Project-scoped Codex configuration.
+#
+# Codex loads this file only when the project is trusted. Relative paths in this
+# file resolve from the `.codex/` directory.
+
+developer_instructions = """
+Before starting any repository work, read `.codex/AGENT.md` and follow it.
+Classify the user request as project work, Codex maintenance, or a general question.
+For project work, use the documented BA, UX, and SA subagent review gates.
+Required gate reviews authorize subagent use; do not wait for the user to
+explicitly request subagents again before running those reviews.
+"""
+
+[agents]
+max_threads = 6
+max_depth = 1
+
+[[hooks.SessionStart]]
+matcher = "startup|resume|clear|compact"
+
+[[hooks.SessionStart.hooks]]
+type = "command"
+command = '/usr/bin/python3 "$(git rev-parse --show-toplevel)/.codex/hooks/session_start_read_agent.py"'
+timeout = 10
+statusMessage = "Reading .codex/AGENT.md"
+
+[[hooks.PreToolUse]]
+matcher = "^apply_patch$|^Edit$|^Write$|^Bash$"
+
+[[hooks.PreToolUse.hooks]]
+type = "command"
+command = '/usr/bin/python3 "$(git rev-parse --show-toplevel)/.codex/hooks/gate_guard.py" pre-tool'
+timeout = 10
+statusMessage = "Checking Codex gate"
+
+[[hooks.PostToolUse]]
+matcher = "^apply_patch$|^Edit$|^Write$|^Bash$"
+
+[[hooks.PostToolUse.hooks]]
+type = "command"
+command = '/usr/bin/python3 "$(git rev-parse --show-toplevel)/.codex/hooks/gate_guard.py" post-tool'
+timeout = 10
+statusMessage = "Checking gate file scope"
+
+[[hooks.Stop]]
+
+[[hooks.Stop.hooks]]
+type = "command"
+command = '/usr/bin/python3 "$(git rev-parse --show-toplevel)/.codex/hooks/gate_guard.py" stop'
+timeout = 10
+statusMessage = "Checking Codex gate state"

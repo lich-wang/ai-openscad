@@ -8,3 +8,8 @@ npm-debug.log*
 *.tsbuildinfo
 test-results
 playwright-report
+.codex/runtime/
+artifacts/**/*.png
+artifacts/**/*.jpg
+artifacts/**/*.jpeg
+artifacts/**/*.webp

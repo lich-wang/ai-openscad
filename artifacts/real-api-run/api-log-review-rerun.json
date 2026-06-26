@@ -1,0 +1,12 @@
+[
+  {
+    "url": "https://e176375e.ai-openscad.pages.dev/api/vision",
+    "status": 200,
+    "contentType": "application/json"
+  },
+  {
+    "url": "https://e176375e.ai-openscad.pages.dev/api/llm",
+    "status": 200,
+    "contentType": "text/event-stream; charset=utf-8"
+  }
+]

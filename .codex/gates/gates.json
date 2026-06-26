@@ -1,0 +1,142 @@
+{
+  "version": 1,
+  "project_gate_order": [
+    "scope_classification",
+    "requirements_analysis",
+    "test_case",
+    "coding",
+    "green_test",
+    "local_e2e_release"
+  ],
+  "gates": {
+    "scope_classification": {
+      "type": "project",
+      "description": "Classify the request as project work, Codex maintenance, or a general question before project edits.",
+      "required_before": [],
+      "required_evidence": [
+        "request_classification",
+        "reason"
+      ],
+      "allowed_write_paths": [
+        ".codex/runtime/"
+      ]
+    },
+    "requirements_analysis": {
+      "type": "project",
+      "description": "Analyze requirements, update bilingual product documents, and complete BA/UX/SA document review.",
+      "required_before": [
+        "scope_classification"
+      ],
+      "required_evidence": [
+        "product_doc_en_updated",
+        "product_doc_zh_updated",
+        "ba_review",
+        "ux_review",
+        "sa_review",
+        "conflicts_resolved",
+        "second_document_review"
+      ],
+      "allowed_write_paths": [
+        "docs/PRODUCT.md",
+        "docs/PRODUCT.zh-CN.md",
+        "README.md",
+        "README.zh-CN.md",
+        ".codex/runtime/"
+      ]
+    },
+    "test_case": {
+      "type": "project",
+      "description": "Draft and review test cases, then confirm red tests fail for the expected reason.",
+      "required_before": [
+        "requirements_analysis"
+      ],
+      "required_evidence": [
+        "test_cases_written",
+        "ba_review",
+        "ux_review",
+        "sa_review",
+        "conflicts_resolved",
+        "second_test_review",
+        "red_test_command",
+        "red_test_expected_failure"
+      ],
+      "allowed_write_paths": [
+        "tests/",
+        "src/**/*.test.ts",
+        "functions/**/*.test.ts",
+        "playwright.config.ts",
+        ".codex/runtime/"
+      ]
+    },
+    "coding": {
+      "type": "project",
+      "description": "Implement code after accepted docs and red tests, then complete UX/SA code review.",
+      "required_before": [
+        "test_case"
+      ],
+      "required_evidence": [
+        "implementation_complete",
+        "ux_code_review",
+        "sa_code_review",
+        "review_conflicts_resolved"
+      ],
+      "allowed_write_paths": [
+        "src/",
+        "functions/",
+        "public/",
+        "index.html",
+        "package.json",
+        "package-lock.json",
+        "vite.config.ts",
+        "tsconfig.json",
+        "wrangler.toml",
+        ".codex/runtime/"
+      ]
+    },
+    "green_test": {
+      "type": "project",
+      "description": "Run green tests and classify any failure before changing documents, tests, or code.",
+      "required_before": [
+        "coding"
+      ],
+      "required_evidence": [
+        "green_test_command",
+        "green_test_passed"
+      ],
+      "allowed_write_paths": [
+        ".codex/runtime/"
+      ]
+    },
+    "local_e2e_release": {
+      "type": "project",
+      "description": "Run local E2E, screenshot/image verification, then prepare GitHub/GitHub Actions and Cloudflare release.",
+      "required_before": [
+        "green_test"
+      ],
+      "required_evidence": [
+        "local_e2e_command",
+        "local_e2e_passed",
+        "screenshot_or_image_verification",
+        "release_ready"
+      ],
+      "allowed_write_paths": [
+        ".github/",
+        ".codex/runtime/"
+      ]
+    },
+    "codex_maintenance": {
+      "type": "maintenance",
+      "description": "Maintain Codex project workflow, hooks, custom agents, config, or guide files.",
+      "required_before": [],
+      "required_evidence": [
+        "maintenance_summary",
+        "self_check"
+      ],
+      "allowed_write_paths": [
+        ".codex/",
+        "AGENT.md",
+        ".gitignore"
+      ]
+    }
+  }
+}
