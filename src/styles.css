@@ -184,10 +184,10 @@ label > span,
   box-shadow: 0 18px 40px rgba(16, 24, 40, 0.18);
   color: #3b2a19;
   display: grid;
-  gap: 8px;
+  gap: 10px;
   left: auto;
   opacity: 0;
-  padding: 12px;
+  padding: 14px;
   pointer-events: none;
   position: absolute;
   right: 0;
@@ -198,7 +198,7 @@ label > span,
     transform 120ms ease,
     visibility 120ms ease;
   visibility: hidden;
-  width: 260px;
+  width: 340px;
   z-index: 30;
 }
 
@@ -212,12 +212,12 @@ label > span,
 
 .keyHelpTooltip strong {
   color: #111827;
-  font-size: 13px;
+  font-size: 16px;
 }
 
 .keyHelpTooltip span {
   color: #5d4630;
-  font-size: 12px;
+  font-size: 14px;
   line-height: 1.45;
 }
 
@@ -228,7 +228,7 @@ label > span,
   border-radius: 6px;
   object-fit: cover;
   object-position: left bottom;
-  width: 118px;
+  width: 180px;
 }
 
 .inviteCodeLine {
@@ -239,7 +239,7 @@ label > span,
 
 .inviteCodeLine b {
   color: #111827;
-  font-size: 18px;
+  font-size: 26px;
   letter-spacing: 0;
 }
 
