@@ -73,6 +73,7 @@ test("desktop workbench keeps controls visible and matches screenshot", async ({
   await expect(page.getByRole("button", { name: /Final Export/i })).toBeVisible();
   await expect(page.getByText("LLM tokens")).toBeVisible();
   await expect(page.getByText("Vision tokens")).toBeVisible();
+  await expect(page.locator("select")).toHaveCount(0);
 
   await page.getByRole("button", { name: "No key?" }).first().hover();
   const inviteTooltip = page.locator(".keyHelpTooltip").filter({ hasText: "QRU857" }).first();
@@ -90,6 +91,10 @@ test("desktop workbench keeps controls visible and matches screenshot", async ({
   expect(controlBox).not.toBeNull();
   expect(codeBox).not.toBeNull();
   expect(lastActionBox).not.toBeNull();
+  const pageHeight = await page.evaluate(() =>
+    Math.max(document.documentElement.scrollHeight, document.body.scrollHeight)
+  );
+  expect(pageHeight).toBeLessThanOrEqual(900);
   expect(lastActionBox!.x + lastActionBox!.width).toBeLessThanOrEqual(
     controlBox!.x + controlBox!.width
   );

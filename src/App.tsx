@@ -19,7 +19,12 @@ import {
 } from "./lib/apiClient";
 import { captureOrthographicViews, downloadText } from "./lib/capture";
 import { getBrowserLocale, t, type Locale, type MessageKey } from "./lib/i18n";
-import { CODE_MODEL_PRESETS, getModelPreset, VISION_MODEL_PRESETS } from "./lib/models";
+import {
+  CODE_MODEL_PRESETS,
+  getModelPreset,
+  VISION_MODEL_PRESETS,
+  type ModelPreset
+} from "./lib/models";
 import { createPromptTraceEntry } from "./lib/promptTrace";
 import {
   createEmptyProject,
@@ -388,19 +393,12 @@ export default function App() {
             </div>
           </label>
 
-          <label>
-            <span>{tr("llmModel")}</span>
-            <select
-              value={project.codeModelId}
-              onChange={(event) => updateProject({ codeModelId: event.target.value })}
-            >
-              {CODE_MODEL_PRESETS.map((model) => (
-                <option key={model.id} value={model.id}>
-                  {model.label}
-                </option>
-              ))}
-            </select>
-          </label>
+          <ModelPicker
+            label={tr("llmModel")}
+            models={CODE_MODEL_PRESETS}
+            value={project.codeModelId}
+            onChange={(codeModelId) => updateProject({ codeModelId })}
+          />
 
           <label>
             <div className="fieldHeader">
@@ -418,19 +416,12 @@ export default function App() {
             </div>
           </label>
 
-          <label>
-            <span>{tr("visionModel")}</span>
-            <select
-              value={project.visionModelId}
-              onChange={(event) => updateProject({ visionModelId: event.target.value })}
-            >
-              {VISION_MODEL_PRESETS.map((model) => (
-                <option key={model.id} value={model.id}>
-                  {model.label}
-                </option>
-              ))}
-            </select>
-          </label>
+          <ModelPicker
+            label={tr("visionModel")}
+            models={VISION_MODEL_PRESETS}
+            value={project.visionModelId}
+            onChange={(visionModelId) => updateProject({ visionModelId })}
+          />
 
           <label className="growLabel">
             <span>{tr("requirement")}</span>
@@ -612,6 +603,31 @@ function ApiKeyHint(props: { locale: Locale }) {
         <span>{t(props.locale, "inviteInstruction")}</span>
       </span>
     </span>
+  );
+}
+
+function ModelPicker(props: {
+  label: string;
+  models: ModelPreset[];
+  value: string;
+  onChange: (modelId: string) => void;
+}) {
+  return (
+    <div className="fieldGroup">
+      <span>{props.label}</span>
+      <div className="segmentedControl" role="group" aria-label={props.label}>
+        {props.models.map((model) => (
+          <button
+            aria-pressed={model.id === props.value}
+            key={model.id}
+            onClick={() => props.onChange(model.id)}
+            type="button"
+          >
+            {model.label}
+          </button>
+        ))}
+      </div>
+    </div>
   );
 }
 

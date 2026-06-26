@@ -12,6 +12,12 @@
   box-sizing: border-box;
 }
 
+html,
+body,
+#root {
+  height: 100%;
+}
+
 body {
   margin: 0;
   min-width: 320px;
@@ -19,7 +25,6 @@ body {
 
 button,
 input,
-select,
 textarea {
   font: inherit;
 }
@@ -40,8 +45,11 @@ button:disabled {
 }
 
 .appShell {
-  min-height: 100vh;
-  padding: 20px;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  height: 100vh;
+  overflow: hidden;
+  padding: 12px 16px;
 }
 
 .topbar {
@@ -49,19 +57,20 @@ button:disabled {
   display: flex;
   gap: 16px;
   justify-content: space-between;
-  margin: 0 auto 16px;
+  margin: 0 auto 10px;
   max-width: 1680px;
+  width: 100%;
 }
 
 .topbar h1 {
-  font-size: 26px;
+  font-size: 25px;
   line-height: 1.1;
   margin: 0;
 }
 
 .topbar p {
   color: #667085;
-  margin: 5px 0 0;
+  margin: 3px 0 0;
 }
 
 .topbarActions,
@@ -74,8 +83,8 @@ button:disabled {
   background: #ffffff;
   border: 1px solid #cbd5e1;
   color: #344054;
-  height: 38px;
-  width: 38px;
+  height: 36px;
+  width: 36px;
 }
 
 .fileButton {
@@ -92,10 +101,13 @@ button:disabled {
 
 .workspace {
   display: grid;
-  gap: 16px;
+  gap: 14px;
   grid-template-columns: 320px minmax(520px, 1fr) 420px;
+  height: 100%;
+  min-height: 0;
   margin: 0 auto;
   max-width: 1720px;
+  width: 100%;
 }
 
 .panel {
@@ -109,25 +121,29 @@ button:disabled {
 .resultPanel {
   display: flex;
   flex-direction: column;
-  gap: 14px;
-  min-height: calc(100vh - 104px);
-  padding: 16px;
+  gap: 10px;
+  min-height: 0;
+  overflow: hidden;
+  padding: 14px;
 }
 
 .codePanel {
   display: grid;
-  gap: 12px;
-  grid-template-rows: minmax(180px, 250px) minmax(300px, 1fr) auto;
-  min-height: calc(100vh - 104px);
-  padding: 16px;
+  gap: 10px;
+  grid-template-rows: minmax(135px, 210px) minmax(0, 1fr) auto;
+  min-height: 0;
+  overflow: hidden;
+  padding: 14px;
 }
 
+.fieldGroup,
 label {
   display: grid;
-  gap: 7px;
+  gap: 6px;
 }
 
 label > span,
+.fieldGroup > span,
 .fieldHeader > span,
 .panelHeader h2,
 .outputBlock h3 {
@@ -238,7 +254,6 @@ label > span,
 }
 
 .keyInput input,
-select,
 textarea {
   background: #ffffff;
   border: 1px solid #cbd5e1;
@@ -250,18 +265,41 @@ textarea {
 
 .keyInput input {
   border: 0;
-  height: 38px;
-}
-
-select {
-  height: 40px;
-  padding: 0 10px;
+  height: 34px;
 }
 
 textarea {
   line-height: 1.45;
-  padding: 11px;
+  padding: 9px;
   resize: vertical;
+}
+
+.segmentedControl {
+  background: #f3f6fb;
+  border: 1px solid #cbd5e1;
+  border-radius: 7px;
+  display: grid;
+  gap: 4px;
+  grid-template-columns: repeat(auto-fit, minmax(0, 1fr));
+  padding: 4px;
+}
+
+.segmentedControl button {
+  background: transparent;
+  color: #475467;
+  font-size: 13px;
+  font-weight: 700;
+  min-height: 30px;
+  min-width: 0;
+  padding: 0 8px;
+  white-space: nowrap;
+}
+
+.segmentedControl button[aria-pressed="true"] {
+  background: #ffffff;
+  border: 1px solid #b8c4d4;
+  color: #111827;
+  box-shadow: 0 1px 4px rgba(16, 24, 40, 0.08);
 }
 
 .growLabel {
@@ -269,11 +307,11 @@ textarea {
 }
 
 .requirementInput {
-  min-height: 150px;
+  min-height: 112px;
 }
 
 .iterationInput {
-  min-height: 74px;
+  min-height: 58px;
 }
 
 .tokenPanel {
@@ -281,9 +319,9 @@ textarea {
   border: 1px solid #e4e9f0;
   border-radius: 6px;
   display: grid;
-  gap: 8px;
+  gap: 6px;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  padding: 10px;
+  padding: 8px;
 }
 
 .tokenPanel div {
@@ -303,7 +341,7 @@ textarea {
 
 .buttonGrid {
   display: grid;
-  gap: 8px;
+  gap: 7px;
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
@@ -311,7 +349,7 @@ textarea {
 .smallButton {
   background: #1f7a6d;
   color: #ffffff;
-  min-height: 40px;
+  min-height: 34px;
   min-width: 0;
   padding: 0 10px;
 }
@@ -343,7 +381,7 @@ textarea {
   border-radius: 6px;
   color: #15594e;
   margin: 0;
-  padding: 10px;
+  padding: 8px 10px;
 }
 
 .status.error {
@@ -384,7 +422,7 @@ textarea {
 .codeEditor {
   font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
   font-size: 13px;
-  min-height: 300px;
+  min-height: 0;
   width: 100%;
 }
 
@@ -402,16 +440,16 @@ textarea {
   border: 1px solid #e4e9f0;
   border-radius: 6px;
   display: grid;
-  gap: 10px;
+  gap: 8px;
   min-height: 0;
   overflow: hidden;
-  padding: 12px;
+  padding: 10px 12px;
 }
 
 .traceList {
   display: grid;
-  gap: 8px;
-  max-height: 190px;
+  gap: 7px;
+  max-height: 150px;
   overflow: auto;
 }
 
@@ -470,7 +508,7 @@ textarea {
 
 .viewGrid {
   display: grid;
-  gap: 10px;
+  gap: 8px;
   grid-template-columns: repeat(3, 1fr);
 }
 
@@ -501,8 +539,8 @@ textarea {
 .outputBlock {
   border-top: 1px solid #e4e9f0;
   display: grid;
-  gap: 8px;
-  padding-top: 12px;
+  gap: 7px;
+  padding-top: 10px;
 }
 
 .outputBlock p,
@@ -550,14 +588,22 @@ textarea {
 }
 
 @media (max-width: 1180px) {
+  .appShell {
+    height: auto;
+    min-height: 100vh;
+    overflow: visible;
+  }
+
   .workspace {
     grid-template-columns: 1fr;
+    height: auto;
   }
 
   .controlPanel,
   .codePanel,
   .resultPanel {
     min-height: auto;
+    overflow: visible;
   }
 }
 
