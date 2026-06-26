@@ -18,6 +18,7 @@ import {
   reviewViews
 } from "./lib/apiClient";
 import { captureOrthographicViews, downloadText } from "./lib/capture";
+import { getBrowserLocale, t, type Locale, type MessageKey } from "./lib/i18n";
 import { CODE_MODEL_PRESETS, VISION_MODEL_PRESETS } from "./lib/models";
 import { createPromptTraceEntry } from "./lib/promptTrace";
 import {
@@ -30,6 +31,7 @@ import {
   saveLlmApiKey,
   saveProject,
   saveVisionApiKey,
+  type ProjectIteration,
   type PromptTraceEntry,
   type ProjectState
 } from "./lib/project";
@@ -50,6 +52,8 @@ export default function App() {
   const [busy, setBusy] = useState<BusyState>("idle");
   const [error, setError] = useState("");
 
+  const locale = getBrowserLocale();
+  const tr = (key: MessageKey) => t(locale, key);
   const adapter = useMemo(() => new BrowserOpenScadAdapter(), []);
   const isBusy = busy !== "idle";
 
@@ -90,13 +94,13 @@ export default function App() {
 
   function requireLlmApiKey() {
     if (!llmApiKey.trim()) {
-      throw new Error("LLM API key is required.");
+      throw new Error(tr("missingLlmKey"));
     }
   }
 
   function requireVisionApiKey() {
     if (!visionApiKey.trim()) {
-      throw new Error("Vision API key is required.");
+      throw new Error(tr("missingVisionKey"));
     }
   }
 
@@ -104,13 +108,13 @@ export default function App() {
     await runSafely("generating", async () => {
       requireLlmApiKey();
       if (!project.requirement.trim()) {
-        throw new Error("Requirement is required.");
+        throw new Error(tr("missingRequirement"));
       }
       setProject((current) => ({
         ...current,
         currentCode: "",
         proposedCode: "",
-        compilerOutput: "Streaming OpenSCAD from LLM..."
+        compilerOutput: tr("streamingCode")
       }));
       const { code, trace } = await generateOpenScad({
         apiKey: llmApiKey,
@@ -121,7 +125,7 @@ export default function App() {
           setProject((current) => ({
             ...current,
             currentCode: streamedCode,
-            compilerOutput: "Streaming OpenSCAD from LLM..."
+            compilerOutput: tr("streamingCode")
           }));
         }
       });
@@ -129,7 +133,7 @@ export default function App() {
         ...current,
         currentCode: code,
         proposedCode: "",
-        compilerOutput: "Generated OpenSCAD code.",
+        compilerOutput: tr("generatedCode"),
         promptTrace: [...current.promptTrace, trace],
         updatedAt: new Date().toISOString(),
         iterations: [
@@ -150,7 +154,7 @@ export default function App() {
   async function handleCompile() {
     await runSafely("compiling", async () => {
       if (!project.currentCode.trim()) {
-        throw new Error("OpenSCAD code is required.");
+        throw new Error(tr("missingCode"));
       }
       const draftCode = normalizeOpenScadPrecision(project.currentCode, "draft");
       const result = await adapter.compile(draftCode);
@@ -158,7 +162,7 @@ export default function App() {
         phase: "compile",
         modelId: "browser-openscad",
         systemPrompt: buildRenderPrecisionInstruction("draft"),
-        userPrompt: "Compile current OpenSCAD with draft precision for fast review.",
+        userPrompt: tr("compileDraftTrace"),
         response: result.diagnostics
       });
       if (!result.ok || !result.stl) {
@@ -174,7 +178,7 @@ export default function App() {
       setProject((current) => ({
         ...current,
         views,
-        compilerOutput: `${result.diagnostics}\nDraft precision was used for fast review.`,
+        compilerOutput: `${result.diagnostics}\n${tr("compiledDraft")}`,
         promptTrace: [...current.promptTrace, trace],
         updatedAt: new Date().toISOString(),
         iterations: [
@@ -195,7 +199,7 @@ export default function App() {
   async function handleReview() {
     await runSafely("reviewing", async () => {
       if (!project.views.front || !project.views.top || !project.views.right) {
-        throw new Error("Compile the model before review.");
+        throw new Error(tr("compileBeforeReview"));
       }
       requireVisionApiKey();
       const { review, trace: reviewTrace } = await reviewViews({
@@ -209,7 +213,7 @@ export default function App() {
         ...current,
         review,
         promptTrace: [...current.promptTrace, reviewTrace],
-        compilerOutput: "Vision review complete. Streaming revision proposal..."
+        compilerOutput: tr("visionComplete")
       }));
       requireLlmApiKey();
       setProject((current) => ({
@@ -241,12 +245,12 @@ export default function App() {
     await runSafely("generating", async () => {
       requireLlmApiKey();
       if (!project.review) {
-        throw new Error("Run vision review before iterating again.");
+        throw new Error(tr("reviewBeforeIterate"));
       }
       setProject((current) => ({
         ...current,
         proposedCode: "",
-        compilerOutput: "Streaming review-driven iteration from LLM..."
+        compilerOutput: tr("streamingIteration")
       }));
       const { code: proposedCode, trace } = await proposeRevision({
         apiKey: llmApiKey,
@@ -271,15 +275,13 @@ export default function App() {
   }
 
   async function handleHighPrecisionExport() {
-    const confirmed = window.confirm(
-      "Generate high precision final images and export SCAD? This can be slower than draft review."
-    );
+    const confirmed = window.confirm(tr("finalExportConfirm"));
     if (!confirmed) {
       return;
     }
     await runSafely("exporting", async () => {
       if (!project.currentCode.trim()) {
-        throw new Error("OpenSCAD code is required.");
+        throw new Error(tr("missingCode"));
       }
       const finalCode = normalizeOpenScadPrecision(project.currentCode, "final");
       const result = await adapter.compile(finalCode);
@@ -287,7 +289,7 @@ export default function App() {
         phase: "final-export",
         modelId: "browser-openscad",
         systemPrompt: buildRenderPrecisionInstruction("final"),
-        userPrompt: "User confirmed high precision final export.",
+        userPrompt: tr("finalExportTrace"),
         response: result.diagnostics
       });
       if (!result.ok || !result.stl) {
@@ -305,7 +307,7 @@ export default function App() {
         ...current,
         currentCode: finalCode,
         views,
-        compilerOutput: `${result.diagnostics}\nHigh precision final export generated.`,
+        compilerOutput: `${result.diagnostics}\n${tr("finalExportDone")}`,
         promptTrace: [...current.promptTrace, trace],
         updatedAt: new Date().toISOString()
       }));
@@ -339,24 +341,24 @@ export default function App() {
     <main className="appShell">
       <header className="topbar">
         <div>
-          <h1>AI OpenSCAD</h1>
-          <p>Text to code to model to visual review.</p>
+          <h1>{tr("browserLanguageTitle")}</h1>
+          <p>{tr("subtitle")}</p>
         </div>
         <div className="topbarActions">
           <button
             className="iconButton"
-            title="New project"
+            title={tr("newProject")}
             onClick={() => setProject(createEmptyProject())}
           >
             <RefreshCw size={18} />
           </button>
-          <label className="iconButton fileButton" title="Import project">
+          <label className="iconButton fileButton" title={tr("importProject")}>
             <FileUp size={18} />
             <input accept="application/json" type="file" onChange={handleImport} />
           </label>
           <button
             className="iconButton"
-            title="Export project"
+            title={tr("exportProject")}
             onClick={() =>
               downloadText("ai-openscad-project.json", exportProject(project))
             }
@@ -369,7 +371,7 @@ export default function App() {
       <section className="workspace">
         <aside className="panel controlPanel">
           <label>
-            <span>LLM API Key</span>
+            <span>{tr("llmApiKey")}</span>
             <div className="keyInput">
               <KeyRound size={16} />
               <input
@@ -382,7 +384,7 @@ export default function App() {
           </label>
 
           <label>
-            <span>LLM Model</span>
+            <span>{tr("llmModel")}</span>
             <select
               value={project.codeModelId}
               onChange={(event) => updateProject({ codeModelId: event.target.value })}
@@ -396,7 +398,7 @@ export default function App() {
           </label>
 
           <label>
-            <span>Vision API Key</span>
+            <span>{tr("visionApiKey")}</span>
             <div className="keyInput">
               <KeyRound size={16} />
               <input
@@ -409,7 +411,7 @@ export default function App() {
           </label>
 
           <label>
-            <span>Vision Model</span>
+            <span>{tr("visionModel")}</span>
             <select
               value={project.visionModelId}
               onChange={(event) => updateProject({ visionModelId: event.target.value })}
@@ -423,32 +425,32 @@ export default function App() {
           </label>
 
           <label className="growLabel">
-            <span>Requirement</span>
+            <span>{tr("requirement")}</span>
             <textarea
               className="requirementInput"
               value={project.requirement}
               onChange={(event) => updateProject({ requirement: event.target.value })}
-              placeholder="A 120x80x40mm six-slot organizer with rounded corners..."
+              placeholder={tr("requirementPlaceholder")}
             />
           </label>
 
           <label>
-            <span>Iteration Notes</span>
+            <span>{tr("iterationNotes")}</span>
             <textarea
               className="iterationInput"
               value={iterationNotes}
               onChange={(event) => setIterationNotes(event.target.value)}
-              placeholder="结合评审结果再次修改，例如：杯壁再薄一点，把手更大..."
+              placeholder={tr("iterationPlaceholder")}
             />
           </label>
 
           <div className="tokenPanel">
             <div>
-              <span>LLM tokens</span>
+              <span>{tr("llmTokens")}</span>
               <strong>{tokenUsage.llmTokens}</strong>
             </div>
             <div>
-              <span>Vision tokens</span>
+              <span>{tr("visionTokens")}</span>
               <strong>{tokenUsage.visionTokens}</strong>
             </div>
           </div>
@@ -456,38 +458,38 @@ export default function App() {
           <div className="buttonGrid">
             <button disabled={isBusy} onClick={handleGenerate}>
               <Send size={16} />
-              Generate
+              {tr("generate")}
             </button>
             <button disabled={isBusy} onClick={handleCompile}>
               <Play size={16} />
-              Compile
+              {tr("compile")}
             </button>
             <button disabled={isBusy} onClick={handleReview}>
               <Eye size={16} />
-              Review
+              {tr("review")}
             </button>
             <button disabled={isBusy} onClick={handleIterateAgain}>
               <RefreshCw size={16} />
-              Iterate Again
+              {tr("iterateAgain")}
             </button>
             <button disabled={isBusy} onClick={handleHighPrecisionExport}>
               <Download size={16} />
-              Final Export
+              {tr("finalExport")}
             </button>
           </div>
 
-          <Status busy={busy} error={error} />
+          <Status busy={busy} error={error} locale={locale} />
         </aside>
 
         <section className="panel codePanel">
-          <PromptTracePanel entries={project.promptTrace} />
+          <PromptTracePanel entries={project.promptTrace} locale={locale} />
           <section className="codeBlock">
             <div className="panelHeader">
               <h2>
                 <Code2 size={18} />
-                OpenSCAD
+                {tr("openscad")}
               </h2>
-              <span className="precisionBadge">Draft preview uses low precision</span>
+              <span className="precisionBadge">{tr("draftPrecision")}</span>
             </div>
             <textarea
               className="codeEditor"
@@ -499,21 +501,21 @@ export default function App() {
           {project.proposedCode ? (
             <div className="revisionArea">
               <div className="panelHeader compact">
-                <h2>Proposed Revision</h2>
+                <h2>{tr("proposedRevision")}</h2>
                 <div className="inlineActions">
                   <button
                     className="smallButton success"
                     onClick={() => setProject((current) => acceptRevision(current))}
                   >
                     <Check size={15} />
-                    Accept
+                    {tr("accept")}
                   </button>
                   <button
                     className="smallButton"
                     onClick={() => setProject((current) => rejectRevision(current))}
                   >
                     <X size={15} />
-                    Reject
+                    {tr("reject")}
                   </button>
                 </div>
               </div>
@@ -529,21 +531,21 @@ export default function App() {
 
         <aside className="panel resultPanel">
           <div className="panelHeader">
-            <h2>Views</h2>
+            <h2>{tr("views")}</h2>
           </div>
           <div className="viewGrid">
-            <ViewImage label="Front" src={project.views.front} />
-            <ViewImage label="Top" src={project.views.top} />
-            <ViewImage label="Right" src={project.views.right} />
+            <ViewImage label={tr("front")} src={project.views.front} />
+            <ViewImage label={tr("top")} src={project.views.top} />
+            <ViewImage label={tr("right")} src={project.views.right} />
           </div>
 
           <section className="outputBlock">
-            <h3>Compiler</h3>
-            <pre>{project.compilerOutput || "No compile output yet."}</pre>
+            <h3>{tr("compiler")}</h3>
+            <pre>{project.compilerOutput || tr("noCompileOutput")}</pre>
           </section>
 
           <section className="outputBlock">
-            <h3>Review</h3>
+            <h3>{tr("review")}</h3>
             {project.review ? (
               <>
                 <p>{project.review.summary}</p>
@@ -553,20 +555,20 @@ export default function App() {
                   ))}
                 </ul>
                 <p className="confidence">
-                  Confidence {Math.round(project.review.confidence * 100)}%
+                  {tr("confidence")} {Math.round(project.review.confidence * 100)}%
                 </p>
               </>
             ) : (
-              <p>No review yet.</p>
+              <p>{tr("noReview")}</p>
             )}
           </section>
 
           <section className="outputBlock historyBlock">
-            <h3>History</h3>
+            <h3>{tr("history")}</h3>
             <ol>
               {project.iterations.slice(-8).map((iteration) => (
                 <li key={iteration.id}>
-                  <span>{iteration.status}</span>
+                  <span>{iterationStatusLabel(locale, iteration.status)}</span>
                   <time>{new Date(iteration.createdAt).toLocaleTimeString()}</time>
                 </li>
               ))}
@@ -578,23 +580,54 @@ export default function App() {
   );
 }
 
-function Status(props: { busy: BusyState; error: string }) {
+function Status(props: { busy: BusyState; error: string; locale: Locale }) {
   if (props.error) {
     return <p className="status error">{props.error}</p>;
   }
   if (props.busy !== "idle") {
-    return <p className="status">Working: {props.busy}</p>;
+    return (
+      <p className="status">
+        {t(props.locale, "working")}: {busyStatusLabel(props.locale, props.busy)}
+      </p>
+    );
   }
-  return <p className="status">Ready</p>;
+  return <p className="status">{t(props.locale, "ready")}</p>;
 }
 
-function PromptTracePanel(props: { entries: PromptTraceEntry[] }) {
+function busyStatusLabel(locale: Locale, busy: Exclude<BusyState, "idle">): string {
+  const keys: Record<Exclude<BusyState, "idle">, MessageKey> = {
+    generating: "busyGenerating",
+    compiling: "busyCompiling",
+    reviewing: "busyReviewing",
+    exporting: "busyExporting"
+  };
+  return t(locale, keys[busy]);
+}
+
+function iterationStatusLabel(
+  locale: Locale,
+  status: ProjectIteration["status"]
+): string {
+  const keys: Record<ProjectIteration["status"], MessageKey> = {
+    generated: "iterationGenerated",
+    compiled: "iterationCompiled",
+    reviewed: "iterationReviewed",
+    accepted: "iterationAccepted",
+    rejected: "iterationRejected",
+    error: "iterationError"
+  };
+  return t(locale, keys[status]);
+}
+
+function PromptTracePanel(props: { entries: PromptTraceEntry[]; locale: Locale }) {
   const entries = props.entries.slice(-6).reverse();
   return (
-    <section className="promptTrace" aria-label="AI prompt trace">
+    <section className="promptTrace" aria-label={t(props.locale, "aiPromptTrace")}>
       <div className="panelHeader">
-        <h2>AI Prompt Trace</h2>
-        <span>{props.entries.length} events</span>
+        <h2>{t(props.locale, "aiPromptTrace")}</h2>
+        <span>
+          {props.entries.length} {t(props.locale, "events")}
+        </span>
       </div>
       {entries.length ? (
         <div className="traceList">
@@ -605,14 +638,16 @@ function PromptTracePanel(props: { entries: PromptTraceEntry[] }) {
                 <span>{entry.modelId}</span>
                 <time>{new Date(entry.createdAt).toLocaleTimeString()}</time>
               </summary>
-              <TraceBlock title="System" value={entry.systemPrompt} />
-              <TraceBlock title="User" value={entry.userPrompt} />
-              {entry.response ? <TraceBlock title="Response" value={entry.response} /> : null}
+              <TraceBlock title={t(props.locale, "system")} value={entry.systemPrompt} />
+              <TraceBlock title={t(props.locale, "user")} value={entry.userPrompt} />
+              {entry.response ? (
+                <TraceBlock title={t(props.locale, "response")} value={entry.response} />
+              ) : null}
             </details>
           ))}
         </div>
       ) : (
-        <p className="emptyTrace">Generate, compile, or review to see prompts here.</p>
+        <p className="emptyTrace">{t(props.locale, "emptyTrace")}</p>
       )}
     </section>
   );

@@ -163,7 +163,7 @@ test("iterate again combines review feedback and user notes", async ({ page }) =
   });
 
   await page.goto("/");
-  await page.getByPlaceholder(/结合评审结果再次修改/).fill("把把手再大一点");
+  await page.locator(".iterationInput").fill("把把手再大一点");
   await page.getByRole("button", { name: /Iterate Again/i }).click();
 
   await expect(page.getByText("Proposed Revision")).toBeVisible();
