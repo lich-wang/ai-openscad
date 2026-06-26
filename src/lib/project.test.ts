@@ -3,6 +3,7 @@ import {
   createEmptyProject,
   exportProject,
   importProject,
+  loadProjectWorkspace,
   saveApiKey
 } from "./project";
 
@@ -32,5 +33,24 @@ describe("project persistence", () => {
       requirement: "rounded organizer",
       currentCode: "cube([10, 10, 10]);"
     });
+  });
+
+  it("loads a workspace with multiple projects and the active project", () => {
+    const first = createEmptyProject();
+    first.id = "first";
+    first.requirement = "第一个模型";
+    first.updatedAt = "2026-06-26T00:00:00.000Z";
+    const second = createEmptyProject();
+    second.id = "second";
+    second.requirement = "第二个模型";
+    second.updatedAt = "2026-06-26T01:00:00.000Z";
+
+    localStorage.setItem("ai-openscad.projects", JSON.stringify([first, second]));
+    localStorage.setItem("ai-openscad.active-project-id", "first");
+
+    const workspace = loadProjectWorkspace();
+
+    expect(workspace.activeProject.id).toBe("first");
+    expect(workspace.projects.map((project) => project.id)).toEqual(["second", "first"]);
   });
 });

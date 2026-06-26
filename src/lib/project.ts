@@ -55,6 +55,13 @@ const API_KEY_STORAGE_KEY = "ai-openscad.api-key";
 const LLM_API_KEY_STORAGE_KEY = "ai-openscad.llm-api-key";
 const VISION_API_KEY_STORAGE_KEY = "ai-openscad.vision-api-key";
 const PROJECT_STORAGE_KEY = "ai-openscad.project";
+const PROJECTS_STORAGE_KEY = "ai-openscad.projects";
+const ACTIVE_PROJECT_ID_STORAGE_KEY = "ai-openscad.active-project-id";
+
+export interface ProjectWorkspace {
+  activeProject: ProjectState;
+  projects: ProjectState[];
+}
 
 export function createEmptyProject(): ProjectState {
   return {
@@ -104,14 +111,50 @@ export function loadVisionApiKey(): string {
 
 export function saveProject(project: ProjectState): void {
   localStorage.setItem(PROJECT_STORAGE_KEY, JSON.stringify(project));
+  const projects = upsertProjectList(loadStoredProjects(), project);
+  localStorage.setItem(PROJECTS_STORAGE_KEY, JSON.stringify(projects));
+  localStorage.setItem(ACTIVE_PROJECT_ID_STORAGE_KEY, project.id);
 }
 
 export function loadProject(): ProjectState {
-  const stored = localStorage.getItem(PROJECT_STORAGE_KEY);
-  if (!stored) {
-    return createEmptyProject();
+  return loadProjectWorkspace().activeProject;
+}
+
+export function loadProjectWorkspace(): ProjectWorkspace {
+  const projects = loadStoredProjects();
+  const activeProjectId = localStorage.getItem(ACTIVE_PROJECT_ID_STORAGE_KEY) ?? "";
+  const activeProject =
+    projects.find((project) => project.id === activeProjectId) ?? projects[0];
+
+  if (activeProject) {
+    return {
+      activeProject,
+      projects: sortProjects(projects)
+    };
   }
-  return importProject(stored);
+
+  const legacy = loadLegacyProject();
+  if (legacy) {
+    return {
+      activeProject: legacy,
+      projects: [legacy]
+    };
+  }
+
+  const empty = createEmptyProject();
+  return {
+    activeProject: empty,
+    projects: [empty]
+  };
+}
+
+export function upsertProjectList(
+  projects: ProjectState[],
+  project: ProjectState
+): ProjectState[] {
+  const imported = importProject(JSON.stringify(project));
+  const next = projects.filter((item) => item.id !== imported.id);
+  return sortProjects([imported, ...next]);
 }
 
 export function exportProject(project: ProjectState): string {
@@ -138,4 +181,41 @@ export function importProject(serialized: string): ProjectState {
     iterations: parsed.iterations ?? [],
     promptTrace: parsed.promptTrace ?? []
   };
+}
+
+function loadStoredProjects(): ProjectState[] {
+  const storedProjects = localStorage.getItem(PROJECTS_STORAGE_KEY);
+  if (storedProjects) {
+    try {
+      const parsed = JSON.parse(storedProjects) as unknown[];
+      if (Array.isArray(parsed)) {
+        return sortProjects(
+          parsed.map((item) => importProject(JSON.stringify(item)))
+        );
+      }
+    } catch {
+      return [];
+    }
+  }
+
+  const legacy = loadLegacyProject();
+  return legacy ? [legacy] : [];
+}
+
+function loadLegacyProject(): ProjectState | null {
+  const stored = localStorage.getItem(PROJECT_STORAGE_KEY);
+  if (!stored) {
+    return null;
+  }
+  try {
+    return importProject(stored);
+  } catch {
+    return null;
+  }
+}
+
+function sortProjects(projects: ProjectState[]): ProjectState[] {
+  return [...projects].sort((left, right) =>
+    right.updatedAt.localeCompare(left.updatedAt)
+  );
 }

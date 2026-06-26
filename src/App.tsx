@@ -31,11 +31,12 @@ import {
   exportProject,
   importProject,
   loadLlmApiKey,
-  loadProject,
+  loadProjectWorkspace,
   loadVisionApiKey,
   saveLlmApiKey,
   saveProject,
   saveVisionApiKey,
+  upsertProjectList,
   type ProjectIteration,
   type PromptTraceEntry,
   type ProjectState
@@ -50,7 +51,11 @@ import { acceptRevision, rejectRevision, setProposedRevision } from "./lib/workf
 type BusyState = "idle" | "generating" | "compiling" | "reviewing" | "exporting";
 
 export default function App() {
-  const [project, setProject] = useState<ProjectState>(() => loadProject());
+  const [initialWorkspace] = useState(() => loadProjectWorkspace());
+  const [project, setProject] = useState<ProjectState>(() => initialWorkspace.activeProject);
+  const [projectList, setProjectList] = useState<ProjectState[]>(
+    () => initialWorkspace.projects
+  );
   const [llmApiKey, setLlmApiKey] = useState(() => loadLlmApiKey());
   const [visionApiKey, setVisionApiKey] = useState(() => loadVisionApiKey());
   const [busy, setBusy] = useState<BusyState>("idle");
@@ -75,6 +80,7 @@ export default function App() {
 
   useEffect(() => {
     saveProject(project);
+    setProjectList((current) => upsertProjectList(current, project));
   }, [project]);
 
   useEffect(() => {
@@ -426,10 +432,18 @@ export default function App() {
   }
 
   function handleNewModel() {
-    if (hasModelWork && !window.confirm(tr("newModelConfirm"))) {
+    const next = createEmptyProject();
+    setProjectList((current) => upsertProjectList(current, next));
+    setProject(next);
+    setError("");
+  }
+
+  function handleSelectProject(projectId: string) {
+    const selected = projectList.find((item) => item.id === projectId);
+    if (!selected) {
       return;
     }
-    setProject(createEmptyProject());
+    setProject(selected);
     setError("");
   }
 
@@ -448,7 +462,9 @@ export default function App() {
     }
     file.text()
       .then((content) => {
-        setProject(importProject(content));
+        const imported = importProject(content);
+        setProjectList((current) => upsertProjectList(current, imported));
+        setProject(imported);
         setError("");
       })
       .catch((caught) => {
@@ -475,6 +491,23 @@ export default function App() {
             <RefreshCw size={16} />
             {tr("newModel")}
           </button>
+
+          <section className="modelHistory">
+            <span>{tr("models")}</span>
+            <div className="modelList">
+              {projectList.map((item) => (
+                <button
+                  aria-pressed={item.id === project.id}
+                  key={item.id}
+                  onClick={() => handleSelectProject(item.id)}
+                  type="button"
+                >
+                  <strong>{projectTitle(item, tr("untitledModel"))}</strong>
+                  <small>{new Date(item.updatedAt).toLocaleTimeString()}</small>
+                </button>
+              ))}
+            </div>
+          </section>
 
           <label>
             <div className="fieldHeader">
@@ -830,11 +863,6 @@ function AgentRunPanel(props: {
         </span>
       </div>
       <div className="agentTimeline">
-        <article className="agentEvent userEvent">
-          <h3>{t(props.locale, "userRequest")}</h3>
-          <p>{props.project.requirement || t(props.locale, "missingRequirement")}</p>
-        </article>
-
         <article className="agentEvent">
           <h3>{t(props.locale, "agentThinking")}</h3>
           <p>
@@ -943,6 +971,14 @@ function iterationStatusLabel(
     error: "iterationError"
   };
   return t(locale, keys[status]);
+}
+
+function projectTitle(project: ProjectState, fallback: string): string {
+  const requirement = project.requirement.trim();
+  if (!requirement) {
+    return fallback;
+  }
+  return requirement.length > 28 ? `${requirement.slice(0, 28)}...` : requirement;
 }
 
 function PromptTracePanel(props: { entries: PromptTraceEntry[]; locale: Locale }) {

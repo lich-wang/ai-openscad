@@ -9,6 +9,8 @@ export const messages = {
     newModelHint: "Start a fresh model",
     newModelConfirm:
       "Start a new model? Export the current model first if you want to keep a copy.",
+    models: "Models",
+    untitledModel: "Untitled model",
     importProject: "Import project",
     exportProject: "Export project",
     exportProjectPending: "Accept and render the pending revision before exporting.",
@@ -105,6 +107,8 @@ export const messages = {
     newModel: "新建模型",
     newModelHint: "开始一个新模型",
     newModelConfirm: "要开始一个新模型吗？如果要保留当前模型，请先最终导出或导出项目。",
+    models: "模型",
+    untitledModel: "未命名模型",
     importProject: "导入项目",
     exportProject: "导出项目",
     exportProjectPending: "请先接受并渲染待确认修订，再导出。",
