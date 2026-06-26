@@ -124,6 +124,49 @@ test("generation requests streaming output and fills the editor", async ({ page 
   expect(streamRequested).toBe(true);
 });
 
+test("MiMo generation can use the hosted key when the user key is empty", async ({
+  page
+}) => {
+  await page.addInitScript((storedProject) => {
+    localStorage.removeItem("ai-openscad.api-key");
+    localStorage.removeItem("ai-openscad.llm-api-key");
+    localStorage.removeItem("ai-openscad.vision-api-key");
+    localStorage.setItem(
+      "ai-openscad.project",
+      JSON.stringify({
+        ...storedProject,
+        currentCode: "",
+        views: { front: "", top: "", right: "" },
+        review: null,
+        promptTrace: []
+      })
+    );
+  }, project);
+
+  let requestHeaders: Record<string, string> = {};
+  await page.route("**/api/llm", async (route) => {
+    requestHeaders = route.request().headers();
+    await route.fulfill({
+      status: 200,
+      contentType: "text/event-stream",
+      body: [
+        'data: {"choices":[{"delta":{"content":"module hosted"}}]}',
+        "",
+        'data: {"choices":[{"delta":{"content":"_cup() {}"}}]}',
+        "",
+        "data: [DONE]",
+        ""
+      ].join("\n")
+    });
+  });
+
+  await page.goto("/");
+  await page.getByRole("button", { name: /^Generate$/i }).click();
+
+  await expect(page.locator(".codeEditor").first()).toHaveValue(/hosted_cup/);
+  expect(requestHeaders.authorization).not.toContain("sk-");
+});
+
 test("iterate again combines review feedback and user notes", async ({ page }) => {
   await page.addInitScript((storedProject) => {
     localStorage.setItem("ai-openscad.llm-api-key", "sk-llm");

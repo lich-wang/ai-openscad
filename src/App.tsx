@@ -19,7 +19,7 @@ import {
 } from "./lib/apiClient";
 import { captureOrthographicViews, downloadText } from "./lib/capture";
 import { getBrowserLocale, t, type Locale, type MessageKey } from "./lib/i18n";
-import { CODE_MODEL_PRESETS, VISION_MODEL_PRESETS } from "./lib/models";
+import { CODE_MODEL_PRESETS, getModelPreset, VISION_MODEL_PRESETS } from "./lib/models";
 import { createPromptTraceEntry } from "./lib/promptTrace";
 import {
   createEmptyProject,
@@ -93,13 +93,15 @@ export default function App() {
   }
 
   function requireLlmApiKey() {
-    if (!llmApiKey.trim()) {
+    const provider = getModelPreset(project.codeModelId, "code").provider;
+    if (provider !== "mimo" && !llmApiKey.trim()) {
       throw new Error(tr("missingLlmKey"));
     }
   }
 
   function requireVisionApiKey() {
-    if (!visionApiKey.trim()) {
+    const provider = getModelPreset(project.visionModelId, "vision").provider;
+    if (provider !== "mimo" && !visionApiKey.trim()) {
       throw new Error(tr("missingVisionKey"));
     }
   }

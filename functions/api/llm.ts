@@ -3,9 +3,10 @@ import { proxyModelRequest } from "../_shared/modelGateway";
 
 type PagesRequestContext = {
   request: Request;
+  env: Record<string, string | undefined>;
 };
 
-export const onRequest = async ({ request }: PagesRequestContext) => {
+export const onRequest = async ({ request, env }: PagesRequestContext) => {
   if (request.method === "OPTIONS") {
     return handleOptions();
   }
@@ -16,7 +17,7 @@ export const onRequest = async ({ request }: PagesRequestContext) => {
     });
   }
 
-  const response = await proxyModelRequest(request);
+  const response = await proxyModelRequest(request, env);
   const headers = new Headers(response.headers);
   for (const [key, value] of Object.entries(corsHeaders)) {
     headers.set(key, value);

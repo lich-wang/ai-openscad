@@ -12,6 +12,11 @@ interface GatewayBody {
   stream?: boolean;
 }
 
+interface GatewayEnv {
+  MiMo_KEY?: string;
+  MIMO_KEY?: string;
+}
+
 const providers: Record<
   GatewayBody["provider"],
   {
@@ -43,12 +48,10 @@ const providers: Record<
   }
 } as const;
 
-export async function proxyModelRequest(request: Request): Promise<Response> {
-  const apiKey = readBearerToken(request);
-  if (!apiKey) {
-    return normalizedError("Missing Authorization bearer token.", 401);
-  }
-
+export async function proxyModelRequest(
+  request: Request,
+  env: GatewayEnv = {}
+): Promise<Response> {
   let body: GatewayBody;
   try {
     body = (await request.json()) as GatewayBody;
@@ -59,6 +62,11 @@ export async function proxyModelRequest(request: Request): Promise<Response> {
   const provider = providers[body.provider];
   if (!provider) {
     return normalizedError(`Unsupported provider: ${body.provider}`, 400);
+  }
+
+  const apiKey = resolveApiKey(request, body.provider, env);
+  if (!apiKey) {
+    return normalizedError("Missing Authorization bearer token.", 401);
   }
 
   const upstreamModel = provider.models[body.model] ?? body.model;
@@ -123,6 +131,21 @@ export async function proxyModelRequest(request: Request): Promise<Response> {
 function readBearerToken(request: Request): string {
   const authorization = request.headers.get("Authorization") ?? "";
   return authorization.startsWith("Bearer ") ? authorization.slice(7).trim() : "";
+}
+
+function resolveApiKey(
+  request: Request,
+  provider: GatewayBody["provider"],
+  env: GatewayEnv
+): string {
+  const userApiKey = readBearerToken(request);
+  if (userApiKey) {
+    return userApiKey;
+  }
+  if (provider === "mimo") {
+    return (env.MiMo_KEY ?? env.MIMO_KEY ?? "").trim();
+  }
+  return "";
 }
 
 function summarizeUpstreamError(text: string): string {
