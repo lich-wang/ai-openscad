@@ -387,8 +387,9 @@ test("stacked layout keeps setup controls before model actions", async ({ page }
   );
   await page.mouse.move(0, 0);
 
-  await expect(page.locator(".workspace")).toHaveScreenshot("stacked-workbench.png", {
+  await expect(page).toHaveScreenshot("stacked-workbench.png", {
     animations: "disabled",
+    clip: { x: 0, y: 0, width: 390, height: 900 },
     maxDiffPixelRatio: WORKBENCH_SCREENSHOT_DIFF_RATIO
   });
 });
