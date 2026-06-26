@@ -1,0 +1,36 @@
+{
+  "name": "ai-openscad",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 0.0.0.0",
+    "build": "tsc -b && vite build",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "preview": "vite preview --host 0.0.0.0",
+    "deploy": "wrangler pages deploy dist --project-name ai-openscad"
+  },
+  "dependencies": {
+    "@vitejs/plugin-react": "^4.5.2",
+    "lucide-react": "^0.468.0",
+    "openscad-wasm": "^0.0.4",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "three": "^0.177.0"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20260620.0",
+    "@testing-library/jest-dom": "^6.6.3",
+    "@testing-library/react": "^16.3.0",
+    "@testing-library/user-event": "^14.6.1",
+    "@types/react": "^18.3.23",
+    "@types/react-dom": "^18.3.7",
+    "@types/three": "^0.177.0",
+    "jsdom": "^26.1.0",
+    "typescript": "^5.8.3",
+    "vite": "^6.3.5",
+    "vitest": "^3.2.4",
+    "wrangler": "^4.20.5"
+  }
+}
