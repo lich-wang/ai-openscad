@@ -308,7 +308,7 @@ npm run build
 - 生产域名：`https://ai.openscad.tech`
 - GitHub Actions workflow：`.github/workflows/deploy.yml`
   - Pull request 会运行 `npm test`、`npm run test:e2e` 和 `npm run build`。
-    clean runner 会使用 `npm ci` 安装依赖、设置 Node 20，并通过
+    clean runner 会使用 `npm ci` 安装依赖、设置 Node 24，并通过
     `npx playwright install --with-deps chromium` 安装 Chromium。
   - 推送到 `main` 时会执行同样检查，然后使用
     `npx wrangler pages deploy dist --project-name ai-openscad --branch main` 部署。

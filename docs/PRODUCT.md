@@ -346,7 +346,7 @@ Deployment target:
 - Production domain: `https://ai.openscad.tech`
 - GitHub Actions workflow: `.github/workflows/deploy.yml`
   - Pull requests run `npm test`, `npm run test:e2e`, and `npm run build`.
-    The clean runner installs dependencies with `npm ci`, sets up Node 20, and
+    The clean runner installs dependencies with `npm ci`, sets up Node 24, and
     installs Chromium with `npx playwright install --with-deps chromium`.
   - Pushes to `main` execute the same checks, then deploy with
     `npx wrangler pages deploy dist --project-name ai-openscad --branch main`.

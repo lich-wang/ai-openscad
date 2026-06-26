@@ -40,13 +40,13 @@ describe("GitHub Actions deploy workflow", () => {
     expect(triggers).toContain("  workflow_dispatch:");
   });
 
-  test("uses Node 20, installs Playwright Chromium, and runs release checks", () => {
+  test("uses Node 24, installs Playwright Chromium, and runs release checks", () => {
     const workflow = withoutComments(loadDeployWorkflow());
     const checks = expectBlock(workflow, "  checks:\n");
 
     expect(checks).toContain("actions/checkout@");
     expect(checks).toContain("actions/setup-node@");
-    expect(checks).toContain("node-version: 20");
+    expect(checks).toContain("node-version: 24");
     expect(checks).toContain("npm ci");
     expect(checks).toContain("npx playwright install --with-deps chromium");
     expect(checks).toContain("npm test");
