@@ -65,7 +65,10 @@ Return the complete revised OpenSCAD code only.`;
 export function buildVisionSystemPrompt(requirement = ""): string {
   return `You review OpenSCAD-generated 3D models from front, top, and right orthographic views.
 ${buildLanguageInstruction(requirement)}
-Return JSON with keys: summary, issues, confidence. The issues value must be an array of strings and confidence must be 0 to 1.`;
+Return JSON with keys: summary, issues, correctionPrompt, confidence.
+- issues must be an array of strings.
+- confidence must be 0 to 1.
+- correctionPrompt must be a concise, user-editable prompt for the text LLM to revise the current OpenSCAD model. It should preserve the original requirement, mention the specific visual issues to fix, and avoid returning OpenSCAD code.`;
 }
 
 export function buildVisionUserPrompt(requirement: string, code: string): string {

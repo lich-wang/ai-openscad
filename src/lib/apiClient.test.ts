@@ -4,6 +4,7 @@ import {
   buildRevisionRequest,
   estimateTokenUsage
 } from "./apiClient";
+import { buildVisionSystemPrompt } from "./openscadSkills";
 
 describe("apiClient prompt assembly", () => {
   it("adds Chinese output instruction for Chinese requirements", () => {
@@ -28,6 +29,7 @@ describe("apiClient prompt assembly", () => {
       review: {
         summary: "杯口太厚",
         issues: ["把杯壁调薄"],
+        correctionPrompt: "保持杯子容量，把杯壁调薄。",
         confidence: 0.8
       },
       userNotes: "把把手再大一点",
@@ -39,6 +41,13 @@ describe("apiClient prompt assembly", () => {
     expect(userPrompt).toContain("杯口太厚");
     expect(userPrompt).toContain("把杯壁调薄");
     expect(userPrompt).toContain("把把手再大一点");
+  });
+
+  it("asks the vision model for a correction prompt instead of revised code", () => {
+    const prompt = buildVisionSystemPrompt("生成一个杯子");
+
+    expect(prompt).toContain("correctionPrompt");
+    expect(prompt).toContain("avoid returning OpenSCAD code");
   });
 
   it("estimates LLM and vision tokens separately", () => {

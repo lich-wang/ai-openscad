@@ -1,6 +1,7 @@
 export interface VisionReview {
   summary: string;
   issues: string[];
+  correctionPrompt: string;
   confidence: number;
 }
 

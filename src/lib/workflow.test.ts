@@ -10,6 +10,7 @@ describe("revision workflow", () => {
     const withProposal = setProposedRevision(project, "sphere(10);", {
       summary: "Cube should be rounded",
       issues: ["Original request asked for rounded geometry"],
+      correctionPrompt: "Round the cube while preserving its original size.",
       confidence: 0.82
     });
 
@@ -27,6 +28,7 @@ describe("revision workflow", () => {
     const project = setProposedRevision(createEmptyProject(), "sphere(10);", {
       summary: "Change shape",
       issues: [],
+      correctionPrompt: "Change the shape according to the visual review.",
       confidence: 0.5
     });
     project.currentCode = "cube(10);";

@@ -48,7 +48,7 @@ import {
   buildRenderPrecisionInstruction,
   normalizeOpenScadPrecision
 } from "./lib/renderSkill";
-import { acceptRevision, rejectRevision, setProposedRevision } from "./lib/workflow";
+import { acceptRevision, rejectRevision } from "./lib/workflow";
 
 type BusyState = "idle" | "generating" | "compiling" | "reviewing" | "exporting";
 
@@ -323,32 +323,22 @@ export default function App() {
       setProject((current) => ({
         ...current,
         review,
+        requirement: review.correctionPrompt || current.requirement,
         promptTrace: [...current.promptTrace, reviewTrace],
-        compilerOutput: tr("visionComplete")
-      }));
-      requireLlmApiKey();
-      setProject((current) => ({
-        ...current,
-        proposedCode: ""
-      }));
-      const { code: proposedCode, trace: revisionTrace } = await proposeRevision({
-        apiKey: llmApiKey,
-        modelId: project.codeModelId,
-        requirement: project.requirement,
-        code: project.currentCode,
-        review,
-        precision: "draft",
-        onToken: (streamedCode) => {
-          setProject((current) => ({
-            ...current,
-            proposedCode: streamedCode
-          }));
-        }
-      });
-      setProject((current) => ({
-        ...setProposedRevision(current, proposedCode, review),
-        compilerOutput: tr("revisionReady"),
-        promptTrace: [...current.promptTrace, revisionTrace]
+        compilerOutput: tr("visionComplete"),
+        updatedAt: new Date().toISOString(),
+        iterations: [
+          ...current.iterations,
+          {
+            id: crypto.randomUUID(),
+            createdAt: new Date().toISOString(),
+            requirement: current.requirement,
+            code: current.currentCode,
+            modelId: current.visionModelId,
+            status: "reviewed",
+            reviewSummary: review.summary
+          }
+        ]
       }));
     });
   }
@@ -359,30 +349,83 @@ export default function App() {
       if (!project.review) {
         throw new Error(tr("reviewBeforeIterate"));
       }
+      const iterationPrompt = project.requirement.trim() || project.review.correctionPrompt;
       setProject((current) => ({
         ...current,
+        currentCode: "",
         proposedCode: "",
         compilerOutput: tr("streamingIteration")
       }));
-      const { code: proposedCode, trace } = await proposeRevision({
+      const { code, trace } = await proposeRevision({
         apiKey: llmApiKey,
         modelId: project.codeModelId,
-        requirement: project.requirement,
+        requirement: iterationPrompt,
         code: project.currentCode,
         review: project.review,
-        userNotes: project.requirement,
+        userNotes: iterationPrompt,
         precision: "draft",
         onToken: (streamedCode) => {
           setProject((current) => ({
             ...current,
-            proposedCode: streamedCode
+            currentCode: streamedCode,
+            compilerOutput: tr("streamingIteration")
           }));
         }
       });
       setProject((current) => ({
-        ...setProposedRevision(current, proposedCode, project.review!),
-        compilerOutput: tr("revisionReady"),
-        promptTrace: [...current.promptTrace, trace]
+        ...current,
+        currentCode: code,
+        proposedCode: "",
+        review: null,
+        views: { front: "", top: "", right: "" },
+        stl: "",
+        compilerOutput: tr("renderingDraft"),
+        promptTrace: [...current.promptTrace, trace],
+        updatedAt: new Date().toISOString(),
+        iterations: [
+          ...current.iterations,
+          {
+            id: crypto.randomUUID(),
+            createdAt: new Date().toISOString(),
+            requirement: iterationPrompt,
+            code,
+            modelId: current.codeModelId,
+            status: "generated"
+          }
+        ]
+      }));
+      setBusy("compiling");
+      const rendered = await compileDraftCode(code);
+      if (!rendered.ok || !rendered.views || !rendered.stl) {
+        setProject((current) => ({
+          ...current,
+          compilerOutput: rendered.diagnostics,
+          promptTrace: [...current.promptTrace, rendered.trace],
+          updatedAt: new Date().toISOString()
+        }));
+        throw new Error(rendered.diagnostics);
+      }
+      setProject((current) => ({
+        ...current,
+        currentCode: code,
+        proposedCode: "",
+        review: null,
+        views: rendered.views,
+        stl: rendered.stl,
+        compilerOutput: `${rendered.diagnostics}\n${tr("compiledDraft")}`,
+        promptTrace: [...current.promptTrace, rendered.trace],
+        updatedAt: new Date().toISOString(),
+        iterations: [
+          ...current.iterations,
+          {
+            id: crypto.randomUUID(),
+            createdAt: new Date().toISOString(),
+            requirement: iterationPrompt,
+            code,
+            modelId: current.codeModelId,
+            status: "compiled"
+          }
+        ]
       }));
     });
   }
@@ -855,6 +898,10 @@ export default function App() {
                 <p className="confidence">
                   {tr("confidence")} {Math.round(project.review.confidence * 100)}%
                 </p>
+                <div className="correctionPromptPreview">
+                  <span>{tr("correctionPrompt")}</span>
+                  <p>{project.review.correctionPrompt}</p>
+                </div>
               </>
             ) : (
               <p>{tr("noReview")}</p>
@@ -986,6 +1033,10 @@ function AgentRunPanel(props: {
                 <li key={issue}>{issue}</li>
               ))}
             </ul>
+            <div className="correctionPromptPreview">
+              <span>{t(props.locale, "correctionPrompt")}</span>
+              <p>{props.project.review.correctionPrompt}</p>
+            </div>
           </article>
         ) : null}
 

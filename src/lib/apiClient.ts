@@ -221,11 +221,14 @@ function stripCodeFence(content: string): string {
 function parseReview(content: string): VisionReview {
   try {
     const parsed = JSON.parse(content) as Partial<VisionReview>;
+    const summary = String(parsed.summary ?? "Review completed.");
+    const issues = Array.isArray(parsed.issues)
+      ? parsed.issues.map(String)
+      : ["The model returned review text without an issues array."];
     return {
-      summary: String(parsed.summary ?? "Review completed."),
-      issues: Array.isArray(parsed.issues)
-        ? parsed.issues.map(String)
-        : ["The model returned review text without an issues array."],
+      summary,
+      issues,
+      correctionPrompt: buildFallbackCorrectionPrompt(summary, issues, parsed.correctionPrompt),
       confidence:
         typeof parsed.confidence === "number"
           ? Math.min(1, Math.max(0, parsed.confidence))
@@ -235,7 +238,26 @@ function parseReview(content: string): VisionReview {
     return {
       summary: content,
       issues: ["The model returned non-JSON review text."],
+      correctionPrompt: buildFallbackCorrectionPrompt(content, [
+        "The model returned non-JSON review text."
+      ]),
       confidence: 0.5
     };
   }
+}
+
+function buildFallbackCorrectionPrompt(
+  summary: string,
+  issues: string[],
+  correctionPrompt?: unknown
+): string {
+  if (typeof correctionPrompt === "string" && correctionPrompt.trim()) {
+    return correctionPrompt.trim();
+  }
+  return [
+    "Revise the current OpenSCAD model according to this visual review.",
+    `Review summary: ${summary}`,
+    `Issues: ${issues.join("; ") || "No specific issues."}`,
+    "Preserve the original user requirement and return a complete updated OpenSCAD source file."
+  ].join("\n");
 }

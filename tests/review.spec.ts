@@ -23,7 +23,7 @@ const project = {
   updatedAt: "2026-06-26T00:00:00.000Z"
 };
 
-test("review sends MiMo multimodal model and shows proposed revision", async ({
+test("review sends MiMo multimodal model and shows editable correction prompt", async ({
   page
 }) => {
   await page.addInitScript((storedProject) => {
@@ -33,7 +33,7 @@ test("review sends MiMo multimodal model and shows proposed revision", async ({
   }, project);
 
   let visionModel = "";
-  let llmStream = false;
+  let llmRequests = 0;
 
   await page.route("**/api/vision", async (route) => {
     const body = route.request().postDataJSON() as {
@@ -49,6 +49,8 @@ test("review sends MiMo multimodal model and shows proposed revision", async ({
         content: JSON.stringify({
           summary: "杯子主体正确，但杯口需要更圆滑。",
           issues: ["杯口倒角不明显"],
+          correctionPrompt:
+            "保持30ML杯子容量，修改当前OpenSCAD：增加杯口圆角倒角，并让杯壁更薄。",
           confidence: 0.86
         })
       })
@@ -56,38 +58,33 @@ test("review sends MiMo multimodal model and shows proposed revision", async ({
   });
 
   await page.route("**/api/llm", async (route) => {
-    const body = route.request().postDataJSON() as { stream?: boolean };
-    llmStream = body.stream === true;
+    llmRequests += 1;
     await route.fulfill({
-      status: 200,
-      contentType: "text/event-stream",
-      body: [
-        'data: {"choices":[{"delta":{"content":"module cup() {"}}]}',
-        "",
-        'data: {"choices":[{"delta":{"content":" cylinder(h=40, r=18); } cup();"}}]}',
-        "",
-        "data: [DONE]",
-        ""
-      ].join("\n")
+      status: 500,
+      contentType: "application/json",
+      body: JSON.stringify({ error: "LLM should not run during visual review" })
     });
   });
 
   await page.goto("/");
   await page.getByRole("button", { name: /review/i }).click();
 
-  await expect(page.getByRole("heading", { name: "Proposed Revision" })).toBeVisible();
-  await expect(page.locator(".resultPanel").getByText("Revision proposal ready.")).toBeVisible();
-  await expect(page.locator(".controlPanel .status").getByText("Revision pending")).toBeVisible();
-  await expect(page.locator(".agentRun .panelHeader").getByText("Revision pending")).toBeVisible();
-  await expect(
-    page.getByText("The preview still shows the reviewed draft. Accept + render before export.")
-  ).toBeVisible();
-  await expect(page.getByRole("button", { name: /Final Export/i })).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "Proposed Revision" })).toHaveCount(0);
+  await expect(page.locator(".resultPanel").getByText("Vision review complete.")).toBeVisible();
+  await expect(page.locator(".controlPanel .status").getByText("Ready")).toBeVisible();
+  await expect(page.getByRole("button", { name: /Iterate Again/i })).toBeVisible();
+  await expect(page.getByRole("button", { name: /Final Export/i })).toBeVisible();
   await expect(page.locator(".topbarActions")).toHaveCount(0);
-  await expect(page.locator(".projectTools button").last()).toBeDisabled();
+  await expect(page.locator(".projectTools button").last()).toBeEnabled();
   await expect(page.locator(".resultPanel").getByText("杯子主体正确", { exact: false })).toBeVisible();
+  await expect(page.locator(".agentInput")).toHaveValue(/增加杯口圆角倒角/);
+  await expect(
+    page.locator(".agentRun .correctionPromptPreview").getByText("保持30ML杯子容量", {
+      exact: false
+    })
+  ).toBeVisible();
   expect(visionModel).toBe("mimo-v2.5");
-  expect(llmStream).toBe(true);
+  expect(llmRequests).toBe(0);
 });
 
 test("generation streams code and automatically renders draft views", async ({ page }) => {
@@ -186,7 +183,7 @@ test("MiMo generation can use the hosted key when the user key is empty", async 
   expect(requestHeaders.authorization).not.toContain("sk-");
 });
 
-test("iterate again combines review feedback and user notes", async ({ page }) => {
+test("iterate again uses the editable correction prompt then renders a new model", async ({ page }) => {
   await page.addInitScript((storedProject) => {
     localStorage.setItem("ai-openscad.llm-api-key", "sk-llm");
     localStorage.setItem("ai-openscad.vision-api-key", "sk-vision");
@@ -197,6 +194,7 @@ test("iterate again combines review feedback and user notes", async ({ page }) =
         review: {
           summary: "杯口太厚",
           issues: ["杯壁需要更薄"],
+          correctionPrompt: "保持30ML杯子容量，把杯壁调薄。",
           confidence: 0.82
         },
         promptTrace: []
@@ -225,14 +223,17 @@ test("iterate again combines review feedback and user notes", async ({ page }) =
   });
 
   await page.goto("/");
-  await page.locator(".agentInput").fill("生成一个30ML的杯子模型，把把手再大一点");
+  await page.locator(".agentInput").fill("保持30ML杯子容量，把杯壁调薄，并把把手再大一点");
   await page.getByRole("button", { name: /Iterate Again/i }).click();
 
-  await expect(page.getByRole("heading", { name: "Proposed Revision" })).toBeVisible();
-  await expect(page.locator(".codeEditor.proposed")).toHaveValue(/revised/);
+  await expect(page.getByRole("heading", { name: "Proposed Revision" })).toHaveCount(0);
+  await expect(page.locator(".codeEditor").first()).toHaveValue(/revised/);
   await expect(page.locator(".agentCodePreview")).toContainText("revised");
+  await expect(page.locator(".viewTile img")).toHaveCount(3, { timeout: 30000 });
+  await expect(page.getByRole("button", { name: /Review/i })).toBeVisible();
   expect(prompt).toContain("杯口太厚");
   expect(prompt).toContain("杯壁需要更薄");
+  expect(prompt).toContain("保持30ML杯子容量");
   expect(prompt).toContain("把把手再大一点");
 });
 
@@ -250,6 +251,7 @@ test("accepting a revision requires a fresh visual review before another iterati
         review: {
           summary: "旧评审：杯口太厚",
           issues: ["旧问题"],
+          correctionPrompt: "根据旧问题继续修正杯口厚度。",
           confidence: 0.74
         },
         promptTrace: []

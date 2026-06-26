@@ -13,6 +13,7 @@ const project = {
   review: {
     summary: "杯子主体正确，杯口需要更圆滑。",
     issues: ["杯口倒角不明显"],
+    correctionPrompt: "保持30ML杯子容量，增加杯口圆角倒角。",
     confidence: 0.86
   },
   stl: "solid ui-test\nendsolid ui-test",

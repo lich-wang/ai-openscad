@@ -633,6 +633,25 @@ textarea {
   padding-left: 18px;
 }
 
+.correctionPromptPreview {
+  background: #fffaf0;
+  border: 1px solid #f0d49a;
+  border-radius: 6px;
+  display: grid;
+  gap: 5px;
+  padding: 9px 10px;
+}
+
+.correctionPromptPreview span {
+  color: #8a4b0f;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.correctionPromptPreview p {
+  color: #5f3f16;
+}
+
 .agentCodePreview {
   background: #0f172a;
   border-radius: 6px;
