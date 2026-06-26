@@ -46,7 +46,7 @@ button:disabled {
 
 .appShell {
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-rows: 62px minmax(0, 1fr);
   height: 100vh;
   overflow: hidden;
   padding: 12px 16px;
