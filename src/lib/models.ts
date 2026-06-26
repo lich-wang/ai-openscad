@@ -55,7 +55,7 @@ export const VISION_MODEL_PRESETS: ModelPreset[] = [
     id: "mimo-v2.5",
     label: "MiMo V2.5",
     provider: "mimo",
-    providerModel: "mimo-v2.5-pro",
+    providerModel: "mimo-v2.5",
     capability: "vision"
   }
 ];
@@ -96,7 +96,7 @@ export function createModelRequest(input: {
       Authorization: `Bearer ${input.apiKey}`
     },
     body: {
-      model: input.modelId,
+      model: preset.providerModel,
       provider: preset.provider,
       messages: [
         { role: "system", content: input.systemPrompt },

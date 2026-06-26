@@ -11,12 +11,17 @@ interface GatewayBody {
   responseFormat?: "json";
 }
 
-const providers = {
+const providers: Record<
+  GatewayBody["provider"],
+  {
+    baseUrl: string;
+    models: Record<string, string>;
+    authHeader(apiKey: string): Record<string, string>;
+  }
+> = {
   mimo: {
     baseUrl: "https://api.xiaomimimo.com/v1",
-    models: {
-      "mimo-v2.5": "mimo-v2.5-pro"
-    },
+    models: {},
     authHeader(apiKey: string) {
       return {
         Authorization: `Bearer ${apiKey}`,
@@ -55,8 +60,7 @@ export async function proxyModelRequest(request: Request): Promise<Response> {
     return normalizedError(`Unsupported provider: ${body.provider}`, 400);
   }
 
-  const upstreamModel =
-    provider.models[body.model as keyof typeof provider.models] ?? body.model;
+  const upstreamModel = provider.models[body.model] ?? body.model;
 
   const upstreamBody: Record<string, unknown> = {
     model: upstreamModel,

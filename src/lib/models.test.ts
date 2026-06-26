@@ -19,7 +19,7 @@ describe("model presets", () => {
     });
   });
 
-  it("normalizes a code generation request without storing the user key in messages", () => {
+  it("normalizes a code generation request to the provider model without storing the user key in messages", () => {
     const request = createModelRequest({
       apiKey: "sk-user",
       modelId: "mimo-v2.5",
@@ -31,11 +31,32 @@ describe("model presets", () => {
     expect(request.endpoint).toBe("/api/llm");
     expect(request.headers.Authorization).toBe("Bearer sk-user");
     expect(JSON.stringify(request.body.messages)).not.toContain("sk-user");
-    expect(request.body.model).toBe("mimo-v2.5");
+    expect(request.body.model).toBe("mimo-v2.5-pro");
     expect(request.body.messages[0].role).toBe("system");
     expect(request.body.messages[1]).toEqual({
       role: "user",
       content: "make a six-slot box"
     });
+  });
+
+  it("keeps MiMo image review on the multimodal model instead of the pro coding model", () => {
+    const request = createModelRequest({
+      apiKey: "sk-user",
+      modelId: "mimo-v2.5",
+      mode: "vision",
+      userPrompt: "review the three views",
+      systemPrompt: "return JSON",
+      images: ["data:image/png;base64,front"]
+    });
+
+    expect(request.endpoint).toBe("/api/vision");
+    expect(request.body.model).toBe("mimo-v2.5");
+    expect(request.body.messages[1].content).toEqual([
+      { type: "text", text: "review the three views" },
+      {
+        type: "image_url",
+        image_url: { url: "data:image/png;base64,front" }
+      }
+    ]);
   });
 });
