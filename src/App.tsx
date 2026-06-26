@@ -578,79 +578,70 @@ export default function App() {
             {tr("newModel")}
           </button>
 
-          <section className="modelHistory">
-            <span>{tr("models")}</span>
-            <div className="modelList">
-              {projectList.map((item) => (
-                <button
-                  aria-pressed={item.id === project.id}
-                  key={item.id}
-                  onClick={() => handleSelectProject(item.id)}
-                  type="button"
-                >
-                  <strong>{projectTitle(item, tr("untitledModel"))}</strong>
-                  <small>{new Date(item.updatedAt).toLocaleTimeString()}</small>
-                </button>
-              ))}
-            </div>
-          </section>
+          <details className="sidebarSettings" open>
+            <summary>
+              <span>{tr("basicSettings")}</span>
+              <small>{tr("basicSettingsSummary")}</small>
+            </summary>
+            <div className="sidebarSettingsBody">
+              <label>
+                <div className="fieldHeader">
+                  <span>{tr("llmApiKey")}</span>
+                  <ApiKeyHint locale={locale} />
+                </div>
+                <div className="keyInput">
+                  <KeyRound size={16} />
+                  <input
+                    value={llmApiKey}
+                    onChange={(event) => setLlmApiKey(event.target.value)}
+                    placeholder="sk-..."
+                    type="password"
+                  />
+                </div>
+              </label>
 
-          <label>
-            <div className="fieldHeader">
-              <span>{tr("llmApiKey")}</span>
-              <ApiKeyHint locale={locale} />
-            </div>
-            <div className="keyInput">
-              <KeyRound size={16} />
-              <input
-                value={llmApiKey}
-                onChange={(event) => setLlmApiKey(event.target.value)}
-                placeholder="sk-..."
-                type="password"
+              <ModelPicker
+                label={tr("llmModel")}
+                models={CODE_MODEL_PRESETS}
+                value={project.codeModelId}
+                onChange={(codeModelId) => updateProject({ codeModelId })}
               />
-            </div>
-          </label>
 
-          <ModelPicker
-            label={tr("llmModel")}
-            models={CODE_MODEL_PRESETS}
-            value={project.codeModelId}
-            onChange={(codeModelId) => updateProject({ codeModelId })}
-          />
+              <label>
+                <div className="fieldHeader">
+                  <span>{tr("visionApiKey")}</span>
+                  <ApiKeyHint locale={locale} />
+                </div>
+                <div className="keyInput">
+                  <KeyRound size={16} />
+                  <input
+                    value={visionApiKey}
+                    onChange={(event) => setVisionApiKey(event.target.value)}
+                    placeholder="sk-..."
+                    type="password"
+                  />
+                </div>
+              </label>
 
-          <label>
-            <div className="fieldHeader">
-              <span>{tr("visionApiKey")}</span>
-              <ApiKeyHint locale={locale} />
-            </div>
-            <div className="keyInput">
-              <KeyRound size={16} />
-              <input
-                value={visionApiKey}
-                onChange={(event) => setVisionApiKey(event.target.value)}
-                placeholder="sk-..."
-                type="password"
+              <ModelPicker
+                label={tr("visionModel")}
+                models={VISION_MODEL_PRESETS}
+                value={project.visionModelId}
+                onChange={(visionModelId) => updateProject({ visionModelId })}
               />
-            </div>
-          </label>
 
-          <ModelPicker
-            label={tr("visionModel")}
-            models={VISION_MODEL_PRESETS}
-            value={project.visionModelId}
-            onChange={(visionModelId) => updateProject({ visionModelId })}
-          />
-
-          <div className="tokenPanel">
-            <div>
-              <span>{tr("llmTokens")}</span>
-              <strong>{tokenUsage.llmTokens}</strong>
+              <div className="tokenPanel">
+                <div>
+                  <span>{tr("llmTokens")}</span>
+                  <strong>{tokenUsage.llmTokens}</strong>
+                </div>
+                <div>
+                  <span>{tr("visionTokens")}</span>
+                  <strong>{tokenUsage.visionTokens}</strong>
+                </div>
+              </div>
             </div>
-            <div>
-              <span>{tr("visionTokens")}</span>
-              <strong>{tokenUsage.visionTokens}</strong>
-            </div>
-          </div>
+          </details>
 
           <Status
             busy={busy}
@@ -678,6 +669,23 @@ export default function App() {
                 <Download size={15} />
                 <span>{tr("exportProject")}</span>
               </button>
+            </div>
+          </section>
+
+          <section className="modelHistory">
+            <span>{tr("models")}</span>
+            <div className="modelList">
+              {projectList.map((item) => (
+                <button
+                  aria-pressed={item.id === project.id}
+                  key={item.id}
+                  onClick={() => handleSelectProject(item.id)}
+                  type="button"
+                >
+                  <strong>{projectTitle(item, tr("untitledModel"))}</strong>
+                  <small>{new Date(item.updatedAt).toLocaleTimeString()}</small>
+                </button>
+              ))}
             </div>
           </section>
         </aside>

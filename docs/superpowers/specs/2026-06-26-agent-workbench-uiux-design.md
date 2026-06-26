@@ -66,7 +66,8 @@ The left column should not be a large settings form. It should behave like a nar
 Recommended structure:
 
 - `New model` button at top.
-- Recent model list showing 3-5 items.
+- Collapsible `Basic settings` block below `New model`.
+- Recent model list pinned to the lower part of the left column, showing 3-5 items without moving the settings area.
 - Each model item shows title and compact status:
   - `STL ready`
   - `Reviewed`
@@ -75,13 +76,15 @@ Recommended structure:
 - `Model & key settings` as a collapsed block or popover.
 - Import/export controls at bottom using compact buttons.
 
-API keys and model selectors should be available but visually quiet. Their summary can show:
+API keys and model selectors should be available but visually quiet. The user must be able to collapse this basic settings area so the sidebar does not feel like a settings form. Its summary can show:
 
 - Code model: MiMo V2.5 or DeepSeek V4 Pro.
 - Vision model: MiMo V2.5.
 - Key source: hosted MiMo key or user key.
 
 Token estimates should not occupy a prominent permanent card. They belong in run details.
+
+The model history list must not sit above the settings form. Otherwise every new model changes the vertical position of the model/API controls and makes the page feel unstable. History should have its own internal scroll area at the bottom of the sidebar.
 
 ### Center Column: Agent Workflow
 
@@ -325,6 +328,9 @@ Layout and screenshot tests:
 - At 1440x900, the three views and STL download are visible in the right column.
 - The center stage rail shows SCAD, MCP, and Vision stages.
 - The composer is visible and not displaced by logs.
+- The left sidebar keeps `New model` and `Basic settings` fixed in position when a new model is created.
+- `Basic settings` can be collapsed and expanded.
+- Model history stays below the settings area and scrolls internally when it grows.
 - OpenSCAD code is collapsed by default after generation.
 - Run details are collapsed by default.
 - The left model list scrolls internally when many models exist.

@@ -82,6 +82,16 @@ test("desktop workbench keeps controls visible and matches screenshot", async ({
   await expect(page.getByRole("button", { name: /Final Export/i })).toBeVisible();
   await expect(page.getByText("LLM tokens")).toBeVisible();
   await expect(page.getByText("Vision tokens")).toBeVisible();
+  await expect(page.locator(".sidebarSettings")).toHaveAttribute("open", "");
+  await expect(page.locator(".controlPanel .modelHistory")).toBeVisible();
+  const settingsBoxBefore = await page.locator(".sidebarSettings").boundingBox();
+  const historyBoxBefore = await page.locator(".controlPanel .modelHistory").boundingBox();
+  expect(settingsBoxBefore).not.toBeNull();
+  expect(historyBoxBefore).not.toBeNull();
+  expect(historyBoxBefore!.y).toBeGreaterThan(settingsBoxBefore!.y);
+  await page.locator(".sidebarSettings summary").click();
+  await expect(page.locator(".controlPanel").getByText("LLM API Key")).toBeHidden();
+  await page.locator(".sidebarSettings summary").click();
   await expect(page.locator("select")).toHaveCount(0);
   await expect(page.locator(".controlPanel").getByRole("button", { name: "New model" })).toBeVisible();
   await expect(page.locator(".codeDisclosure")).not.toHaveAttribute("open", "");
@@ -130,6 +140,8 @@ test("desktop workbench keeps controls visible and matches screenshot", async ({
 
   await page.locator(".controlPanel").getByRole("button", { name: "New model" }).click();
   await expect(page.locator(".modelHistory button")).toHaveCount(2);
+  const settingsBoxAfter = await page.locator(".sidebarSettings").boundingBox();
+  expect(Math.abs(settingsBoxAfter!.y - settingsBoxBefore!.y)).toBeLessThanOrEqual(2);
   await expect(page.locator(".agentInput")).toHaveValue("");
   await page.locator(".modelHistory button", { hasText: "生成一个30ML的杯子模型" }).click();
   await expect(page.locator(".agentInput")).toHaveValue("生成一个30ML的杯子模型");
