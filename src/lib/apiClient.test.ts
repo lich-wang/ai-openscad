@@ -21,6 +21,22 @@ describe("apiClient prompt assembly", () => {
     expect(request.body.stream).toBe(true);
   });
 
+  it("injects the lich printable modeling skill into generation prompts", () => {
+    const request = buildGenerationRequest({
+      apiKey: "sk-user",
+      modelId: "mimo-v2.5",
+      requirement: "生成一个带铰链的小盒子",
+      precision: "draft"
+    });
+
+    const systemPrompt = String(request.body.messages[0].content);
+    expect(systemPrompt).toContain("lich-3D/SCAD");
+    expect(systemPrompt).toContain("BOSL2");
+    expect(systemPrompt).toContain("gap");
+    expect(systemPrompt).toContain("print orientation");
+    expect(systemPrompt).toContain("knuckle_hinge");
+  });
+
   it("revision prompt includes review feedback and user iteration notes", () => {
     const request = buildRevisionRequest({
       apiKey: "sk-user",
@@ -47,6 +63,28 @@ describe("apiClient prompt assembly", () => {
     expect(userPrompt).toContain("杯口太厚");
     expect(userPrompt).toContain("把杯壁调薄");
     expect(userPrompt).toContain("把把手再大一点");
+  });
+
+  it("keeps the lich printable modeling skill in revision system prompts", () => {
+    const request = buildRevisionRequest({
+      apiKey: "sk-user",
+      modelId: "mimo-v2.5",
+      requirement: "生成一个桌边挂架",
+      code: "cube(10);",
+      review: {
+        summary: "挂钩太薄",
+        issues: ["加厚承重根部"],
+        correctionPrompt: "保持桌边夹持间隙，加厚挂钩根部。",
+        confidence: 0.8
+      },
+      precision: "draft"
+    });
+
+    const systemPrompt = String(request.body.messages[0].content);
+    expect(systemPrompt).toContain("lich-3D/SCAD");
+    expect(systemPrompt).toContain("wall thickness");
+    expect(systemPrompt).toContain("assembly clearance");
+    expect(systemPrompt).toContain("BOSL2");
   });
 
   it("asks the vision model for a correction prompt instead of revised code", () => {

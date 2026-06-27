@@ -178,9 +178,18 @@ Workbench acceptance criteria:
 
 - Uses a code-focused system prompt that asks for valid, deterministic, complete
   OpenSCAD.
+- Bundles the practical `lich-3D/SCAD` printable-modeling skill into text LLM
+  prompts. The web app does not read local Codex skill folders at runtime;
+  instead, the product prompt includes the source-derived modeling patterns,
+  printability heuristics, tolerances, BOSL2 preferences, and physical-part
+  workflow needed for generated models.
 - Models in millimeters.
 - Requests named parameters, stable CSG, clear module boundaries, and printable
   geometry.
+- Applies the same printable-modeling skill context to first-generation,
+  review-driven revision, and final-export text requests so iterations preserve
+  printable walls, gaps, orientation, and assembly constraints instead of only
+  matching the visual review.
 - Detects Chinese vs English input and asks the model to use the same natural
   language for feedback and comments.
 - Streams OpenAI-compatible response chunks into the chat run stream and the
@@ -327,6 +336,9 @@ The app should preserve these guarantees:
 - Review requests include rendered images.
 - Review does not trigger text generation.
 - New iterations clear stale review state.
+- Text LLM requests include the built-in printable-modeling skill context used
+  by the app, so prompt traces can show why generated code favors practical
+  OpenSCAD modules, explicit tolerances, and 3D-printable geometry.
 - CI E2E tests protect the desktop workbench layout and the left-panel order in
   narrower stacked layouts with structural and geometry assertions; Playwright
   screenshot assertions are local-only.
