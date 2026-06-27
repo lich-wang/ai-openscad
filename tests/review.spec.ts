@@ -591,6 +591,18 @@ echo(str("波浪振幅: ", wave_amplitude, "mm"));
   });
   await expect(page.locator(".agentRun")).not.toContainText("OpenSCAD render timed out");
   await expect(page.locator('.workflowStage[data-stage="render"]')).toContainText("Complete");
+
+  const renderFinishedEvents = page.locator(".agentRun").getByText("Render finished");
+  for (const expectedFinishedCount of [2, 3]) {
+    await page.getByRole("button", { name: /Rerender/i }).click();
+    await expect(renderFinishedEvents).toHaveCount(expectedFinishedCount, {
+      timeout: 60_000
+    });
+    await expect(page.locator(".agentRun").getByRole("alert")).toHaveCount(0);
+    await expect(page.locator(".viewTile img")).toHaveCount(3);
+    await expectRenderedViewsHaveModelPixels(page);
+    await expect(page.locator('.workflowStage[data-stage="render"]')).toContainText("Complete");
+  }
 });
 
 test("MiMo generation can use the hosted key when the user key is empty", async ({

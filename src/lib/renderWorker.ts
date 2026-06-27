@@ -1,4 +1,4 @@
-import { createOpenSCAD } from "openscad-wasm";
+import { createOpenSCAD, type OpenSCADInstance } from "openscad-wasm";
 import {
   buildRenderFailureDiagnostics,
   buildRenderSuccessDiagnostics,
@@ -18,32 +18,49 @@ interface RenderWorkerDependencies {
 }
 
 export function createRenderWorkerHandler(dependencies: RenderWorkerDependencies) {
-  let instancePromise: ReturnType<typeof createOpenSCAD> | null = null;
+  let nextInstancePromise: ReturnType<typeof createOpenSCAD> | null = null;
   let openScadLogs: string[] = [];
   const captureOpenScadLog = (text: unknown) => {
     openScadLogs.push(String(text));
   };
+  const startOpenScad = () => {
+    const promise = dependencies
+      .createOpenSCAD({
+        print: captureOpenScadLog,
+        printErr: captureOpenScadLog
+      })
+      .catch((error) => {
+        if (nextInstancePromise === promise) {
+          nextInstancePromise = null;
+        }
+        throw error;
+      });
+    nextInstancePromise = promise;
+    return promise;
+  };
   const getOpenScad = () => {
-    if (!instancePromise) {
-      instancePromise = dependencies
-        .createOpenSCAD({
-          print: captureOpenScadLog,
-          printErr: captureOpenScadLog
-        })
-        .catch((error) => {
-          instancePromise = null;
-          throw error;
-        });
+    if (!nextInstancePromise) {
+      return startOpenScad();
     }
-    return instancePromise;
+    return nextInstancePromise;
+  };
+  const consumeOpenScad = async () => {
+    const instance = await getOpenScad();
+    nextInstancePromise = null;
+    return instance;
+  };
+  const prewarmNextOpenScad = () => {
+    if (!nextInstancePromise) {
+      void startOpenScad();
+    }
   };
 
   return async (event: MessageEvent<RenderWorkerRequest>) => {
     const { id, code, kind = "compile" } = event.data;
     openScadLogs = [];
     try {
-      const instance = await getOpenScad();
       if (kind === "warmup") {
+        await getOpenScad();
         dependencies.postMessage({
           id,
           result: {
@@ -56,7 +73,14 @@ export function createRenderWorkerHandler(dependencies: RenderWorkerDependencies
       if (!code) {
         throw new Error("OpenSCAD code is required.");
       }
-      const stl = await renderOpenScadToStl(instance, code);
+      const instance = await consumeOpenScad();
+      let stl = "";
+      try {
+        stl = await renderOpenScadToStl(instance, code);
+      } finally {
+        cleanupConsumedOpenScad(instance);
+        prewarmNextOpenScad();
+      }
       dependencies.postMessage({
         id,
         result: {
@@ -66,6 +90,7 @@ export function createRenderWorkerHandler(dependencies: RenderWorkerDependencies
         }
       });
     } catch (error) {
+      prewarmNextOpenScad();
       dependencies.postMessage({
         id,
         result: {
@@ -75,6 +100,15 @@ export function createRenderWorkerHandler(dependencies: RenderWorkerDependencies
       });
     }
   };
+}
+
+function cleanupConsumedOpenScad(instance: OpenSCADInstance): void {
+  try {
+    const fs = instance.getInstance?.().FS as { quit?: () => void } | undefined;
+    fs?.quit?.();
+  } catch {
+    // openscad-wasm does not expose a public dispose API; FS cleanup is best effort.
+  }
 }
 
 const handleRenderWorkerMessage = createRenderWorkerHandler({

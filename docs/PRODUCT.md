@@ -229,6 +229,12 @@ Workbench acceptance criteria:
 - Keeps a persistent render worker and reuses the initialized OpenSCAD WASM
   instance across render jobs. The workbench prewarms this worker so the first
   visible render pays less initialization cost.
+- OpenSCAD WASM runtimes are treated as one compile use: the worker remains
+  persistent, but each initialized OpenSCAD instance is consumed by a single
+  compile, cleaned up on a best-effort basis, and then replaced by a prewarmed
+  next instance. This avoids the observed `callMain()` instability where the
+  same WASM runtime succeeds once and later throws non-text runtime codes on
+  rerender.
 - Enforces a default 45 second render timeout.
 - Uses draft precision for normal iteration by normalizing `$fn` to 32.
 - Captures three orthographic views from generated STL:
