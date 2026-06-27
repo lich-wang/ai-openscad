@@ -93,6 +93,20 @@ export default function App() {
       project.review
   );
 
+  function addDraftRenderTimeoutGuidance(diagnostics: string): string {
+    if (!diagnostics.includes("OpenSCAD render timed out")) {
+      return diagnostics;
+    }
+    return `${diagnostics} The draft likely exceeded the browser draft render complexity budget. Simplify stacked extrusions, dense arrays, per-layer booleans, or high segment counts, then rerender.`;
+  }
+
+  function addFinalExportTimeoutGuidance(diagnostics: string): string {
+    if (!diagnostics.includes("OpenSCAD render timed out")) {
+      return diagnostics;
+    }
+    return `${diagnostics} The high precision final export timed out. Simplify the accepted source or try a lower-complexity model before exporting again.`;
+  }
+
   useEffect(() => {
     saveProject(project);
     setProjectList((current) => upsertProjectList(current, project));
@@ -354,17 +368,18 @@ export default function App() {
       source: draftCode,
       onProgress: (stage) => updateRenderStatus(renderMcpStageMessageKey(stage))
     });
+    const diagnostics = addDraftRenderTimeoutGuidance(result.diagnostics);
     const trace = createPromptTraceEntry({
       phase: "compile",
       modelId: "render-mcp:web",
       systemPrompt: buildRenderPrecisionInstruction("draft"),
       userPrompt: tr("compileDraftTrace"),
-      response: result.diagnostics
+      response: diagnostics
     });
     if (!result.ok || !result.stl || !result.views) {
       return {
         ok: false,
-        diagnostics: result.diagnostics,
+        diagnostics,
         trace,
         views: null,
         stl: null
@@ -605,21 +620,22 @@ export default function App() {
         source: finalCode,
         onProgress: (stage) => updateRenderStatus(renderMcpStageMessageKey(stage))
       });
+      const diagnostics = addFinalExportTimeoutGuidance(result.diagnostics);
       const trace = createPromptTraceEntry({
         phase: "final-export",
         modelId: "render-mcp:web",
         systemPrompt: buildRenderPrecisionInstruction("final"),
         userPrompt: tr("finalExportTrace"),
-        response: result.diagnostics
+        response: diagnostics
       });
       if (!result.ok || !result.stl || !result.views) {
         setProject((current) => ({
           ...current,
-          compilerOutput: result.diagnostics,
+          compilerOutput: diagnostics,
           promptTrace: [...current.promptTrace, trace],
           updatedAt: new Date().toISOString()
         }));
-        throw new Error(result.diagnostics);
+        throw new Error(diagnostics);
       }
       const finalStl = result.stl;
       const finalViews = result.views;
@@ -630,7 +646,7 @@ export default function App() {
         currentCode: finalCode,
         views: finalViews,
         stl: finalStl,
-        compilerOutput: `${result.diagnostics}\n${tr("finalExportDone")}`,
+        compilerOutput: `${diagnostics}\n${tr("finalExportDone")}`,
         promptTrace: [...current.promptTrace, trace],
         updatedAt: new Date().toISOString()
       }));

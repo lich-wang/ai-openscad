@@ -11,7 +11,10 @@ export function buildRenderPrecisionInstruction(precision: RenderPrecision): str
   return `Render skill: draft compile and fast visual review.
 - Use low precision for generated preview geometry: prefer $fn <= 36.
 - Keep the model visually faithful while making browser OpenSCAD compile fast.
-- Avoid expensive decorative details until final export.`;
+- Treat the draft as bounded by a browser render complexity budget.
+- Avoid many-layer stacked extrusions, dense decorative arrays, per-layer boolean operations, and high segment counts during normal iteration.
+- For textured or wavy surfaces, use coarse, inspectable approximations with low segment counts instead of dense polygon rings or per-height slices.
+- Preserve the main silhouette and printable dimensions; expensive decorative detail can be added only through explicit user edits or later accepted source changes.`;
 }
 
 export function normalizeOpenScadPrecision(

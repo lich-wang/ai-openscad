@@ -26,6 +26,8 @@ describe("WebRenderMcpAdapter", () => {
 
     expect(result.ok).toBe(false);
     expect(result.diagnostics).toContain("timed out");
+    expect(result.diagnostics).toContain("reduce model complexity");
+    expect(result.diagnostics).not.toContain("browser draft render complexity budget");
   });
 
   it("runs browser compilation through a worker and terminates it after completion", async () => {
@@ -122,6 +124,8 @@ describe("WebRenderMcpAdapter", () => {
 
     expect(result.ok).toBe(false);
     expect(result.diagnostics).toContain("timed out");
+    expect(result.diagnostics).toContain("reduce model complexity");
+    expect(result.diagnostics).not.toContain("browser draft render complexity budget");
     expect(worker.terminated).toBe(true);
   });
 

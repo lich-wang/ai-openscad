@@ -37,6 +37,22 @@ describe("apiClient prompt assembly", () => {
     expect(systemPrompt).toContain("knuckle_hinge");
   });
 
+  it("adds the draft render complexity budget to generation prompts", () => {
+    const request = buildGenerationRequest({
+      apiKey: "sk-user",
+      modelId: "mimo-v2.5",
+      requirement: "生成一个20cm高的波浪形圆形水杯",
+      precision: "draft"
+    });
+
+    const systemPrompt = String(request.body.messages[0].content);
+    expect(systemPrompt).toContain("browser render complexity budget");
+    expect(systemPrompt).toContain("many-layer stacked extrusions");
+    expect(systemPrompt).toContain("per-layer boolean operations");
+    expect(systemPrompt).toContain("wavy surfaces");
+    expect(systemPrompt).toContain("coarse, inspectable approximations");
+  });
+
   it("revision prompt includes review feedback and user iteration notes", () => {
     const request = buildRevisionRequest({
       apiKey: "sk-user",
@@ -63,6 +79,28 @@ describe("apiClient prompt assembly", () => {
     expect(userPrompt).toContain("杯口太厚");
     expect(userPrompt).toContain("把杯壁调薄");
     expect(userPrompt).toContain("把把手再大一点");
+  });
+
+  it("adds the draft render complexity budget to revision prompts", () => {
+    const request = buildRevisionRequest({
+      apiKey: "sk-user",
+      modelId: "mimo-v2.5",
+      requirement: "生成一个20cm高的波浪形圆形水杯",
+      code: "module water_cup() { water_cup(); }",
+      review: {
+        summary: "渲染超时，波浪外壁过于复杂",
+        issues: ["避免逐层挤出波浪纹理"],
+        correctionPrompt: "保留波浪杯外观，但用更低复杂度的可检查草稿几何。",
+        confidence: 0.7
+      },
+      precision: "draft"
+    });
+
+    const userPrompt = String(request.body.messages[1].content);
+    expect(userPrompt).toContain("browser render complexity budget");
+    expect(userPrompt).toContain("many-layer stacked extrusions");
+    expect(userPrompt).toContain("per-layer boolean operations");
+    expect(userPrompt).toContain("coarse, inspectable approximations");
   });
 
   it("keeps the lich printable modeling skill in revision system prompts", () => {

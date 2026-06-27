@@ -29,6 +29,15 @@ function delay(milliseconds: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
+function sseChunks(text: string): string {
+  return [
+    `data: ${JSON.stringify({ choices: [{ delta: { content: text } }] })}`,
+    "",
+    "data: [DONE]",
+    ""
+  ].join("\n");
+}
+
 async function expectTimelineOrder(page: Page, labels: string[]) {
   const positions = await page.locator(".agentTimeline").evaluate((timeline, expected) => {
     const text = timeline.textContent ?? "";
@@ -40,6 +49,58 @@ async function expectTimelineOrder(page: Page, labels: string[]) {
   }
   for (let index = 1; index < positions.length; index += 1) {
     expect(positions[index]).toBeGreaterThan(positions[index - 1]);
+  }
+}
+
+async function expectRenderedViewsHaveModelPixels(page: Page) {
+  const paintedPixelCounts = await page.locator(".viewTile img").evaluateAll(async (images) =>
+    Promise.all(
+      images.map(
+        (node) =>
+          new Promise<number>((resolve, reject) => {
+            const image = node as HTMLImageElement;
+            const inspect = () => {
+              const canvas = document.createElement("canvas");
+              canvas.width = image.naturalWidth;
+              canvas.height = image.naturalHeight;
+              const context = canvas.getContext("2d");
+              if (!context) {
+                reject(new Error("Canvas context unavailable"));
+                return;
+              }
+              context.drawImage(image, 0, 0);
+              const data = context.getImageData(0, 0, canvas.width, canvas.height).data;
+              let painted = 0;
+              for (let y = 0; y < canvas.height; y += 12) {
+                for (let x = 0; x < canvas.width; x += 12) {
+                  const index = (y * canvas.width + x) * 4;
+                  const r = data[index];
+                  const g = data[index + 1];
+                  const b = data[index + 2];
+                  const alpha = data[index + 3];
+                  const isBackground =
+                    Math.abs(r - 248) < 4 && Math.abs(g - 250) < 4 && Math.abs(b - 252) < 4;
+                  if (alpha > 0 && !isBackground) {
+                    painted += 1;
+                  }
+                }
+              }
+              resolve(painted);
+            };
+            if (image.complete && image.naturalWidth > 0) {
+              inspect();
+            } else {
+              image.onload = inspect;
+              image.onerror = () => reject(new Error("Rendered view image failed to load"));
+            }
+          })
+      )
+    )
+  );
+
+  expect(paintedPixelCounts).toHaveLength(3);
+  for (const count of paintedPixelCounts) {
+    expect(count).toBeGreaterThan(2);
   }
 }
 
@@ -268,6 +329,81 @@ test("generation streams code and automatically renders draft views", async ({ p
   expect(storedAfterFirstReview.requirement).toContain("增加杯口倒角");
 });
 
+test("wavy cup draft generation stays low complexity and renders views", async ({ page }) => {
+  const wavyCupCode = `
+height = 200;
+outer_d_bottom = 65;
+outer_d_top = 80;
+wall = 2.5;
+bottom_t = 3;
+wave_count = 8;
+wave_amplitude = 3;
+wave_segments = 24;
+
+module wave_disc(diameter, amp) {
+  polygon([for (i = [0 : wave_segments - 1])
+    let(a = i * 360 / wave_segments,
+        r = diameter / 2 + amp * sin(wave_count * a))
+    [r * cos(a), r * sin(a)]
+  ]);
+}
+
+module water_cup() {
+  difference() {
+    linear_extrude(height = height, scale = outer_d_top / outer_d_bottom)
+      wave_disc(outer_d_bottom, wave_amplitude);
+    translate([0, 0, bottom_t])
+      linear_extrude(height = height + 0.2, scale = (outer_d_top - 2 * wall) / (outer_d_bottom - 2 * wall))
+        wave_disc(outer_d_bottom - 2 * wall, wave_amplitude * 0.4);
+  }
+}
+
+water_cup();
+`;
+
+  await page.addInitScript((storedProject) => {
+    localStorage.setItem("ai-openscad.llm-api-key", "sk-llm");
+    localStorage.setItem(
+      "ai-openscad.project",
+      JSON.stringify({
+        ...storedProject,
+        requirement: "生成一个20cm高的波浪形圆形水杯",
+        originalRequirement: "",
+        currentCode: "",
+        views: { front: "", top: "", right: "" },
+        review: null,
+        promptTrace: []
+      })
+    );
+  }, project);
+
+  let prompt = "";
+  await page.route("**/api/llm", async (route) => {
+    const body = route.request().postDataJSON() as {
+      messages: Array<{ content: string }>;
+    };
+    prompt = body.messages[0].content;
+    await route.fulfill({
+      status: 200,
+      contentType: "text/event-stream",
+      body: sseChunks(wavyCupCode)
+    });
+  });
+
+  await page.goto("/");
+  await page.getByRole("button", { name: /^Generate$/i }).click();
+
+  await expect(page.locator(".codeEditor").first()).toHaveValue(/wave_segments = 24/);
+  await expect(page.locator(".codeEditor").first()).not.toHaveValue(/layer_h\s*=/);
+  await expect(page.locator(".codeEditor").first()).not.toHaveValue(/layers\s*=\s*ceil/);
+  await expect(page.locator(".codeEditor").first()).not.toHaveValue(/wave_segments\s*=\s*72/);
+  await expect(page.locator(".viewTile img")).toHaveCount(3, { timeout: 45000 });
+  await expectRenderedViewsHaveModelPixels(page);
+  await expect(page.locator('.workflowStage[data-stage="render"]')).toContainText("Complete");
+  expect(prompt).toContain("browser render complexity budget");
+  expect(prompt).toContain("wavy surfaces");
+});
+
 test("MiMo generation can use the hosted key when the user key is empty", async ({
   page
 }) => {
@@ -409,6 +545,8 @@ test("iterate again uses the editable correction prompt then renders a new model
   expect(prompt).toContain("杯口太厚");
   expect(prompt).toContain("杯壁需要更薄");
   expect(prompt).toContain("User iteration notes:\n保持30ML杯子容量，把杯壁调薄，并把把手再大一点");
+  expect(prompt).toContain("browser render complexity budget");
+  expect(prompt).toContain("coarse, inspectable approximations");
 });
 
 test("accepting a revision requires a fresh visual review before another iteration", async ({
@@ -521,6 +659,94 @@ test("invalid OpenSCAD render fails without leaving the page busy", async ({ pag
   await expect(page.locator('.workflowStage[data-stage="render"]')).toContainText("Error");
   await expect(page.locator(".controlPanel .status")).toHaveCount(0);
   await expect(page.locator(".controlPanel").getByRole("button", { name: "New model" })).toBeEnabled();
+});
+
+test("render timeout explains the draft complexity budget and keeps code editable", async ({
+  page
+}) => {
+  await page.addInitScript((storedProject) => {
+    const nativeSetTimeout = window.setTimeout.bind(window);
+    window.setTimeout = ((handler: TimerHandler, timeout?: number, ...args: unknown[]) =>
+      nativeSetTimeout(handler, typeof timeout === "number" && timeout >= 45_000 ? 5 : timeout, ...args)) as typeof window.setTimeout;
+    Object.defineProperty(window, "Worker", {
+      configurable: true,
+      value: class {
+        addEventListener() {}
+        removeEventListener() {}
+        postMessage() {}
+        terminate() {}
+      }
+    });
+    localStorage.setItem(
+      "ai-openscad.project",
+      JSON.stringify({
+        ...storedProject,
+        currentCode: "cube(10);",
+        stl: "",
+        views: { front: "", top: "", right: "" },
+        review: null,
+        promptTrace: []
+      })
+    );
+  }, project);
+
+  await page.goto("/");
+  await page.getByRole("button", { name: /Rerender/i }).click();
+
+  await expect(page.locator(".agentRun").getByRole("alert")).toContainText(
+    "browser draft render complexity budget",
+    { timeout: 30000 }
+  );
+  await expect(page.locator('.workflowStage[data-stage="render"]')).toContainText("Error");
+  await expect(page.locator(".codeEditor").first()).toHaveValue(/cube\(10\);/);
+  await expect(page.getByRole("button", { name: /Rerender/i })).toBeEnabled();
+  await expect(page.locator(".resultPanel")).not.toContainText("browser draft render complexity budget");
+});
+
+test("final export timeout keeps final guidance separate from draft budget", async ({
+  page
+}) => {
+  await page.addInitScript((storedProject) => {
+    const nativeSetTimeout = window.setTimeout.bind(window);
+    window.setTimeout = ((handler: TimerHandler, timeout?: number, ...args: unknown[]) =>
+      nativeSetTimeout(handler, typeof timeout === "number" && timeout >= 45_000 ? 5 : timeout, ...args)) as typeof window.setTimeout;
+    Object.defineProperty(window, "Worker", {
+      configurable: true,
+      value: class {
+        addEventListener() {}
+        removeEventListener() {}
+        postMessage() {}
+        terminate() {}
+      }
+    });
+    localStorage.setItem(
+      "ai-openscad.project",
+      JSON.stringify({
+        ...storedProject,
+        currentCode: "cube(10);",
+        review: null,
+        promptTrace: []
+      })
+    );
+  }, project);
+
+  page.on("dialog", (dialog) => dialog.accept());
+
+  await page.goto("/");
+  await page.getByRole("button", { name: /Final Export/i }).click();
+
+  await expect(page.locator(".agentRun").getByRole("alert")).toContainText(
+    "high precision final export timed out",
+    { timeout: 30000 }
+  );
+  await expect(page.locator(".agentRun").getByRole("alert")).not.toContainText(
+    "browser draft render complexity budget"
+  );
+  await expect(page.locator('.workflowStage[data-stage="render"]')).toContainText("Error");
+  await expect(page.locator(".codeEditor").first()).toHaveValue(/cube\(10\);/);
+  await expect(page.getByRole("button", { name: /Final Export/i })).toBeEnabled();
+  await expect(page.getByRole("button", { name: /Rerender/i })).toBeEnabled();
+  await expect(page.locator(".resultPanel")).not.toContainText("high precision final export timed out");
 });
 
 test("rerender remains available after code exists without rendered views", async ({ page }) => {

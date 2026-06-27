@@ -154,6 +154,17 @@ Workbench acceptance criteria:
 - Manual OpenSCAD edits can be recompiled with the secondary rerender action
   whenever code exists. Rerender failures appear in the center stream and keep
   the workbench interactive.
+- Render timeouts explain that the draft exceeded the browser render complexity
+  budget, keep the render stage in an error state, preserve the current
+  editable OpenSCAD, and leave rerender available after the user simplifies the
+  draft or edits the code.
+- A representative textured model such as a 20 cm wavy cup should be generated
+  for draft review with coarse, inspectable wave geometry, without 100-layer
+  stacked `linear_extrude()` bodies, dense polygon wave rings, or per-layer
+  boolean hollowing. The generated draft should stay within the 45 second
+  browser render timeout and produce visible front, top, and right views.
+- The same browser render complexity budget applies to first drafts,
+  review-driven revisions, and user-edited correction-prompt iterations.
 - Stage strip and action states use text labels plus visual treatment, not color
   alone, and preserve keyboard focus order from left panel to agent panel to
   result panel. Chat records distinguish user, assistant, renderer tool, and
@@ -186,10 +197,17 @@ Workbench acceptance criteria:
 - Models in millimeters.
 - Requests named parameters, stable CSG, clear module boundaries, and printable
   geometry.
-- Applies the same printable-modeling skill context to first-generation,
-  review-driven revision, and final-export text requests so iterations preserve
-  printable walls, gaps, orientation, and assembly constraints instead of only
-  matching the visual review.
+- Draft-generation prompts include a browser render complexity budget: generated
+  code should avoid many-layer stacked extrusions, dense decorative arrays,
+  per-layer boolean operations, and high segment counts during normal
+  iteration. Textured or wavy surfaces should use coarse, inspectable
+  approximations for draft review. Final export recompiles the accepted source
+  at final precision; it does not automatically regenerate a more expensive
+  model.
+- Applies the same printable-modeling skill context to first-generation and
+  review-driven revision text requests so iterations preserve printable walls,
+  gaps, orientation, and assembly constraints instead of only matching the
+  visual review.
 - Detects Chinese vs English input and asks the model to use the same natural
   language for feedback and comments.
 - Streams OpenAI-compatible response chunks into the chat run stream and the
@@ -241,7 +259,8 @@ Workbench acceptance criteria:
 - Final output:
   - High-precision SCAD
   - High-precision STL
-- Final export asks for confirmation because it can be slower than draft render.
+- Final export asks for confirmation because it recompiles the accepted source
+  at higher precision and can be slower than draft render.
 
 ### Projects
 
