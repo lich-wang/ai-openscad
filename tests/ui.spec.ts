@@ -2,6 +2,8 @@ import { expect, test, type Page } from "@playwright/test";
 
 const WORKBENCH_SCREENSHOT_DIFF_RATIO = 0.18;
 const RUN_SCREENSHOT_ASSERTIONS = !process.env.CI;
+const INVITE_IMAGE_NATURAL_WIDTH = 772;
+const INVITE_IMAGE_NATURAL_HEIGHT = 1004;
 
 const project = {
   id: "project-ui-test",
@@ -350,9 +352,13 @@ test("desktop workbench keeps controls visible", async ({
   const qrBox = await inviteTooltip
     .getByAltText("Xiaomi MiMo invite QR code")
     .boundingBox();
+  const inviteImageRatio = qrBox!.width / qrBox!.height;
+  const naturalInviteRatio = INVITE_IMAGE_NATURAL_WIDTH / INVITE_IMAGE_NATURAL_HEIGHT;
   expect(inviteBox!.x).toBeGreaterThanOrEqual(helpBox!.x);
-  expect(inviteBox?.width).toBeGreaterThanOrEqual(330);
-  expect(qrBox?.width).toBeGreaterThanOrEqual(168);
+  expect(inviteBox?.width).toBeGreaterThanOrEqual(INVITE_IMAGE_NATURAL_WIDTH);
+  expect(qrBox?.width).toBeGreaterThanOrEqual(INVITE_IMAGE_NATURAL_WIDTH);
+  expect(qrBox?.width).toBeLessThanOrEqual(INVITE_IMAGE_NATURAL_WIDTH);
+  expect(inviteImageRatio).toBeCloseTo(naturalInviteRatio, 2);
   await page.mouse.move(900, 40);
 
   const controlBox = await page.locator(".controlPanel").boundingBox();
