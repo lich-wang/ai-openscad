@@ -404,6 +404,195 @@ water_cup();
   expect(prompt).toContain("wavy surfaces");
 });
 
+test("user reported layered wavy cup OpenSCAD renders locally", async ({ page }) => {
+  test.skip(!!process.env.CI, "Full browser render regression is local-only.");
+  test.setTimeout(120_000);
+
+  const reportedWavyCupCode = `
+// 波浪形圆形水杯 - 20cm高，外壁带波浪纹理
+// 打印方向：杯口朝上，底部朝下打印
+
+// ===== 主要参数 =====
+height = 200;           // 总高度 20cm
+outer_d_bottom = 65;    // 底部外径
+outer_d_top = 80;       // 顶部外径（锥度）
+wall = 2.5;             // 壁厚
+bottom_t = 3;           // 底部厚度
+rim_r = 2;              // 杯口外圆角半径
+base_r = 3;             // 底部外圆角
+
+// ===== 波浪参数 =====
+wave_count = 8;         // 波浪数量（周向波峰数）
+wave_amplitude = 3;     // 波浪振幅（mm，向外凸出的最大距离）
+wave_phase = 0;         // 波浪初始相位
+
+// ===== 渲染参数 =====
+$fn = 36;               // 圆形精度（预览用）
+
+// ===== 波浪外壁杯子主体 =====
+// 使用分层圆柱加波浪调制生成
+module wave_cup_body() {
+    layer_h = 2;  // 每层高度，用于光滑过渡
+    layers = ceil(height / layer_h);
+    
+    for (i = [0 : layers - 1]) {
+        z0 = i * layer_h;
+        z1 = min((i + 1) * layer_h, height);
+        z_mid = (z0 + z1) / 2;
+        
+        // 计算当前层的线性插值半径（锥度）
+        r_bottom = outer_d_bottom / 2;
+        r_top = outer_d_top / 2;
+        r_linear = r_bottom + (r_top - r_bottom) * (z_mid / height);
+        
+        // 底部和顶部圆角过渡
+        r_base_adj = z_mid < base_r ? 
+            sqrt(pow(base_r, 2) - pow(base_r - z_mid, 2)) - base_r + r_bottom : 
+            r_bottom;
+        r_actual = z_mid < base_r ? 
+            r_base_adj + (r_top - r_bottom) * (z_mid / height) :
+            r_linear;
+        
+        // 顶部圆角收口
+        if (z_mid > height - rim_r) {
+            rim_offset = sqrt(pow(rim_r, 2) - pow(z_mid - (height - rim_r), 2)) - rim_r;
+            r_actual = r_top + rim_offset;
+        }
+        
+        // 波浪调制：沿周向正弦变化
+        wave_segments = 72;  // 周向分段数
+        // 生成波浪截面多边形
+        wave_profile = [for (a = [0 : 360/wave_segments : 360 - 360/wave_segments])
+            let(r_wave = r_actual + wave_amplitude * sin(wave_count * a + wave_phase))
+            [r_wave * cos(a), r_wave * sin(a)]
+        ];
+        
+        // 使用hull将各层连接形成实体
+        translate([0, 0, z0])
+        linear_extrude(height = layer_h + 0.01)  // 微小重叠避免缝隙
+        polygon(wave_profile);
+    }
+}
+
+// ===== 波浪内壁（空腔） =====
+module wave_cup_hollow() {
+    layer_h = 2;
+    layers = ceil(height / layer_h);
+    
+    for (i = [0 : layers - 1]) {
+        z0 = i * layer_h + bottom_t;  // 从底部厚度开始
+        z1 = min((i + 1) * layer_h + bottom_t, height);
+        z_mid = (z0 + z1) / 2;
+        
+        if (z_mid < height) {
+            // 内壁半径（减去壁厚）
+            r_bottom_inner = outer_d_bottom / 2 - wall;
+            r_top_inner = outer_d_top / 2 - wall;
+            r_linear_inner = r_bottom_inner + (r_top_inner - r_bottom_inner) * ((z_mid - bottom_t) / (height - bottom_t));
+            
+            // 波浪内壁也带波浪（相位偏移）
+            wave_segments = 72;
+            wave_profile_inner = [for (a = [0 : 360/wave_segments : 360 - 360/wave_segments])
+                let(r_wave = r_linear_inner + wave_amplitude * 0.7 * sin(wave_count * a + wave_phase + 180))
+                [r_wave * cos(a), r_wave * sin(a)]
+            ];
+            
+            translate([0, 0, z0])
+            linear_extrude(height = z1 - z0 + 0.01)
+            polygon(wave_profile_inner);
+        }
+    }
+}
+
+// ===== 底部平面 =====
+module cup_bottom() {
+    cylinder(h = bottom_t, d = outer_d_bottom, $fn = $fn);
+}
+
+// ===== 完整杯子（实心减空心） =====
+module wave_cup() {
+    difference() {
+        union() {
+            cup_bottom();
+            wave_cup_body();
+        }
+        // 挖空内部
+        translate([0, 0, bottom_t])
+        wave_cup_hollow();
+    }
+}
+
+// ===== 底部防滑凹槽 =====
+module bottom_groove() {
+    groove_r = outer_d_bottom / 2 - 6;
+    translate([0, 0, -0.01])
+    linear_extrude(height = 1.5) {
+        difference() {
+            circle(r = groove_r + 1.5, $fn = $fn);
+            circle(r = groove_r - 0.5, $fn = $fn);
+        }
+    }
+}
+
+// ===== 最终模型 =====
+module water_cup() {
+    difference() {
+        wave_cup();
+        bottom_groove();
+    }
+}
+
+// 渲染杯子
+water_cup();
+
+// 输出关键尺寸
+echo(str("波浪杯口内径范围: ", outer_d_top - 2*wall - wave_amplitude, "~", outer_d_top - 2*wall + wave_amplitude, "mm"));
+echo(str("波浪杯底内径范围: ", outer_d_bottom - 2*wall - wave_amplitude, "~", outer_d_bottom - 2*wall + wave_amplitude, "mm"));
+echo(str("波浪数: ", wave_count));
+echo(str("波浪振幅: ", wave_amplitude, "mm"));
+`;
+
+  await page.addInitScript((storedProject) => {
+    localStorage.setItem("ai-openscad.llm-api-key", "sk-llm");
+    localStorage.setItem(
+      "ai-openscad.project",
+      JSON.stringify({
+        ...storedProject,
+        requirement: "生成一个20cm高的波浪形圆形水杯",
+        originalRequirement: "",
+        currentCode: "",
+        views: { front: "", top: "", right: "" },
+        review: null,
+        promptTrace: []
+      })
+    );
+  }, project);
+
+  await page.route("**/api/llm", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "text/event-stream",
+      body: sseChunks(reportedWavyCupCode)
+    });
+  });
+
+  await page.goto("/");
+  await page.getByRole("button", { name: /^Generate$/i }).click();
+
+  await expect(page.locator(".codeEditor").first()).toHaveValue(/wave_segments = 72/);
+  await expect(page.locator(".codeEditor").first()).toHaveValue(/layer_h = 2/);
+  await expect(page.locator(".agentRun").getByText("Render started")).toBeVisible({
+    timeout: 10_000
+  });
+  await expect(page.locator(".viewTile img")).toHaveCount(3, { timeout: 60_000 });
+  await expectRenderedViewsHaveModelPixels(page);
+  await expect(page.locator(".agentRun").getByText("Render finished")).toBeVisible({
+    timeout: 10_000
+  });
+  await expect(page.locator(".agentRun")).not.toContainText("OpenSCAD render timed out");
+  await expect(page.locator('.workflowStage[data-stage="render"]')).toContainText("Complete");
+});
+
 test("MiMo generation can use the hosted key when the user key is empty", async ({
   page
 }) => {

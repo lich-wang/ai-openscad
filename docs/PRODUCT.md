@@ -182,6 +182,10 @@ Workbench acceptance criteria:
   states, including non-color state labels and keyboard focus order.
   Playwright pixel screenshot checks run only in local visual-regression checks
   and must be skipped in CI.
+- Local E2E render coverage must include the full user-reported 20 cm wavy cup
+  OpenSCAD file with layered `linear_extrude()` wave rings, verify that the
+  browser renderer completes, and confirm the three rendered views contain
+  visible model pixels.
 
 ## Feature Inventory
 

@@ -1,13 +1,19 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createEmptyProject,
   exportProject,
   importProject,
   loadProjectWorkspace,
-  saveApiKey
+  saveApiKey,
+  saveProject
 } from "./project";
 
 describe("project persistence", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    vi.restoreAllMocks();
+  });
+
   it("exports all project state except API keys", () => {
     const project = createEmptyProject();
     project.requirement = "rounded organizer";
@@ -66,5 +72,43 @@ describe("project persistence", () => {
 
     expect(workspace.activeProject.id).toBe("first");
     expect(workspace.projects.map((project) => project.id)).toEqual(["second", "first"]);
+  });
+
+  it("keeps the page saveable when rendered STL exceeds local storage quota", () => {
+    const project = createEmptyProject();
+    project.id = "large-render";
+    project.currentCode = "water_cup();";
+    project.stl = "solid large\nfacet normal 0 0 1\nendsolid large";
+    project.views.front = "data:image/png;base64,front";
+    project.views.top = "data:image/png;base64,top";
+    project.views.right = "data:image/png;base64,right";
+
+    const originalSetItem = Storage.prototype.setItem;
+    const setItem = vi
+      .spyOn(Storage.prototype, "setItem")
+      .mockImplementation(function setItemWithQuota(key, value) {
+        if (String(value).includes("solid large")) {
+          throw new DOMException("Storage quota exceeded", "QuotaExceededError");
+        }
+        return originalSetItem.call(this, key, value);
+      });
+
+    saveProject(project);
+
+    const stored = JSON.parse(
+      localStorage.getItem("ai-openscad.project") ?? "{}"
+    ) as typeof project;
+    expect(stored.id).toBe("large-render");
+    expect(stored.stl).toBe("");
+    expect(stored.views).toEqual(project.views);
+    expect(localStorage.getItem("ai-openscad.active-project-id")).toBe("large-render");
+    expect(setItem).toHaveBeenCalledWith(
+      "ai-openscad.project",
+      expect.stringContaining("solid large")
+    );
+    expect(setItem).toHaveBeenLastCalledWith(
+      "ai-openscad.active-project-id",
+      "large-render"
+    );
   });
 });

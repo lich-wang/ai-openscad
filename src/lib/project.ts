@@ -130,10 +130,21 @@ export function loadVisionApiKey(): string {
 }
 
 export function saveProject(project: ProjectState): void {
-  localStorage.setItem(PROJECT_STORAGE_KEY, JSON.stringify(project));
-  const projects = upsertProjectList(loadStoredProjects(), project);
-  localStorage.setItem(PROJECTS_STORAGE_KEY, JSON.stringify(projects));
-  localStorage.setItem(ACTIVE_PROJECT_ID_STORAGE_KEY, project.id);
+  const storedProjects = loadStoredProjects();
+  const projects = upsertProjectList(storedProjects, project);
+  if (trySaveProjectWorkspace(project, projects)) {
+    return;
+  }
+
+  const compactProject = compactProjectForStorage(project, true);
+  const compactProjects = upsertProjectList(storedProjects, compactProject);
+  if (trySaveProjectWorkspace(compactProject, compactProjects)) {
+    return;
+  }
+
+  const minimalProject = compactProjectForStorage(project, false);
+  const minimalProjects = upsertProjectList(storedProjects, minimalProject);
+  void trySaveProjectWorkspace(minimalProject, minimalProjects);
 }
 
 export function loadProject(): ProjectState {
@@ -242,5 +253,46 @@ function loadLegacyProject(): ProjectState | null {
 function sortProjects(projects: ProjectState[]): ProjectState[] {
   return [...projects].sort((left, right) =>
     right.updatedAt.localeCompare(left.updatedAt)
+  );
+}
+
+function trySaveProjectWorkspace(
+  project: ProjectState,
+  projects: ProjectState[]
+): boolean {
+  try {
+    localStorage.setItem(PROJECT_STORAGE_KEY, JSON.stringify(project));
+    localStorage.setItem(PROJECTS_STORAGE_KEY, JSON.stringify(projects));
+    localStorage.setItem(ACTIVE_PROJECT_ID_STORAGE_KEY, project.id);
+    return true;
+  } catch (error) {
+    if (!isStorageQuotaError(error)) {
+      throw error;
+    }
+    return false;
+  }
+}
+
+function compactProjectForStorage(
+  project: ProjectState,
+  keepViews: boolean
+): ProjectState {
+  return {
+    ...project,
+    stl: "",
+    views: keepViews
+      ? { ...project.views }
+      : {
+          front: "",
+          top: "",
+          right: ""
+        }
+  };
+}
+
+function isStorageQuotaError(error: unknown): boolean {
+  return (
+    error instanceof DOMException &&
+    (error.name === "QuotaExceededError" || error.name === "NS_ERROR_DOM_QUOTA_REACHED")
   );
 }
