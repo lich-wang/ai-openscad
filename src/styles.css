@@ -827,6 +827,10 @@ textarea {
   overflow: hidden;
 }
 
+.chatCodeDisclosure:not([open]) {
+  height: 39px;
+}
+
 .chatCodeDisclosure summary {
   align-items: center;
   color: #344054;

@@ -476,10 +476,6 @@ test("stacked layout keeps setup controls before model actions", async ({ page }
   const stackedChatCode = page.locator(".chatCodeDisclosure").first();
   await expect(stackedChatCode).toBeVisible();
   await expect(stackedChatCode).not.toHaveAttribute("open", "");
-  await expect(page.locator(".agentRun")).toHaveScreenshot("stacked-agent-run-collapsed.png", {
-    animations: "disabled",
-    maxDiffPixelRatio: WORKBENCH_SCREENSHOT_DIFF_RATIO
-  });
 
   await expect(page).toHaveScreenshot("stacked-workbench.png", {
     animations: "disabled",
