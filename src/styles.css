@@ -709,6 +709,11 @@ textarea {
 
 .agentRun .panelHeader h2 {
   font-size: 18px;
+  line-height: 22px;
+}
+
+.agentRun .panelHeader span {
+  line-height: 16px;
 }
 
 .agentTimeline {
@@ -756,7 +761,7 @@ textarea {
 .agentEvent h3 {
   color: #1f2937;
   font-size: 14px;
-  line-height: 1.2;
+  line-height: 18px;
   margin: 0;
 }
 
@@ -764,7 +769,7 @@ textarea {
 .agentEvent ul {
   color: #475467;
   font-size: 13px;
-  line-height: 1.45;
+  line-height: 19px;
   margin: 0;
 }
 
@@ -807,7 +812,7 @@ textarea {
   color: #d1fae5;
   font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
   font-size: 12px;
-  line-height: 1.45;
+  line-height: 18px;
   margin: 0;
   max-height: 190px;
   overflow: auto;
@@ -827,9 +832,10 @@ textarea {
   color: #344054;
   cursor: pointer;
   display: flex;
+  min-height: 36px;
   justify-content: space-between;
   list-style: none;
-  padding: 8px 10px;
+  padding: 0 10px;
 }
 
 .chatCodeDisclosure summary::-webkit-details-marker {
@@ -842,15 +848,18 @@ textarea {
   font-size: 13px;
   font-weight: 800;
   gap: 8px;
+  line-height: 18px;
 }
 
 .chatCodeDisclosure summary small {
   color: #667085;
   font-size: 12px;
+  line-height: 16px;
 }
 
 .chatCodeDisclosure .agentCodePreview {
   border-radius: 0;
+  height: 72px;
   max-height: 220px;
 }
 
