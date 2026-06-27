@@ -128,6 +128,11 @@ Workbench acceptance criteria:
   issues, confidence, correction prompt, and iteration events. Completed code is
   collapsed by default so it does not dominate the center panel, while the
   advanced OpenSCAD editor remains available below the composer.
+- For a new or empty task, the center agent stream still keeps the same Agent
+  Run header text at the top of the panel and uses the same stream container,
+  spacing, and basic structure as populated chat runs without showing a separate
+  AI Thinking placeholder card. The first run should add records into the same
+  surface instead of causing a major layout jump.
 - Chat run records include user request, assistant generation/revision,
   renderer tool start/progress/finished, review start/result, correction prompt
   ready, iteration start, and error records. Render records may be backed by the

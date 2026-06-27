@@ -702,6 +702,7 @@ textarea {
   border-radius: 8px;
   display: grid;
   gap: 12px;
+  grid-template-rows: auto minmax(0, 1fr);
   min-height: 0;
   overflow: hidden;
   padding: 14px;
@@ -1041,11 +1042,6 @@ textarea {
   overflow: auto;
   padding: 8px;
   white-space: pre-wrap;
-}
-
-.emptyTrace {
-  color: #667085;
-  margin: 0;
 }
 
 .viewGrid {

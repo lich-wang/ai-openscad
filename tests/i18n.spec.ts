@@ -35,7 +35,8 @@ test.describe("browser locale", () => {
       await expect(page.getByText("Tell the agent what to build")).toBeVisible();
       await expect(page.getByText("Vision Model")).toBeVisible();
       await expect(page.getByRole("button", { name: /^Generate$/ })).toBeVisible();
-      await expect(page.getByText("Generate, compile, or review to see prompts here.")).toBeVisible();
+      await expect(page.getByRole("heading", { name: "Agent Thinking" })).toHaveCount(0);
+      await expect(page.getByText("Generate, compile, or review to see prompts here.")).toHaveCount(0);
       await expect(page.getByRole("button", { name: "No key?" }).first()).toBeVisible();
     });
   });
@@ -52,7 +53,8 @@ test.describe("browser locale", () => {
       await expect(page.getByText("告诉 Agent 要做什么")).toBeVisible();
       await expect(page.getByText("图像识别模型")).toBeVisible();
       await expect(page.getByRole("button", { name: /^生成$/ })).toBeVisible();
-      await expect(page.getByText("生成、编译或评审后会在这里显示提示词。")).toBeVisible();
+      await expect(page.getByRole("heading", { name: "AI 思考" })).toHaveCount(0);
+      await expect(page.getByText("生成、编译或评审后会在这里显示提示词。")).toHaveCount(0);
       await expect(page.getByRole("button", { name: "没有 Key？" }).first()).toBeVisible();
     });
   });

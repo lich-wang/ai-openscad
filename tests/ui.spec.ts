@@ -96,6 +96,25 @@ const project = {
   updatedAt: "2026-06-26T00:00:00.000Z"
 };
 
+const emptyProject = {
+  id: "project-empty-ui-test",
+  title: "Empty UI Test",
+  requirement: "",
+  originalRequirement: "",
+  codeModelId: "mimo-v2.5",
+  visionModelId: "mimo-v2.5",
+  currentCode: "",
+  proposedCode: "",
+  compilerOutput: "",
+  review: null,
+  stl: "",
+  views: { front: "", top: "", right: "" },
+  iterations: [],
+  runEvents: [],
+  promptTrace: [],
+  updatedAt: "2026-06-26T00:00:00.000Z"
+};
+
 async function expectLeftPanelOrder(page: Page) {
   const classOrder = await page.locator(".controlPanel").evaluate((panel) =>
     Array.from(panel.children)
@@ -414,6 +433,38 @@ test("desktop workbench keeps controls visible and matches screenshot", async ({
   await expect(page.locator(".agentInput")).toHaveValue("");
   await page.locator(".modelHistory button", { hasText: "生成一个30ML的杯子模型" }).click();
   await expect(page.locator(".agentInput")).toHaveValue("生成一个30ML的杯子模型");
+});
+
+test("empty task keeps the Agent Run surface without a thinking placeholder", async ({
+  page
+}) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.addInitScript((storedProject) => {
+    localStorage.setItem("ai-openscad.project", JSON.stringify(storedProject));
+  }, emptyProject);
+
+  await page.goto("/");
+
+  const agentRun = page.locator(".agentRun");
+  const agentRunBox = await agentRun.boundingBox();
+  const headerBox = await agentRun.getByRole("heading", { name: "Agent Run" }).boundingBox();
+  const timelineBox = await page.locator(".agentTimeline").boundingBox();
+
+  await expect(agentRun.getByRole("heading", { name: "Agent Run" })).toBeVisible();
+  await expect(page.locator(".agentTimeline")).toBeVisible();
+  await expect(page.locator(".agentTimeline .agentEvent")).toHaveCount(0);
+  await expect(agentRun.getByRole("heading", { name: "Agent Thinking" })).toHaveCount(0);
+  await expect(agentRun).not.toContainText("Generate, compile, or review to see prompts here.");
+  expect(agentRunBox).not.toBeNull();
+  expect(headerBox).not.toBeNull();
+  expect(timelineBox).not.toBeNull();
+  expect(headerBox!.y - agentRunBox!.y).toBeLessThanOrEqual(20);
+  expect(headerBox!.y).toBeLessThan(timelineBox!.y);
+
+  await expect(agentRun).toHaveScreenshot("empty-agent-run.png", {
+    animations: "disabled",
+    maxDiffPixelRatio: WORKBENCH_SCREENSHOT_DIFF_RATIO
+  });
 });
 
 test("model history scrolls internally below setup controls", async ({ page }) => {

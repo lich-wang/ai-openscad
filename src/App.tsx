@@ -1156,7 +1156,7 @@ function AgentRunPanel(props: {
           </article>
         ) : null}
 
-        {events.length ? events.map((event) => {
+        {events.map((event) => {
           const codeOpen = Boolean(openCodeEvents[event.id]);
           return (
             <article
@@ -1215,12 +1215,7 @@ function AgentRunPanel(props: {
               ) : null}
             </article>
           );
-        }) : (
-          <article className="agentEvent">
-            <h3>{t(props.locale, "agentThinking")}</h3>
-            <p>{t(props.locale, "emptyTrace")}</p>
-          </article>
-        )}
+        })}
       </div>
     </section>
   );

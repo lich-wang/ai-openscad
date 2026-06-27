@@ -8,7 +8,6 @@ npm-debug.log*
 *.tsbuildinfo
 test-results
 playwright-report
-tests/**/*-snapshots/
 .codex/runtime/
 artifacts/**/*.png
 artifacts/**/*.jpg
