@@ -1,9 +1,10 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 
 const project = {
   id: "project-review-test",
   title: "Review Test",
   requirement: "生成一个30ML的杯子模型",
+  originalRequirement: "生成一个30ML的杯子模型",
   codeModelId: "mimo-v2.5",
   visionModelId: "mimo-v2.5",
   currentCode: "module cup() { difference() { cylinder(h=40, r=18); cylinder(h=38, r=15); } } cup();",
@@ -20,11 +21,26 @@ const project = {
       "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADElEQVR42mP8z8AARQAFAAH/AnH9zAAAAABJRU5ErkJggg=="
   },
   iterations: [],
+  runEvents: [],
   updatedAt: "2026-06-26T00:00:00.000Z"
 };
 
 function delay(milliseconds: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+async function expectTimelineOrder(page: Page, labels: string[]) {
+  const positions = await page.locator(".agentTimeline").evaluate((timeline, expected) => {
+    const text = timeline.textContent ?? "";
+    return (expected as string[]).map((label) => text.indexOf(label));
+  }, labels);
+
+  for (const position of positions) {
+    expect(position).toBeGreaterThanOrEqual(0);
+  }
+  for (let index = 1; index < positions.length; index += 1) {
+    expect(positions[index]).toBeGreaterThan(positions[index - 1]);
+  }
 }
 
 test("review sends MiMo multimodal model and shows editable correction prompt", async ({
@@ -33,7 +49,14 @@ test("review sends MiMo multimodal model and shows editable correction prompt", 
   await page.addInitScript((storedProject) => {
     localStorage.setItem("ai-openscad.llm-api-key", "sk-llm");
     localStorage.setItem("ai-openscad.vision-api-key", "sk-vision");
-    localStorage.setItem("ai-openscad.project", JSON.stringify(storedProject));
+    localStorage.setItem(
+      "ai-openscad.project",
+      JSON.stringify({
+        ...storedProject,
+        requirement: "保持30ML杯子容量，增加杯口圆角倒角。",
+        originalRequirement: "生成一个30ML的杯子模型"
+      })
+    );
   }, project);
 
   let visionModel = "";
@@ -45,7 +68,10 @@ test("review sends MiMo multimodal model and shows editable correction prompt", 
       messages: Array<{ content: unknown }>;
     };
     visionModel = body.model;
-    expect(JSON.stringify(body.messages[1].content)).toContain("image_url");
+    const userMessage = JSON.stringify(body.messages[1].content);
+    expect(userMessage).toContain("image_url");
+    expect(userMessage).toContain("生成一个30ML的杯子模型");
+    expect(userMessage).not.toContain("增加杯口圆角倒角");
     await delay(250);
     await route.fulfill({
       status: 200,
@@ -92,6 +118,11 @@ test("review sends MiMo multimodal model and shows editable correction prompt", 
   ).toBeVisible();
   await expect(page.locator(".resultPanel .outputBlock")).toHaveCount(0);
   await expect(page.locator(".agentInput")).toHaveValue(/增加杯口圆角倒角/);
+  const storedAfterReview = await page.evaluate(() =>
+    JSON.parse(localStorage.getItem("ai-openscad.project") ?? "{}")
+  );
+  expect(storedAfterReview.originalRequirement).toBe("生成一个30ML的杯子模型");
+  expect(storedAfterReview.requirement).toContain("增加杯口圆角倒角");
   await expect(
     page.locator(".agentRun .correctionPromptPreview").getByText("保持30ML杯子容量", {
       exact: false
@@ -110,6 +141,7 @@ test("generation streams code and automatically renders draft views", async ({ p
       JSON.stringify({
         ...storedProject,
         currentCode: "",
+        originalRequirement: "",
         views: { front: "", top: "", right: "" },
         review: null,
         promptTrace: []
@@ -119,6 +151,7 @@ test("generation streams code and automatically renders draft views", async ({ p
   }, project);
 
   let streamRequested = false;
+  let reviewRequirement = "";
   await page.route("**/api/llm", async (route) => {
     const body = route.request().postDataJSON() as { stream?: boolean };
     streamRequested = body.stream === true;
@@ -136,6 +169,25 @@ test("generation streams code and automatically renders draft views", async ({ p
       ].join("\n")
     });
   });
+  await page.route("**/api/vision", async (route) => {
+    const body = route.request().postDataJSON() as {
+      messages: Array<{ content: unknown }>;
+    };
+    reviewRequirement = JSON.stringify(body.messages[1].content);
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        content: JSON.stringify({
+          summary: "首轮评审完成。",
+          issues: ["需要增加杯口倒角"],
+          correctionPrompt:
+            "保留30ML杯子需求，针对当前OpenSCAD增加杯口倒角并保持杯壁厚度。",
+          confidence: 0.8
+        })
+      })
+    });
+  });
 
   await page.goto("/");
   const requestPromise = page.waitForRequest("**/api/llm");
@@ -146,20 +198,74 @@ test("generation streams code and automatically renders draft views", async ({ p
   await requestPromise;
 
   await expect(page.locator(".codeEditor").first()).toHaveValue(/cube\(10\);/);
-  await expect(page.locator(".agentCodePreview")).toContainText("cube(10);");
+  await expect(page.locator(".agentRun").getByText("Generated OpenSCAD code")).toBeVisible();
   await expect(page.locator('.workflowStage[data-stage="render"]')).toContainText("Active", {
     timeout: 10000
   });
-  await expect(page.locator(".agentRun").getByText("Preparing draft render...")).toBeVisible({
+  await expect(page.locator(".agentRun").getByText("Render started")).toBeVisible({
     timeout: 10000
   });
   await expect(page.locator(".viewTile img")).toHaveCount(3, { timeout: 30000 });
   await expect(page.getByRole("button", { name: /STL/i })).toBeVisible();
+  await expect(page.locator(".agentRun").getByText("Render finished")).toBeVisible({
+    timeout: 30000
+  });
   await expect(page.locator(".agentRun").getByText("Draft precision was used for fast review.")).toBeVisible({
     timeout: 30000
   });
+  await expectTimelineOrder(page, [
+    "User request",
+    "Generated OpenSCAD code",
+    "Render started",
+    "Render finished"
+  ]);
+  await expect(page.locator(".chatCodeDisclosure")).toBeVisible();
+  await expect(page.locator(".chatCodeDisclosure")).not.toHaveAttribute("open", "");
+  await expect(page.locator(".agentCodePreview")).toHaveCount(0);
+  const generatedCodeDisclosure = page.locator(".chatCodeDisclosure").first();
+  const codeToggle = page.getByRole("button", { name: /OpenSCAD/i }).first();
+  await expect(codeToggle).toBeVisible();
+  await codeToggle.focus();
+  await expect(codeToggle).toBeFocused();
+  await page.keyboard.press("Enter");
+  await expect(generatedCodeDisclosure).toHaveAttribute("open", "");
+  await expect(generatedCodeDisclosure.locator(".agentCodePreview")).toContainText("cube(10);");
   await expect(page.locator('.workflowStage[data-stage="render"]')).toContainText("Complete");
+  const storedAfterGenerate = await page.evaluate(() =>
+    JSON.parse(localStorage.getItem("ai-openscad.project") ?? "{}")
+  );
+  expect(storedAfterGenerate.runEvents).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({
+        role: "user",
+        status: "complete",
+        content: expect.stringContaining("生成一个30ML的杯子模型")
+      }),
+      expect.objectContaining({
+        role: "assistant",
+        title: "Generated OpenSCAD code",
+        status: "complete",
+        code: expect.stringContaining("cube(10);")
+      }),
+      expect.objectContaining({
+        role: "tool",
+        title: "Render started"
+      }),
+      expect.objectContaining({
+        role: "tool",
+        title: "Render finished"
+      })
+    ])
+  );
   expect(streamRequested).toBe(true);
+  await page.getByRole("button", { name: /^Review$/i }).click();
+  await expect(page.locator(".agentInput")).toHaveValue(/增加杯口倒角/);
+  const storedAfterFirstReview = await page.evaluate(() =>
+    JSON.parse(localStorage.getItem("ai-openscad.project") ?? "{}")
+  );
+  expect(reviewRequirement).toContain("生成一个30ML的杯子模型");
+  expect(storedAfterFirstReview.originalRequirement).toBe("生成一个30ML的杯子模型");
+  expect(storedAfterFirstReview.requirement).toContain("增加杯口倒角");
 });
 
 test("MiMo generation can use the hosted key when the user key is empty", async ({
@@ -213,6 +319,7 @@ test("iterate again uses the editable correction prompt then renders a new model
       "ai-openscad.project",
       JSON.stringify({
         ...storedProject,
+        originalRequirement: "生成一个30ML的杯子模型",
         review: {
           summary: "杯口太厚",
           issues: ["杯壁需要更薄"],
@@ -230,6 +337,7 @@ test("iterate again uses the editable correction prompt then renders a new model
       messages: Array<{ content: string }>;
     };
     prompt = body.messages[1].content;
+    await delay(800);
     await route.fulfill({
       status: 200,
       contentType: "text/event-stream",
@@ -248,15 +356,59 @@ test("iterate again uses the editable correction prompt then renders a new model
   await page.locator(".agentInput").fill("保持30ML杯子容量，把杯壁调薄，并把把手再大一点");
   await page.getByRole("button", { name: /Iterate Again/i }).click();
 
+  await expect(page.locator('.workflowStage[data-stage="code"]')).toContainText("Active");
+  await expect(page.locator('.workflowStage[data-stage="render"]')).toContainText("Waiting");
+  await expect(page.locator('.workflowStage[data-stage="review"]')).toContainText("Waiting");
+  await expect(page.locator('.workflowStage[data-stage="render"]')).toContainText("Active", {
+    timeout: 10000
+  });
   await expect(page.getByRole("heading", { name: "Proposed Revision" })).toHaveCount(0);
   await expect(page.locator(".codeEditor").first()).toHaveValue(/revised/);
-  await expect(page.locator(".agentCodePreview")).toContainText("revised");
+  await expect(page.locator(".chatCodeDisclosure")).toBeVisible();
+  await expect(page.locator(".agentCodePreview")).toHaveCount(0);
   await expect(page.locator(".viewTile img")).toHaveCount(3, { timeout: 30000 });
   await expect(page.getByRole("button", { name: /Review/i })).toBeVisible();
+  await expect(page.locator('.workflowStage[data-stage="review"]')).toContainText("Waiting");
+  await expect(page.locator(".agentRun").getByText("Iteration started")).toBeVisible();
+  await expect(
+    page.locator(".agentRun").getByText("保持30ML杯子容量，把杯壁调薄，并把把手再大一点")
+  ).toBeVisible();
+  await expectTimelineOrder(page, [
+    "User request",
+    "Iteration started",
+    "Generated OpenSCAD code",
+    "Render started",
+    "Render finished"
+  ]);
+  const storedAfterIteration = await page.evaluate(() =>
+    JSON.parse(localStorage.getItem("ai-openscad.project") ?? "{}")
+  );
+  expect(storedAfterIteration.runEvents).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({
+        role: "user",
+        title: "Iteration started",
+        status: "complete",
+        content: expect.stringContaining("把把手再大一点")
+      }),
+      expect.objectContaining({
+        role: "assistant",
+        title: "Generated OpenSCAD code",
+        status: "complete",
+        code: expect.stringContaining("revised")
+      }),
+      expect.objectContaining({
+        role: "tool",
+        title: "Render finished"
+      })
+    ])
+  );
+  expect(prompt).toContain("Original requirement:\n生成一个30ML的杯子模型");
+  expect(prompt).toContain("Current OpenSCAD:");
+  expect(prompt).toContain("module cup()");
   expect(prompt).toContain("杯口太厚");
   expect(prompt).toContain("杯壁需要更薄");
-  expect(prompt).toContain("保持30ML杯子容量");
-  expect(prompt).toContain("把把手再大一点");
+  expect(prompt).toContain("User iteration notes:\n保持30ML杯子容量，把杯壁调薄，并把把手再大一点");
 });
 
 test("accepting a revision requires a fresh visual review before another iteration", async ({
@@ -318,6 +470,10 @@ test("accepting a revision requires a fresh visual review before another iterati
   await expect(page.locator(".viewTile img")).toHaveCount(3);
   await expect(page.getByRole("button", { name: /Iterate Again/i })).toHaveCount(0);
   await expect(page.locator(".resultPanel").getByText("No review yet.")).toHaveCount(0);
+  await expect(page.locator(".agentRun")).not.toContainText("旧评审：杯口太厚");
+  await expect(page.locator(".agentRun")).not.toContainText("旧问题");
+  await expect(page.locator(".agentRun")).not.toContainText("根据旧问题继续修正杯口厚度。");
+  await expect(page.locator(".agentInput")).not.toHaveValue(/根据旧问题继续修正杯口厚度/);
   await expect(page.locator('.workflowStage[data-stage="review"]')).toContainText("Waiting");
 });
 

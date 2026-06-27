@@ -46,22 +46,27 @@ three columns:
 
 - Left control panel: basic settings and project import/export first, then the
   new model action and local model list.
-- Center agent panel: run timeline, requirement composer, workflow actions, and
-  advanced OpenSCAD code editing.
+- Center agent panel: pipeline stage arrows, Codex-style chat run stream,
+  requirement composer, workflow actions, and advanced OpenSCAD code editing.
 - Right result panel: large front/top/right views and asset downloads.
 
 ### Main Workflow
 
 1. User writes a requirement, for example a six-slot organizer or a 30 ml cup.
 2. User clicks **Generate**.
-3. The code model streams OpenSCAD into the workbench.
-4. The render adapter compiles the generated OpenSCAD in the browser.
+3. The code model streams OpenSCAD into the center chat stream in real time.
+4. After the complete code arrives, the run stream collapses the code preview
+   and the render adapter compiles the generated OpenSCAD in the browser.
 5. The app captures front, top, and right PNG views from the STL.
 6. User clicks **Review**.
 7. The vision model checks the three views against the original requirement and
    returns a summary, issue list, confidence score, and correction prompt.
-8. The correction prompt becomes editable in the composer.
-9. User clicks **Iterate Again** to generate and render the next draft.
+8. The correction prompt becomes editable in the composer and gives concrete
+   instructions about which OpenSCAD areas or geometry relationships should be
+   changed.
+9. User clicks **Iterate Again** to send the latest accepted/rendered
+   OpenSCAD, the original requirement, review findings, and editable iteration
+   guidance to the LLM, then generate and render the next draft.
 10. User clicks **Final Export** when satisfied.
 11. The app normalizes the model to final precision and downloads `.scad` and
     `.stl` files.
@@ -75,14 +80,20 @@ three columns:
   rendered model.
 - OpenSCAD code remains editable through the advanced code panel.
 - The workbench shows the current workflow stage across the top of the agent
-  panel: code generation, model rendering, and model review.
+  panel as a cyclic pipeline arrow: code generation -> model rendering -> model
+  review -> next iteration.
 - Visual review output belongs in the center agent run stream and its correction
   prompt is copied into the editable composer; the right result panel does not
   duplicate review text, compiler logs, or history.
+- The center run stream uses chat-style records before and after each LLM
+  interaction, similar to Codex desktop. User instructions, streaming assistant
+  output, renderer tool progress, render completion, review output, and iteration
+  events are visible as separate records.
 - The primary composer action follows project state: generate before rendering,
   review after rendering, and iterate again after review.
 - Token estimates and duplicate ready status badges are hidden from the normal
   workbench surface to keep more room for the model list and the three views.
+- AI prompt trace details are not part of the normal workbench surface.
 
 Workbench acceptance criteria:
 
@@ -94,9 +105,14 @@ Workbench acceptance criteria:
   pending revision warnings, and errors remain visible through the agent stage
   strip and center agent stream.
 - The stage strip is informational and not interactive. It has exactly three
-  stages: code generation, model rendering, and model review. Each stage can
-  show waiting, active, complete, or blocked/error state, and the rendering stage
-  becomes active during the automatic render after generation.
+  arrow-shaped stages: code generation, model rendering, and model review. Each
+  stage can show waiting, active, complete, or blocked/error state, and the
+  rendering stage becomes active during the automatic render after generation.
+  The visual treatment should imply that review feedback can cycle back into
+  code generation for another iteration.
+- Starting another iteration resets the current-cycle stage states so code
+  generation becomes active again, rendering waits until code completion, and
+  review waits for the new rendered views.
 - The composer primary action is disabled while any generation, render, review,
   or export task is running. It shows Generate when no rendered views exist,
   Review when views exist and there is no current review, and Iterate Again
@@ -106,9 +122,20 @@ Workbench acceptance criteria:
   revision is waiting for acceptance, the composer shows an acceptance hint
   instead of Generate, Review, or Iterate Again; the user must accept or reject
   the revision before continuing the main workflow.
-- The center agent stream remains the place for generated code, compiler output,
-  render progress, render errors, review summary, review issues, confidence,
-  correction prompt, iteration events, and prompt trace.
+- The center agent stream remains the place for user request records, streaming
+  generated code, collapsed completed code, compiler output, render start,
+  render progress, render completion, render errors, review summary, review
+  issues, confidence, correction prompt, and iteration events. Completed code is
+  collapsed by default so it does not dominate the center panel, while the
+  advanced OpenSCAD editor remains available below the composer.
+- Chat run records include user request, assistant generation/revision,
+  renderer tool start/progress/finished, review start/result, correction prompt
+  ready, iteration start, and error records. Render records may be backed by the
+  MCP/render adapter internally, but the user-facing copy should say render or
+  renderer tool instead of unexplained implementation terms.
+- Streaming and stage status updates should use polite live-region behavior or
+  equivalent accessible status text. Collapsed code controls expose expanded or
+  collapsed state through accessible labels.
 - The right result panel contains only the three orthographic views and asset
   download controls. It must not contain compiler logs, review text, prompt
   trace, or iteration history. On desktop, the front view is the largest view,
@@ -120,8 +147,14 @@ Workbench acceptance criteria:
   the workbench interactive.
 - Stage strip and action states use text labels plus visual treatment, not color
   alone, and preserve keyboard focus order from left panel to agent panel to
-  result panel.
-- Screenshot and E2E coverage should assert the stage strip, left-panel ordering
+  result panel. Chat records distinguish user, assistant, renderer tool, and
+  review roles with labels and layout, not color alone.
+- Screenshot and E2E coverage should assert the arrow pipeline stage strip,
+  current-cycle reset after iteration, Codex-style chat records, collapsed
+  completed code with expand access, render start/done notices, absence of
+  normal-surface prompt trace UI, review-to-correction handoff, iteration
+  requests containing original requirement, latest accepted code, and editable
+  guidance, left-panel ordering
   on desktop and narrower stacked layouts, hidden token/duplicate ready UI,
   right-panel ownership, enlarged views, and primary action transitions across
   generate, render, review, pending-revision, rerender-failure, and iterate
@@ -138,7 +171,8 @@ Workbench acceptance criteria:
   geometry.
 - Detects Chinese vs English input and asks the model to use the same natural
   language for feedback and comments.
-- Streams OpenAI-compatible response chunks into the code panel.
+- Streams OpenAI-compatible response chunks into the chat run stream and the
+  editable code state at the same time.
 
 ### Rendering
 
@@ -162,8 +196,19 @@ Workbench acceptance criteria:
   - `correctionPrompt`
   - `confidence`
 - Falls back gracefully when the model returns malformed or non-JSON review text.
+- The `correctionPrompt` should be specific enough for the text LLM to act on:
+  it should reference the original requirement, the visible view or affected
+  model area, the observed mismatch, constraints to preserve, the affected
+  OpenSCAD modules or geometry relationships when inferable, and sizing,
+  placement, or proportion guidance when available. It must not return revised
+  code.
+- Iteration requests send the latest accepted/rendered OpenSCAD code, original
+  requirement, review summary, issue list, and editable review guidance to the
+  text LLM so the next draft is a targeted modification rather than a fresh
+  unrelated generation.
 - Stores prompt traces for generation, compilation, review, revision, and final
-  export.
+  export in local project data for export/debugging, but normal users do not see
+  a prompt trace panel in the workbench.
 
 ### Export
 
@@ -217,10 +262,10 @@ Important source areas:
 The core project state contains:
 
 - Project identity: `id`, `title`, `updatedAt`
-- User input: `requirement`
+- User input: `requirement`, `originalRequirement`
 - Model settings: `codeModelId`, `visionModelId`
 - Model assets: `currentCode`, `proposedCode`, `stl`, `views`
-- Runtime output: `compilerOutput`, `review`
+- Runtime output: `compilerOutput`, `review`, `runEvents`
 - Audit trail: `iterations`, `promptTrace`
 
 Data is local to the browser unless the user explicitly exports a project JSON

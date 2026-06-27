@@ -68,7 +68,9 @@ ${buildLanguageInstruction(requirement)}
 Return JSON with keys: summary, issues, correctionPrompt, confidence.
 - issues must be an array of strings.
 - confidence must be 0 to 1.
-- correctionPrompt must be a concise, user-editable prompt for the text LLM to revise the current OpenSCAD model. It should preserve the original requirement, mention the specific visual issues to fix, and avoid returning OpenSCAD code.`;
+- correctionPrompt must be a concise, user-editable prompt for the text LLM to revise the current OpenSCAD model.
+- correctionPrompt must preserve the original requirement, name the affected view or model area, describe observed mismatches, mention constraints to preserve, infer affected OpenSCAD modules or geometry relationships when possible, and include sizing, placement, or proportion guidance when available.
+- correctionPrompt should refer to affected OpenSCAD modules or geometry relationships, but avoid returning OpenSCAD code.`;
 }
 
 export function buildVisionUserPrompt(requirement: string, code: string): string {

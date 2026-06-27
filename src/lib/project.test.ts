@@ -11,6 +11,7 @@ describe("project persistence", () => {
   it("exports all project state except API keys", () => {
     const project = createEmptyProject();
     project.requirement = "rounded organizer";
+    project.originalRequirement = "rounded organizer";
     project.currentCode = "cube([10, 10, 10]);";
     project.stl = "solid organizer\nendsolid organizer";
     project.views.front = "data:image/png;base64,front";
@@ -32,8 +33,19 @@ describe("project persistence", () => {
     expect(exported).not.toContain("sk-secret");
     expect(importProject(exported)).toMatchObject({
       requirement: "rounded organizer",
+      originalRequirement: "rounded organizer",
       currentCode: "cube([10, 10, 10]);",
-      stl: "solid organizer\nendsolid organizer"
+      stl: "solid organizer\nendsolid organizer",
+      runEvents: []
+    });
+  });
+
+  it("initializes durable workflow fields for iteration and chat records", () => {
+    const project = createEmptyProject();
+
+    expect(project).toMatchObject({
+      originalRequirement: "",
+      runEvents: []
     });
   });
 

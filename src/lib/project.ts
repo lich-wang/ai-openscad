@@ -15,6 +15,19 @@ export interface ProjectIteration {
   reviewSummary?: string;
 }
 
+export type RunEventRole = "user" | "assistant" | "tool" | "review" | "error";
+export type RunEventStatus = "active" | "complete" | "error";
+
+export interface RunEvent {
+  id: string;
+  createdAt: string;
+  role: RunEventRole;
+  title: string;
+  content: string;
+  status: RunEventStatus;
+  code?: string;
+}
+
 export type PromptTracePhase =
   | "code-generation"
   | "compile"
@@ -36,6 +49,7 @@ export interface ProjectState {
   id: string;
   title: string;
   requirement: string;
+  originalRequirement: string;
   codeModelId: string;
   visionModelId: string;
   currentCode: string;
@@ -48,6 +62,7 @@ export interface ProjectState {
     top: string;
     right: string;
   };
+  runEvents: RunEvent[];
   iterations: ProjectIteration[];
   promptTrace: PromptTraceEntry[];
   updatedAt: string;
@@ -70,6 +85,7 @@ export function createEmptyProject(): ProjectState {
     id: crypto.randomUUID(),
     title: "Untitled OpenSCAD Project",
     requirement: "",
+    originalRequirement: "",
     codeModelId: "mimo-v2.5",
     visionModelId: "mimo-v2.5",
     currentCode: "",
@@ -82,6 +98,7 @@ export function createEmptyProject(): ProjectState {
       top: "",
       right: ""
     },
+    runEvents: [],
     iterations: [],
     promptTrace: [],
     updatedAt: new Date().toISOString()
@@ -173,15 +190,19 @@ export function exportProject(project: ProjectState): string {
 
 export function importProject(serialized: string): ProjectState {
   const parsed = JSON.parse(serialized) as Partial<ProjectState>;
+  const requirement = parsed.requirement ?? "";
   return {
     ...createEmptyProject(),
     ...parsed,
+    requirement,
+    originalRequirement: parsed.originalRequirement ?? requirement,
     views: {
       front: parsed.views?.front ?? "",
       top: parsed.views?.top ?? "",
       right: parsed.views?.right ?? ""
     },
     stl: parsed.stl ?? "",
+    runEvents: parsed.runEvents ?? [],
     iterations: parsed.iterations ?? [],
     promptTrace: parsed.promptTrace ?? []
   };

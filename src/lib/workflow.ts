@@ -4,6 +4,7 @@ function cloneWithUpdate(project: ProjectState): ProjectState {
   return {
     ...project,
     views: { ...project.views },
+    runEvents: [...project.runEvents],
     iterations: [...project.iterations],
     updatedAt: new Date().toISOString()
   };
@@ -34,8 +35,10 @@ export function acceptRevision(project: ProjectState): ProjectState {
   if (!next.proposedCode.trim()) {
     return next;
   }
+  const reviewSummary = next.review?.summary;
   next.currentCode = next.proposedCode;
   next.proposedCode = "";
+  next.review = null;
   next.iterations.push({
     id: crypto.randomUUID(),
     createdAt: new Date().toISOString(),
@@ -43,7 +46,7 @@ export function acceptRevision(project: ProjectState): ProjectState {
     code: next.currentCode,
     modelId: next.codeModelId,
     status: "accepted",
-    reviewSummary: next.review?.summary
+    reviewSummary
   });
   return next;
 }

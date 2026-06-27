@@ -6,6 +6,7 @@ const project = {
   id: "project-ui-test",
   title: "UI Test",
   requirement: "生成一个30ML的杯子模型",
+  originalRequirement: "生成一个30ML的杯子模型",
   codeModelId: "mimo-v2.5",
   visionModelId: "mimo-v2.5",
   currentCode:
@@ -35,6 +36,41 @@ const project = {
       code: "cube(10);",
       modelId: "mimo-v2.5",
       status: "generated"
+    }
+  ],
+  runEvents: [
+    {
+      id: "event-user",
+      createdAt: "2026-06-26T00:00:00.000Z",
+      role: "user",
+      title: "User request",
+      content: "生成一个30ML的杯子模型",
+      status: "complete"
+    },
+    {
+      id: "event-code",
+      createdAt: "2026-06-26T00:00:01.000Z",
+      role: "assistant",
+      title: "Generated OpenSCAD code",
+      content: "Generated OpenSCAD code.",
+      code: "$fn = 32;\nmodule cup() {}\ncup();",
+      status: "complete"
+    },
+    {
+      id: "event-render-start",
+      createdAt: "2026-06-26T00:00:02.000Z",
+      role: "tool",
+      title: "Render started",
+      content: "Renderer tool started draft preview.",
+      status: "complete"
+    },
+    {
+      id: "event-render-done",
+      createdAt: "2026-06-26T00:00:03.000Z",
+      role: "tool",
+      title: "Render finished",
+      content: "Renderer tool finished draft preview.",
+      status: "complete"
     }
   ],
   promptTrace: [
@@ -180,6 +216,20 @@ async function expectStackedFocusOrder(page: Page) {
   );
 }
 
+async function expectTimelineOrder(page: Page, labels: string[]) {
+  const positions = await page.locator(".agentTimeline").evaluate((timeline, expected) => {
+    const text = timeline.textContent ?? "";
+    return (expected as string[]).map((label) => text.indexOf(label));
+  }, labels);
+
+  for (const position of positions) {
+    expect(position).toBeGreaterThanOrEqual(0);
+  }
+  for (let index = 1; index < positions.length; index += 1) {
+    expect(positions[index]).toBeGreaterThan(positions[index - 1]);
+  }
+}
+
 test("desktop workbench keeps controls visible and matches screenshot", async ({
   page
 }) => {
@@ -193,7 +243,11 @@ test("desktop workbench keeps controls visible and matches screenshot", async ({
   await page.goto("/");
 
   await expect(page.getByRole("heading", { name: "Agent Run" })).toBeVisible();
-  await expect(page.locator(".workflowStageStrip")).toBeVisible();
+  await expect(page.locator(".workflowStageStrip.arrowPipeline")).toBeVisible();
+  await expect(page.locator(".workflowStageStrip.arrowPipeline")).toHaveAttribute(
+    "aria-label",
+    "Workflow stages"
+  );
   await expect(page.locator(".workflowStage")).toHaveCount(3);
   await expect(page.locator(".workflowStage").nth(0)).toContainText("Code generation");
   await expect(page.locator(".workflowStage").nth(1)).toContainText("Model rendering");
@@ -205,7 +259,7 @@ test("desktop workbench keeps controls visible and matches screenshot", async ({
   await expect(page.locator(".projectTools").getByText("Project files")).toBeVisible();
   await expect(page.locator(".agentComposer").getByText("Draft preview uses low precision")).toBeVisible();
   await expect(page.locator(".agentComposer textarea")).toHaveCount(1);
-  await expect(page.getByText("User Request")).toHaveCount(0);
+  await expect(page.locator(".agentRun").getByText("User request")).toBeVisible();
   await expect(page.locator(".modelHistory")).toContainText("Models");
   await expect(page.locator(".modelHistory button")).toHaveCount(1);
   await expect(page.locator(".resultPanel").getByRole("button", { name: /STL/i })).toBeVisible();
@@ -217,7 +271,38 @@ test("desktop workbench keeps controls visible and matches screenshot", async ({
   await expect(page.locator(".resultPanel")).not.toContainText("Compiler");
   await expect(page.locator(".resultPanel")).not.toContainText("Review");
   await expect(page.locator(".resultPanel")).not.toContainText("History");
-  await expect(page.locator(".agentRun").getByText("AI Prompt Trace")).toBeVisible();
+  await expect(page.locator(".agentRun").getByText("AI Prompt Trace")).toHaveCount(0);
+  await expect(page.locator(".agentRun").getByText("User request")).toBeVisible();
+  await expect(page.locator(".agentRun").getByText("Generated OpenSCAD code")).toBeVisible();
+  await expect(page.locator(".agentRun").getByText("Render started")).toBeVisible();
+  await expect(page.locator(".agentRun").getByText("Render finished")).toBeVisible();
+  await expectTimelineOrder(page, [
+    "User request",
+    "Generated OpenSCAD code",
+    "Render started",
+    "Render finished"
+  ]);
+  const chatCode = page.locator(".chatCodeDisclosure").first();
+  await expect(chatCode).toBeVisible();
+  await expect(chatCode).not.toHaveAttribute("open", "");
+  await expect(chatCode).toHaveScreenshot("chat-code-collapsed.png", {
+    animations: "disabled",
+    maxDiffPixelRatio: WORKBENCH_SCREENSHOT_DIFF_RATIO
+  });
+  const chatCodeToggle = chatCode.getByRole("button", { name: /OpenSCAD/i });
+  await expect(chatCodeToggle).toBeVisible();
+  await chatCodeToggle.focus();
+  await expect(chatCodeToggle).toBeFocused();
+  await expect(page.locator(".agentCodePreview")).toHaveCount(0);
+  await page.keyboard.press("Enter");
+  await expect(chatCode).toHaveAttribute("open", "");
+  await expect(chatCode.locator(".agentCodePreview")).toContainText("module cup");
+  await expect(chatCode).toHaveScreenshot("chat-code-expanded.png", {
+    animations: "disabled",
+    maxDiffPixelRatio: WORKBENCH_SCREENSHOT_DIFF_RATIO
+  });
+  await page.keyboard.press("Enter");
+  await expect(chatCode).not.toHaveAttribute("open", "");
   await expect(page.locator(".resultPanel").getByText("AI Prompt Trace")).toHaveCount(0);
   await expect(page.locator(".sidebarSettings")).toHaveAttribute("open", "");
   await expect(page.locator(".controlPanel .modelHistory")).toBeVisible();
@@ -386,6 +471,15 @@ test("stacked layout keeps setup controls before model actions", async ({ page }
     pageWidthWithTooltip.clientWidth
   );
   await page.mouse.move(0, 0);
+
+  await page.locator(".agentRun").scrollIntoViewIfNeeded();
+  const stackedChatCode = page.locator(".chatCodeDisclosure").first();
+  await expect(stackedChatCode).toBeVisible();
+  await expect(stackedChatCode).not.toHaveAttribute("open", "");
+  await expect(page.locator(".agentRun")).toHaveScreenshot("stacked-agent-run-collapsed.png", {
+    animations: "disabled",
+    maxDiffPixelRatio: WORKBENCH_SCREENSHOT_DIFF_RATIO
+  });
 
   await expect(page).toHaveScreenshot("stacked-workbench.png", {
     animations: "disabled",

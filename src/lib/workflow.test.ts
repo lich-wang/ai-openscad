@@ -21,6 +21,7 @@ describe("revision workflow", () => {
 
     expect(accepted.currentCode).toBe("sphere(10);");
     expect(accepted.proposedCode).toBe("");
+    expect(accepted.review).toBeNull();
     expect(accepted.iterations.at(-1)?.status).toBe("accepted");
   });
 

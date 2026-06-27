@@ -64,7 +64,7 @@ export async function reviewViews(input: {
     responseFormat: "json"
   });
   const content = await sendGatewayRequest(request);
-  const review = parseReview(content);
+  const review = parseReview(content, input.requirement);
   return {
     review,
     trace: createPromptTraceEntry({
@@ -218,7 +218,7 @@ function stripCodeFence(content: string): string {
   return (match?.[1] ?? content).trim();
 }
 
-function parseReview(content: string): VisionReview {
+function parseReview(content: string, requirement = ""): VisionReview {
   try {
     const parsed = JSON.parse(content) as Partial<VisionReview>;
     const summary = String(parsed.summary ?? "Review completed.");
@@ -228,7 +228,12 @@ function parseReview(content: string): VisionReview {
     return {
       summary,
       issues,
-      correctionPrompt: buildFallbackCorrectionPrompt(summary, issues, parsed.correctionPrompt),
+      correctionPrompt: buildFallbackCorrectionPrompt(
+        summary,
+        issues,
+        parsed.correctionPrompt,
+        requirement
+      ),
       confidence:
         typeof parsed.confidence === "number"
           ? Math.min(1, Math.max(0, parsed.confidence))
@@ -240,7 +245,7 @@ function parseReview(content: string): VisionReview {
       issues: ["The model returned non-JSON review text."],
       correctionPrompt: buildFallbackCorrectionPrompt(content, [
         "The model returned non-JSON review text."
-      ]),
+      ], undefined, requirement),
       confidence: 0.5
     };
   }
@@ -249,15 +254,39 @@ function parseReview(content: string): VisionReview {
 function buildFallbackCorrectionPrompt(
   summary: string,
   issues: string[],
-  correctionPrompt?: unknown
+  correctionPrompt?: unknown,
+  requirement = ""
 ): string {
-  if (typeof correctionPrompt === "string" && correctionPrompt.trim()) {
+  if (
+    typeof correctionPrompt === "string" &&
+    correctionPrompt.trim() &&
+    !isVagueCorrectionPrompt(correctionPrompt)
+  ) {
     return correctionPrompt.trim();
   }
   return [
     "Revise the current OpenSCAD model according to this visual review.",
+    `Original requirement: ${requirement || "Preserve the original user requirement."}`,
     `Review summary: ${summary}`,
-    `Issues: ${issues.join("; ") || "No specific issues."}`,
+    `Observed visual issues: ${issues.join("; ") || "No specific issues."}`,
+    "Target the affected OpenSCAD modules or geometry relationships that likely control those visible areas.",
+    "Preserve dimensions, printable geometry, and any requirement details not mentioned by the review.",
+    "Add sizing, placement, or proportion changes only where they directly address the observed issues.",
     "Preserve the original user requirement and return a complete updated OpenSCAD source file."
   ].join("\n");
+}
+
+function isVagueCorrectionPrompt(prompt: string): boolean {
+  const text = prompt.trim();
+  if (text.length < 24) {
+    return true;
+  }
+  const genericPhrases = [
+    "改好一点",
+    "优化一下",
+    "make it better",
+    "improve it",
+    "fix it"
+  ];
+  return genericPhrases.some((phrase) => text.toLowerCase().includes(phrase));
 }

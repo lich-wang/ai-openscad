@@ -522,7 +522,7 @@ textarea {
 
 .workflowStageStrip {
   display: grid;
-  gap: 10px;
+  gap: 0;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   list-style: none;
   margin: 0;
@@ -532,11 +532,48 @@ textarea {
 .workflowStage {
   background: #f8fafc;
   border: 1px solid #d7dee8;
-  border-radius: 8px;
+  border-radius: 0;
   display: grid;
   gap: 4px;
   min-height: 66px;
-  padding: 10px 12px;
+  padding: 10px 18px 10px 26px;
+  position: relative;
+}
+
+.workflowStage:first-child {
+  border-radius: 8px 0 0 8px;
+  padding-left: 14px;
+}
+
+.workflowStage:last-child {
+  border-radius: 0 8px 8px 0;
+}
+
+.arrowPipeline .workflowStage:not(:last-child)::after {
+  background: inherit;
+  border-right: 1px solid currentColor;
+  border-top: 1px solid currentColor;
+  color: #d7dee8;
+  content: "";
+  height: 18px;
+  position: absolute;
+  right: -10px;
+  top: calc(50% - 9px);
+  transform: rotate(45deg);
+  width: 18px;
+  z-index: 2;
+}
+
+.arrowPipeline .workflowStage.active:not(:last-child)::after {
+  color: #77c7b6;
+}
+
+.arrowPipeline .workflowStage.complete:not(:last-child)::after {
+  color: #9ec5f8;
+}
+
+.arrowPipeline .workflowStage.error:not(:last-child)::after {
+  color: #f7b4b4;
 }
 
 .workflowStageName {
@@ -691,6 +728,31 @@ textarea {
   padding: 11px 12px;
 }
 
+.chatEvent.user {
+  background: #f1faf7;
+  border-color: #b9dfd4;
+}
+
+.chatEvent.assistant {
+  background: #f8fbff;
+  border-color: #cfe0f6;
+}
+
+.chatEvent.tool {
+  background: #fbfaf7;
+  border-color: #e5d8b7;
+}
+
+.chatEvent.review {
+  background: #fffaf0;
+  border-color: #f0d49a;
+}
+
+.chatEvent.error {
+  background: #fff1f1;
+  border-color: #f7b4b4;
+}
+
 .agentEvent h3 {
   color: #1f2937;
   font-size: 14px;
@@ -751,6 +813,45 @@ textarea {
   overflow: auto;
   padding: 10px;
   white-space: pre-wrap;
+}
+
+.chatCodeDisclosure {
+  background: #ffffff;
+  border: 1px solid #d7dee8;
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.chatCodeDisclosure summary {
+  align-items: center;
+  color: #344054;
+  cursor: pointer;
+  display: flex;
+  justify-content: space-between;
+  list-style: none;
+  padding: 8px 10px;
+}
+
+.chatCodeDisclosure summary::-webkit-details-marker {
+  display: none;
+}
+
+.chatCodeDisclosure summary span {
+  align-items: center;
+  display: inline-flex;
+  font-size: 13px;
+  font-weight: 800;
+  gap: 8px;
+}
+
+.chatCodeDisclosure summary small {
+  color: #667085;
+  font-size: 12px;
+}
+
+.chatCodeDisclosure .agentCodePreview {
+  border-radius: 0;
+  max-height: 220px;
 }
 
 .userEvent {

@@ -38,7 +38,10 @@ import {
   saveProject,
   saveVisionApiKey,
   upsertProjectList,
-  type ProjectState
+  type ProjectState,
+  type RunEvent,
+  type RunEventRole,
+  type RunEventStatus
 } from "./lib/project";
 import { createRenderMcp, type RenderMcpStage } from "./lib/render";
 import {
@@ -108,6 +111,37 @@ export default function App() {
     setBusy(nextBusy);
   }
 
+  function createRunEvent(input: {
+    role: RunEventRole;
+    title: string;
+    content: string;
+    status?: RunEventStatus;
+    code?: string;
+    id?: string;
+  }): RunEvent {
+    return {
+      id: input.id ?? crypto.randomUUID(),
+      createdAt: new Date().toISOString(),
+      role: input.role,
+      title: input.title,
+      content: input.content,
+      status: input.status ?? "complete",
+      code: input.code
+    };
+  }
+
+  function appendRunEvent(event: RunEvent) {
+    setProject((current) => ({
+      ...current,
+      runEvents: [...current.runEvents, event],
+      updatedAt: new Date().toISOString()
+    }));
+  }
+
+  function originalRequirementFor(current: ProjectState): string {
+    return current.originalRequirement.trim() || current.requirement.trim();
+  }
+
   async function runSafely(action: BusyState, task: () => Promise<void>) {
     updateBusy(action);
     setError("");
@@ -115,8 +149,15 @@ export default function App() {
     try {
       await task();
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : String(caught));
+      const message = caught instanceof Error ? caught.message : String(caught);
+      setError(message);
       setErrorStage(workflowStageForBusy(busyRef.current === "idle" ? action : busyRef.current));
+      appendRunEvent(createRunEvent({
+        role: "error",
+        title: tr("workflowError"),
+        content: message,
+        status: "error"
+      }));
     } finally {
       setRenderStatus("");
       updateBusy("idle");
@@ -143,25 +184,44 @@ export default function App() {
       if (!project.requirement.trim()) {
         throw new Error(tr("missingRequirement"));
       }
+      const originalRequirement = project.requirement.trim();
+      const userEvent = createRunEvent({
+        role: "user",
+        title: tr("userRequest"),
+        content: originalRequirement
+      });
+      const codeEventId = crypto.randomUUID();
+      const codeEvent = createRunEvent({
+        id: codeEventId,
+        role: "assistant",
+        title: tr("generatedCode"),
+        content: tr("streamingCode"),
+        status: "active"
+      });
       setProject((current) => ({
         ...current,
+        originalRequirement,
         currentCode: "",
         proposedCode: "",
         review: null,
         stl: "",
         views: { front: "", top: "", right: "" },
-        compilerOutput: tr("streamingCode")
+        compilerOutput: tr("streamingCode"),
+        runEvents: [userEvent, codeEvent]
       }));
       const { code, trace } = await generateOpenScad({
         apiKey: llmApiKey,
         modelId: project.codeModelId,
-        requirement: project.requirement,
+        requirement: originalRequirement,
         precision: "draft",
         onToken: (streamedCode) => {
           setProject((current) => ({
             ...current,
             currentCode: streamedCode,
-            compilerOutput: tr("streamingCode")
+            compilerOutput: tr("streamingCode"),
+            runEvents: current.runEvents.map((event) =>
+              event.id === codeEventId ? { ...event, code: streamedCode } : event
+            )
           }));
         }
       });
@@ -173,6 +233,11 @@ export default function App() {
         stl: "",
         views: { front: "", top: "", right: "" },
         compilerOutput: tr("renderingDraft"),
+        runEvents: current.runEvents.map((event) =>
+          event.id === codeEventId
+            ? { ...event, content: "", code, status: "complete" }
+            : event
+        ),
         promptTrace: [...current.promptTrace, trace],
         updatedAt: new Date().toISOString(),
         iterations: [
@@ -180,7 +245,7 @@ export default function App() {
           {
             id: crypto.randomUUID(),
             createdAt: new Date().toISOString(),
-            requirement: current.requirement,
+            requirement: current.originalRequirement,
             code,
             modelId: current.codeModelId,
             status: "generated"
@@ -188,6 +253,11 @@ export default function App() {
         ]
       }));
       updateBusy("compiling");
+      appendRunEvent(createRunEvent({
+        role: "tool",
+        title: tr("renderStarted"),
+        content: tr("renderStarted")
+      }));
       const rendered = await compileDraftCode(code);
       if (!rendered.ok || !rendered.views || !rendered.stl) {
         setProject((current) => ({
@@ -198,6 +268,11 @@ export default function App() {
         }));
         throw new Error(rendered.diagnostics);
       }
+      appendRunEvent(createRunEvent({
+        role: "tool",
+        title: tr("renderFinished"),
+        content: `${rendered.diagnostics}\n${tr("compiledDraft")}`
+      }));
       setProject((current) => ({
         ...current,
         currentCode: code,
@@ -228,6 +303,11 @@ export default function App() {
       if (!project.currentCode.trim()) {
         throw new Error(tr("missingCode"));
       }
+      appendRunEvent(createRunEvent({
+        role: "tool",
+        title: tr("renderStarted"),
+        content: tr("renderStarted")
+      }));
       const rendered = await compileDraftCode(project.currentCode);
       if (!rendered.ok || !rendered.views || !rendered.stl) {
         setProject((current) => ({
@@ -238,6 +318,11 @@ export default function App() {
         }));
         throw new Error(rendered.diagnostics);
       }
+      appendRunEvent(createRunEvent({
+        role: "tool",
+        title: tr("renderFinished"),
+        content: `${rendered.diagnostics}\n${tr("compiledDraft")}`
+      }));
       setProject((current) => ({
         ...current,
         review: null,
@@ -311,19 +396,50 @@ export default function App() {
         throw new Error(tr("compileBeforeReview"));
       }
       requireVisionApiKey();
+      const originalRequirement = originalRequirementFor(project);
+      appendRunEvent(createRunEvent({
+        role: "review",
+        title: tr("reviewStarted"),
+        content: tr("reviewStarted"),
+        status: "active"
+      }));
       const { review, trace: reviewTrace } = await reviewViews({
         apiKey: visionApiKey,
         modelId: project.visionModelId,
-        requirement: project.requirement,
+        requirement: originalRequirement,
         code: project.currentCode,
         images: [project.views.front, project.views.top, project.views.right]
       });
       setProject((current) => ({
         ...current,
+        originalRequirement: current.originalRequirement.trim()
+          ? current.originalRequirement
+          : originalRequirement,
         review,
         requirement: review.correctionPrompt || current.requirement,
         promptTrace: [...current.promptTrace, reviewTrace],
         compilerOutput: tr("visionComplete"),
+        runEvents: [
+          ...current.runEvents.filter((event) => event.title !== tr("reviewStarted")),
+          createRunEvent({
+            role: "review",
+            title: tr("visionComplete"),
+            content: tr("visionComplete"),
+            status: "complete"
+          }),
+          createRunEvent({
+            role: "review",
+            title: tr("visualReview"),
+            content: review.summary,
+            status: "complete"
+          }),
+          createRunEvent({
+            role: "review",
+            title: tr("correctionPrompt"),
+            content: review.correctionPrompt,
+            status: "complete"
+          })
+        ],
         updatedAt: new Date().toISOString(),
         iterations: [
           ...current.iterations,
@@ -347,17 +463,45 @@ export default function App() {
       if (!project.review) {
         throw new Error(tr("reviewBeforeIterate"));
       }
+      const originalRequirement = originalRequirementFor(project);
       const iterationPrompt = project.requirement.trim() || project.review.correctionPrompt;
+      const codeEventId = crypto.randomUUID();
       setProject((current) => ({
         ...current,
         currentCode: "",
         proposedCode: "",
-        compilerOutput: tr("streamingIteration")
+        review: null,
+        views: { front: "", top: "", right: "" },
+        stl: "",
+        compilerOutput: tr("streamingIteration"),
+        runEvents: [
+          ...(current.runEvents.length
+            ? current.runEvents
+            : [
+                createRunEvent({
+                  role: "user",
+                  title: tr("userRequest"),
+                  content: originalRequirement
+                })
+              ]),
+          createRunEvent({
+            role: "user",
+            title: tr("iterationStarted"),
+            content: iterationPrompt
+          }),
+          createRunEvent({
+            id: codeEventId,
+            role: "assistant",
+            title: tr("generatedCode"),
+            content: tr("streamingIteration"),
+            status: "active"
+          })
+        ]
       }));
       const { code, trace } = await proposeRevision({
         apiKey: llmApiKey,
         modelId: project.codeModelId,
-        requirement: iterationPrompt,
+        requirement: originalRequirement,
         code: project.currentCode,
         review: project.review,
         userNotes: iterationPrompt,
@@ -366,7 +510,10 @@ export default function App() {
           setProject((current) => ({
             ...current,
             currentCode: streamedCode,
-            compilerOutput: tr("streamingIteration")
+            compilerOutput: tr("streamingIteration"),
+            runEvents: current.runEvents.map((event) =>
+              event.id === codeEventId ? { ...event, code: streamedCode } : event
+            )
           }));
         }
       });
@@ -378,6 +525,11 @@ export default function App() {
         views: { front: "", top: "", right: "" },
         stl: "",
         compilerOutput: tr("renderingDraft"),
+        runEvents: current.runEvents.map((event) =>
+          event.id === codeEventId
+            ? { ...event, content: "", code, status: "complete" }
+            : event
+        ),
         promptTrace: [...current.promptTrace, trace],
         updatedAt: new Date().toISOString(),
         iterations: [
@@ -393,6 +545,11 @@ export default function App() {
         ]
       }));
       updateBusy("compiling");
+      appendRunEvent(createRunEvent({
+        role: "tool",
+        title: tr("renderStarted"),
+        content: tr("renderStarted")
+      }));
       const rendered = await compileDraftCode(code);
       if (!rendered.ok || !rendered.views || !rendered.stl) {
         setProject((current) => ({
@@ -403,6 +560,11 @@ export default function App() {
         }));
         throw new Error(rendered.diagnostics);
       }
+      appendRunEvent(createRunEvent({
+        role: "tool",
+        title: tr("renderFinished"),
+        content: `${rendered.diagnostics}\n${tr("compiledDraft")}`
+      }));
       setProject((current) => ({
         ...current,
         currentCode: code,
@@ -946,7 +1108,7 @@ function WorkflowStageStrip(props: {
     review: "stageReview"
   };
   return (
-    <ol className="workflowStageStrip" aria-label={t(props.locale, "workflowStages")}>
+    <ol className="workflowStageStrip arrowPipeline" aria-label={t(props.locale, "workflowStages")}>
       {props.stages.map((stage) => (
         <li
           className={`workflowStage ${stage.state}`}
@@ -972,10 +1134,10 @@ function AgentRunPanel(props: {
   pendingRevision: boolean;
   project: ProjectState;
 }) {
-  const latestTrace = props.project.promptTrace.slice(-4).reverse();
-  const visibleCode = props.project.proposedCode || props.project.currentCode;
+  const [openCodeEvents, setOpenCodeEvents] = useState<Record<string, boolean>>({});
+  const events = props.project.runEvents;
   return (
-    <section className="agentRun">
+    <section className="agentRun" aria-live="polite">
       <div className="panelHeader">
         <h2>{t(props.locale, "agentRun")}</h2>
         <span>
@@ -994,74 +1156,71 @@ function AgentRunPanel(props: {
           </article>
         ) : null}
 
-        <article className="agentEvent">
-          <h3>{t(props.locale, "agentThinking")}</h3>
-          <p>
-            {props.busy === "generating"
-              ? t(props.locale, "streamingCode")
-              : props.project.currentCode
-                ? t(props.locale, "generatedCode")
-                : t(props.locale, "emptyTrace")}
-          </p>
-        </article>
-
-        {visibleCode ? (
-          <article className="agentEvent">
-            <h3>{t(props.locale, "generatedOutput")}</h3>
-            <pre className="agentCodePreview">{visibleCode}</pre>
-          </article>
-        ) : null}
-
-        {props.compilerOutput ||
-        props.project.views.front ||
-        props.project.views.top ||
-        props.project.views.right ? (
-          <article className="agentEvent">
-            <h3>{t(props.locale, "draftRender")}</h3>
-            <p>{props.compilerOutput || t(props.locale, "compiledDraft")}</p>
-          </article>
-        ) : null}
-
-        {props.project.review ? (
-          <article className="agentEvent">
-            <h3>{t(props.locale, "visualReview")}</h3>
-            <p>{props.project.review.summary}</p>
-            <ul>
-              {props.project.review.issues.map((issue) => (
-                <li key={issue}>{issue}</li>
-              ))}
-            </ul>
-            <div className="correctionPromptPreview">
-              <span>{t(props.locale, "correctionPrompt")}</span>
-              <p>{props.project.review.correctionPrompt}</p>
-            </div>
-            <p className="confidence">
-              {t(props.locale, "confidence")} {Math.round(props.project.review.confidence * 100)}%
-            </p>
-          </article>
-        ) : null}
-
-        {latestTrace.length ? (
-          <article className="agentEvent traceEvent">
-            <h3>{t(props.locale, "aiPromptTrace")}</h3>
-            <div className="traceList compactTraceList">
-              {latestTrace.map((entry) => (
-                <details key={entry.id} className="traceItem">
-                  <summary>
-                    <strong>{entry.phase}</strong>
-                    <span>{entry.modelId}</span>
-                    <time>{new Date(entry.createdAt).toLocaleTimeString()}</time>
+        {events.length ? events.map((event) => {
+          const codeOpen = Boolean(openCodeEvents[event.id]);
+          return (
+            <article
+              className={`agentEvent chatEvent ${event.role} ${event.status}`}
+              data-role={event.role}
+              data-status={event.status}
+              key={event.id}
+            >
+              <h3>{event.title}</h3>
+              {event.content && !event.content.startsWith(event.title) ? (
+                <p>{event.content}</p>
+              ) : null}
+              {event.title === t(props.locale, "visualReview") && props.project.review ? (
+                <>
+                  <ul>
+                    {props.project.review.issues.map((issue) => (
+                      <li key={issue}>{issue}</li>
+                    ))}
+                  </ul>
+                  <p className="confidence">
+                    {t(props.locale, "confidence")}{" "}
+                    {Math.round(props.project.review.confidence * 100)}%
+                  </p>
+                </>
+              ) : null}
+              {event.title === t(props.locale, "correctionPrompt") ? (
+                <div className="correctionPromptPreview">
+                  <span>{t(props.locale, "correctionPrompt")}</span>
+                  <p>{event.content}</p>
+                </div>
+              ) : null}
+              {event.code && event.status === "active" ? (
+                <pre className="agentCodePreview liveCodePreview">{event.code}</pre>
+              ) : null}
+              {event.code && event.status !== "active" ? (
+                <details
+                  className="chatCodeDisclosure"
+                  open={codeOpen}
+                  onToggle={(toggleEvent) => {
+                    const open = (toggleEvent.currentTarget as HTMLDetailsElement).open;
+                    setOpenCodeEvents((current) => ({
+                      ...current,
+                      [event.id]: open
+                    }));
+                  }}
+                >
+                  <summary role="button" aria-expanded={codeOpen}>
+                    <span>
+                      <Code2 size={17} />
+                      {t(props.locale, "openscad")}
+                    </span>
+                    <small>{t(props.locale, "codeCollapsed")}</small>
                   </summary>
-                  <TraceBlock title={t(props.locale, "system")} value={entry.systemPrompt} />
-                  <TraceBlock title={t(props.locale, "user")} value={entry.userPrompt} />
-                  {entry.response ? (
-                    <TraceBlock title={t(props.locale, "response")} value={entry.response} />
-                  ) : null}
+                  {codeOpen ? <pre className="agentCodePreview">{event.code}</pre> : null}
                 </details>
-              ))}
-            </div>
+              ) : null}
+            </article>
+          );
+        }) : (
+          <article className="agentEvent">
+            <h3>{t(props.locale, "agentThinking")}</h3>
+            <p>{t(props.locale, "emptyTrace")}</p>
           </article>
-        ) : null}
+        )}
       </div>
     </section>
   );
@@ -1142,15 +1301,6 @@ function projectTitle(project: ProjectState, fallback: string): string {
     return fallback;
   }
   return requirement.length > 28 ? `${requirement.slice(0, 28)}...` : requirement;
-}
-
-function TraceBlock(props: { title: string; value: string }) {
-  return (
-    <div className="traceBlock">
-      <span>{props.title}</span>
-      <pre>{props.value}</pre>
-    </div>
-  );
 }
 
 function ViewImage(props: { label: string; src: string }) {
