@@ -154,7 +154,8 @@ Workbench acceptance criteria:
   alone, and preserve keyboard focus order from left panel to agent panel to
   result panel. Chat records distinguish user, assistant, renderer tool, and
   review roles with labels and layout, not color alone.
-- Screenshot and E2E coverage should assert the arrow pipeline stage strip,
+- Automated E2E coverage should use structural, accessibility, geometry, and
+  state assertions for the arrow pipeline stage strip,
   current-cycle reset after iteration, Codex-style chat records, collapsed
   completed code with expand access, render start/done notices, absence of
   normal-surface prompt trace UI, review-to-correction handoff, iteration
@@ -164,6 +165,8 @@ Workbench acceptance criteria:
   right-panel ownership, enlarged views, and primary action transitions across
   generate, render, review, pending-revision, rerender-failure, and iterate
   states, including non-color state labels and keyboard focus order.
+  Playwright pixel screenshot checks run only in local visual-regression checks
+  and must be skipped in CI.
 
 ## Feature Inventory
 
@@ -260,7 +263,8 @@ Important source areas:
 - `src/lib/project.ts`: project persistence, import, and export.
 - `src/lib/i18n.ts`: English and Chinese UI strings.
 - `functions/_shared/modelGateway.ts`: provider proxy for MiMo and DeepSeek.
-- `tests/`: Playwright workflow and screenshot coverage.
+- `tests/`: Playwright workflow coverage with structural, state, geometry, and
+  accessibility assertions.
 
 ## Data Model
 
@@ -319,8 +323,9 @@ The app should preserve these guarantees:
 - Review requests include rendered images.
 - Review does not trigger text generation.
 - New iterations clear stale review state.
-- Screenshot and E2E tests protect the desktop workbench layout and the
-  left-panel order in narrower stacked layouts.
+- CI E2E tests protect the desktop workbench layout and the left-panel order in
+  narrower stacked layouts with structural and geometry assertions; Playwright
+  screenshot assertions are local-only.
 
 ## Local Development
 
@@ -372,8 +377,7 @@ The current test suite covers:
 - Review-driven iteration without automatic LLM calls during review.
 - Revision accept/reject behavior.
 - Invalid OpenSCAD error handling.
-- Desktop workbench screenshot coverage and narrow stacked left-panel order
-  coverage.
+- Desktop workbench layout and narrow stacked left-panel order coverage.
 - Model gateway behavior.
 
 ## Current Non-Goals
