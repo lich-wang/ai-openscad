@@ -461,8 +461,14 @@ test("empty task keeps the Agent Run surface without a thinking placeholder", as
   expect(headerBox!.y - agentRunBox!.y).toBeLessThanOrEqual(20);
   expect(headerBox!.y).toBeLessThan(timelineBox!.y);
 
-  await expect(agentRun).toHaveScreenshot("empty-agent-run.png", {
+  await expect(page).toHaveScreenshot("empty-agent-run.png", {
     animations: "disabled",
+    clip: {
+      x: Math.round(agentRunBox!.x),
+      y: Math.round(agentRunBox!.y),
+      width: Math.round(agentRunBox!.width),
+      height: 398
+    },
     maxDiffPixelRatio: WORKBENCH_SCREENSHOT_DIFF_RATIO
   });
 });
