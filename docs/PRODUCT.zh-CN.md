@@ -146,6 +146,9 @@ README 文件只保留基础入口信息：项目身份、GitHub 活跃度、贡
 
 - 在浏览器中使用 `openscad-wasm`。
 - 可用时在 Web Worker 中执行编译任务。
+- 浏览器 STL 生成优先使用 OpenSCAD Manifold 后端；如果 Manifold 失败，则安全回退到默认后端。
+- 保持一个持久化渲染 Worker，并在多次渲染之间复用已初始化的 OpenSCAD WASM 实例。
+  工作台会预热该 Worker，减少首次可见渲染需要承担的初始化成本。
 - 默认渲染超时时间为 45 秒。
 - 常规迭代使用草稿精度，将 `$fn` 标准化为 32。
 - 从生成的 STL 捕获三张正交视图：

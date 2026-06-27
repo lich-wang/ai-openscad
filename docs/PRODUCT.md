@@ -217,6 +217,11 @@ Workbench acceptance criteria:
 
 - Uses `openscad-wasm` in the browser.
 - Runs compile work in a Web Worker when available.
+- Uses the OpenSCAD Manifold backend for browser STL generation when available,
+  with a safe fallback to the default backend if Manifold fails.
+- Keeps a persistent render worker and reuses the initialized OpenSCAD WASM
+  instance across render jobs. The workbench prewarms this worker so the first
+  visible render pays less initialization cost.
 - Enforces a default 45 second render timeout.
 - Uses draft precision for normal iteration by normalizing `$fn` to 32.
 - Captures three orthographic views from generated STL:

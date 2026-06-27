@@ -1,29 +1,72 @@
 import { createOpenSCAD } from "openscad-wasm";
-import type { RenderResult } from "./render";
+import { renderOpenScadToStl, type RenderResult } from "./render";
 
 interface RenderWorkerRequest {
+  kind?: "compile" | "warmup";
   id: string;
-  code: string;
+  code?: string;
 }
 
-self.addEventListener("message", async (event: MessageEvent<RenderWorkerRequest>) => {
-  const { id, code } = event.data;
-  try {
-    const instance = await createOpenSCAD();
-    const stl = await instance.renderToStl(code);
-    postResult(id, {
-      ok: true,
-      stl,
-      diagnostics: "Compiled to STL in browser."
-    });
-  } catch (error) {
-    postResult(id, {
-      ok: false,
-      diagnostics: error instanceof Error ? error.message : String(error)
-    });
+interface RenderWorkerDependencies {
+  createOpenSCAD: typeof createOpenSCAD;
+  postMessage: (message: { id: string; result: RenderResult }) => void;
+}
+
+export function createRenderWorkerHandler(dependencies: RenderWorkerDependencies) {
+  let instancePromise: ReturnType<typeof createOpenSCAD> | null = null;
+  const getOpenScad = () => {
+    if (!instancePromise) {
+      instancePromise = dependencies.createOpenSCAD().catch((error) => {
+        instancePromise = null;
+        throw error;
+      });
+    }
+    return instancePromise;
+  };
+
+  return async (event: MessageEvent<RenderWorkerRequest>) => {
+    const { id, code, kind = "compile" } = event.data;
+    try {
+      const instance = await getOpenScad();
+      if (kind === "warmup") {
+        dependencies.postMessage({
+          id,
+          result: {
+            ok: true,
+            diagnostics: "OpenSCAD worker warmed."
+          }
+        });
+        return;
+      }
+      if (!code) {
+        throw new Error("OpenSCAD code is required.");
+      }
+      const stl = await renderOpenScadToStl(instance, code);
+      dependencies.postMessage({
+        id,
+        result: {
+          ok: true,
+          stl,
+          diagnostics: "Compiled to STL in browser."
+        }
+      });
+    } catch (error) {
+      dependencies.postMessage({
+        id,
+        result: {
+          ok: false,
+          diagnostics: error instanceof Error ? error.message : String(error)
+        }
+      });
+    }
+  };
+}
+
+const handleRenderWorkerMessage = createRenderWorkerHandler({
+  createOpenSCAD,
+  postMessage: (message) => {
+    self.postMessage(message);
   }
 });
 
-function postResult(id: string, result: RenderResult): void {
-  self.postMessage({ id, result });
-}
+self.addEventListener("message", handleRenderWorkerMessage);

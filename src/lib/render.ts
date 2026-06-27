@@ -28,6 +28,7 @@ export interface RenderMcpOutput extends RenderResult {
 }
 
 export interface RenderMcpAdapter extends RenderAdapter {
+  prewarm(): void;
   render(input: RenderMcpInput): Promise<RenderMcpOutput>;
 }
 
@@ -47,6 +48,12 @@ interface RenderWorkerResponse {
   result: RenderResult;
 }
 
+interface RenderWorkerRequest {
+  id: string;
+  kind: "compile" | "warmup";
+  code?: string;
+}
+
 const DEFAULT_RENDER_TIMEOUT_MS = 45_000;
 
 export function createRenderMcp(provider: RenderMcpProvider = "web"): RenderMcpAdapter {
@@ -63,6 +70,7 @@ export class WebRenderMcpAdapter implements RenderMcpAdapter {
   private readonly loadOpenScad: OpenScadLoader;
   private readonly captureViews: ViewCapture;
   private readonly timeoutMs: number;
+  private worker?: Worker;
 
   constructor(options: OpenScadLoader | WebRenderMcpAdapterOptions = {}) {
     if (typeof options === "function") {
@@ -89,6 +97,33 @@ export class WebRenderMcpAdapter implements RenderMcpAdapter {
     return this.compileInCurrentContext(code);
   }
 
+  prewarm(): void {
+    if (!this.createWorker) {
+      void this.loadOpenScad();
+      return;
+    }
+    const worker = this.getWorker();
+    const id = createRenderJobId();
+    const cleanup = () => {
+      worker.removeEventListener("message", handleMessage);
+      worker.removeEventListener("error", handleError);
+    };
+    const handleMessage = (event: MessageEvent<RenderWorkerResponse>) => {
+      if (event.data.id !== id) {
+        return;
+      }
+      cleanup();
+    };
+    const handleError = () => {
+      cleanup();
+      this.resetWorker(worker);
+    };
+
+    worker.addEventListener("message", handleMessage);
+    worker.addEventListener("error", handleError);
+    worker.postMessage({ id, kind: "warmup" } satisfies RenderWorkerRequest);
+  }
+
   async render(input: RenderMcpInput): Promise<RenderMcpOutput> {
     await input.onProgress?.("compile");
     const compiled = await this.compile(input.source);
@@ -109,7 +144,7 @@ export class WebRenderMcpAdapter implements RenderMcpAdapter {
     try {
       const instance = await this.loadOpenScad();
       const stl = await withTimeout(
-        instance.renderToStl(code),
+        renderOpenScadToStl(instance, code),
         this.timeoutMs,
         renderTimeoutMessage(this.timeoutMs)
       );
@@ -127,15 +162,12 @@ export class WebRenderMcpAdapter implements RenderMcpAdapter {
   }
 
   private async compileInWorker(code: string): Promise<RenderResult> {
-    const worker = this.createWorker?.();
-    if (!worker) {
-      return this.compileInCurrentContext(code);
-    }
+    const worker = this.getWorker();
     const id = createRenderJobId();
 
     return new Promise<RenderResult>((resolve) => {
       let settled = false;
-      const finish = (result: RenderResult) => {
+      const finish = (result: RenderResult, resetWorker = false) => {
         if (settled) {
           return;
         }
@@ -143,14 +175,16 @@ export class WebRenderMcpAdapter implements RenderMcpAdapter {
         clearTimeout(timeout);
         worker.removeEventListener("message", handleMessage);
         worker.removeEventListener("error", handleError);
-        worker.terminate();
+        if (resetWorker) {
+          this.resetWorker(worker);
+        }
         resolve(result);
       };
       const timeout = setTimeout(() => {
         finish({
           ok: false,
           diagnostics: renderTimeoutMessage(this.timeoutMs)
-        });
+        }, true);
       }, this.timeoutMs);
       const handleMessage = (event: MessageEvent<RenderWorkerResponse>) => {
         if (event.data.id !== id) {
@@ -162,17 +196,74 @@ export class WebRenderMcpAdapter implements RenderMcpAdapter {
         finish({
           ok: false,
           diagnostics: event.message || "OpenSCAD worker failed."
-        });
+        }, true);
       };
 
       worker.addEventListener("message", handleMessage);
       worker.addEventListener("error", handleError);
-      worker.postMessage({ id, code });
+      worker.postMessage({ id, kind: "compile", code } satisfies RenderWorkerRequest);
     });
+  }
+
+  private getWorker(): Worker {
+    if (!this.createWorker) {
+      throw new Error("Render worker is not available.");
+    }
+    if (!this.worker) {
+      this.worker = this.createWorker();
+    }
+    return this.worker;
+  }
+
+  private resetWorker(worker: Worker): void {
+    if (this.worker === worker) {
+      this.worker = undefined;
+    }
+    worker.terminate();
   }
 }
 
 export const BrowserOpenScadAdapter = WebRenderMcpAdapter;
+
+export async function renderOpenScadToStl(
+  instance: OpenSCADInstance,
+  code: string
+): Promise<string> {
+  const openscad = instance.getInstance?.();
+  if (!openscad) {
+    return instance.renderToStl(code);
+  }
+
+  try {
+    openscad.FS.writeFile("/input.scad", code);
+    const exitCode = openscad.callMain([
+      "/input.scad",
+      "--backend=manifold",
+      "-o",
+      "/output.stl"
+    ]);
+    if (exitCode !== 0) {
+      throw new Error(`OpenSCAD Manifold backend exited with code ${exitCode}.`);
+    }
+    const result = openscad.FS.readFile("/output.stl", {
+      encoding: "utf8"
+    });
+    return typeof result === "string" ? result : new TextDecoder().decode(result);
+  } catch {
+    return instance.renderToStl(code);
+  } finally {
+    try {
+      openscad.FS.unlink("/input.scad");
+    } catch {
+      // The fallback path may have already cleaned it up.
+    }
+    try {
+      openscad.FS.unlink("/output.stl");
+    } catch {
+      // Missing output is expected when Manifold failed before export.
+    }
+  }
+}
 
 function withTimeout<T>(
   promise: Promise<T>,

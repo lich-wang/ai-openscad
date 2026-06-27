@@ -8,7 +8,7 @@ describe("renderSkill", () => {
   it("uses low precision for draft compile and review", () => {
     const instruction = buildRenderPrecisionInstruction("draft");
 
-    expect(instruction).toContain("$fn <= 36");
+    expect(instruction).toContain("$fn <= 32");
     expect(instruction).toContain("fast visual review");
   });
 
@@ -35,6 +35,18 @@ describe("renderSkill", () => {
   it("can lower top-level $fn for draft rendering", () => {
     expect(normalizeOpenScadPrecision("$fn = 120;\ncylinder(r=5,h=10);", "draft")).toContain(
       "$fn = 32;"
+    );
+  });
+
+  it("adds draft $fn when generated code does not define one", () => {
+    expect(normalizeOpenScadPrecision("cylinder(r=5,h=10);", "draft")).toMatch(
+      /^\$fn = 32;\n/
+    );
+  });
+
+  it("keeps final export normalization high precision", () => {
+    expect(normalizeOpenScadPrecision("$fn = 32;\ncylinder(r=5,h=10);", "final")).toContain(
+      "$fn = 128;"
     );
   });
 });

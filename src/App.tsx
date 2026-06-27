@@ -113,6 +113,10 @@ export default function App() {
   }, [project]);
 
   useEffect(() => {
+    adapter.prewarm();
+  }, [adapter]);
+
+  useEffect(() => {
     saveLlmApiKey(llmApiKey);
   }, [llmApiKey]);
 
