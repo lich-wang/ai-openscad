@@ -6,6 +6,10 @@ function loadDeployWorkflow(): string {
   return readFileSync(".github/workflows/deploy.yml", "utf8");
 }
 
+function loadPackageJson(): { engines?: { node?: string } } {
+  return JSON.parse(readFileSync("package.json", "utf8")) as { engines?: { node?: string } };
+}
+
 function withoutComments(text: string): string {
   return text
     .split("\n")
@@ -44,14 +48,31 @@ describe("GitHub Actions deploy workflow", () => {
     const workflow = withoutComments(loadDeployWorkflow());
     const checks = expectBlock(workflow, "  checks:\n");
 
-    expect(checks).toContain("actions/checkout@");
-    expect(checks).toContain("actions/setup-node@");
+    expect(checks).toContain("actions/checkout@v5");
+    expect(checks).toContain("actions/setup-node@v5");
     expect(checks).toContain("node-version: 24");
     expect(checks).toContain("npm ci");
     expect(checks).toContain("npx playwright install --with-deps chromium");
     expect(checks).toContain("npm test");
     expect(checks).toContain("npm run test:e2e");
     expect(checks).toContain("npm run build");
+  });
+
+  test("keeps all JavaScript actions on the Node 24 action runtime major", () => {
+    const workflow = withoutComments(loadDeployWorkflow());
+    const checks = expectBlock(workflow, "  checks:\n");
+    const deploy = expectBlock(workflow, "  deploy:\n");
+
+    for (const job of [checks, deploy]) {
+      expect(job).toContain("actions/checkout@v5");
+      expect(job).toContain("actions/setup-node@v5");
+    }
+  });
+
+  test("declares the local Node runtime requirement", () => {
+    const pkg = loadPackageJson();
+
+    expect(pkg.engines?.node).toBe(">=24");
   });
 
   test("deploys Cloudflare Pages from main only after checks pass", () => {

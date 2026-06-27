@@ -27,6 +27,8 @@ Production: https://ai.openscad.tech
 
 ## Quick Start
 
+Use Node.js 24 or newer.
+
 ```bash
 npm install
 npm run dev

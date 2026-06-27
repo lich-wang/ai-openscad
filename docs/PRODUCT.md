@@ -319,6 +319,8 @@ The app should preserve these guarantees:
 
 ## Local Development
 
+Use Node.js 24 or newer for local development and release checks.
+
 Install dependencies:
 
 ```bash
@@ -396,6 +398,9 @@ Deployment target:
   - Pull requests run `npm test`, `npm run test:e2e`, and `npm run build`.
     The clean runner installs dependencies with `npm ci`, sets up Node 24, and
     installs Chromium with `npx playwright install --with-deps chromium`.
+    The `node-version` setting controls project commands; each `uses:` action
+    should also be kept on a version whose action metadata runs on the Node 24
+    runtime to avoid deprecated Node 20 runtime warnings.
   - Pushes to `main` execute the same checks, then deploy with
     `npx wrangler pages deploy dist --project-name ai-openscad --branch main`.
   - Manual `workflow_dispatch` production deploys are restricted to the `main`

@@ -260,6 +260,8 @@ Pages Function 网关。
 
 ## 本地开发
 
+本地开发和发布检查使用 Node.js 24 或更高版本。
+
 安装依赖：
 
 ```bash
@@ -336,6 +338,9 @@ npm run build
   - Pull request 会运行 `npm test`、`npm run test:e2e` 和 `npm run build`。
     clean runner 会使用 `npm ci` 安装依赖、设置 Node 24，并通过
     `npx playwright install --with-deps chromium` 安装 Chromium。
+    `node-version` 设置控制项目命令使用的 Node；每个 `uses:` action 也应保持在
+    其 action metadata 运行于 Node 24 runtime 的版本，避免废弃的 Node 20
+    runtime 警告。
   - 推送到 `main` 时会执行同样检查，然后使用
     `npx wrangler pages deploy dist --project-name ai-openscad --branch main` 部署。
   - 手动 `workflow_dispatch` 生产部署只允许 `main` 分支，并使用同一部署命令；

@@ -27,6 +27,8 @@ SCAD/STL 资产。
 
 ## 快速开始
 
+使用 Node.js 24 或更高版本。
+
 ```bash
 npm install
 npm run dev
