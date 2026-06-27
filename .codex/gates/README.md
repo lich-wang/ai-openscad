@@ -47,7 +47,7 @@ Codex workflow maintenance uses `codex_maintenance`.
 
 ## Hook Enforcement
 
-- `SessionStart` reads `.codex/AGENT.md`.
+- `SessionStart` reads `.codex/AGENTS.md`.
 - `PreToolUse` blocks write-like tools when no gate is active.
 - `PostToolUse` checks that files changed after the gate began fit the active
   gate's allowed write paths.

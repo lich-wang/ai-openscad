@@ -51,7 +51,7 @@ Gate definitions, required evidence, and allowed write paths are tracked in
 
 Codex hook enforcement:
 
-- `SessionStart` reads `.codex/AGENT.md`.
+- `SessionStart` reads `.codex/AGENTS.md`.
 - `PreToolUse` blocks write-like tools when no gate is active.
 - `PostToolUse` checks that files changed after the gate began are allowed by
   the active gate.

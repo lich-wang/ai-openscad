@@ -134,7 +134,7 @@
       ],
       "allowed_write_paths": [
         ".codex/",
-        "AGENT.md",
+        "AGENTS.md",
         ".gitignore"
       ]
     }
