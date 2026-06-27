@@ -101,10 +101,10 @@ Workbench acceptance criteria:
   settings, project import/export, new model button, then the local model list
   for navigation. The local model list scrolls internally when it grows and is
   distinct from run history.
-- The No key invitation hint shows the invite image at its source aspect ratio
-  and natural resolution, constrained only by the available viewport. It must
-  not crop the invite image into a square or upscale it in a way that makes it
-  blurry.
+- The No key invitation hint shows the invite image at 50% of its source size,
+  preserving the source aspect ratio and constrained by the available viewport.
+  It must not crop the invite image into a square or upscale it in a way that
+  makes it blurry.
 - Token estimates are removed from the normal workbench surface. Busy progress,
   pending revision warnings, and errors remain visible through the agent stage
   strip and center agent stream.

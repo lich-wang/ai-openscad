@@ -342,7 +342,7 @@ label > span,
   top: calc(100% + 8px);
   transform: translateY(0);
   visibility: hidden;
-  width: min(806px, calc(100vw - 44px));
+  width: min(420px, calc(100vw - 44px));
   z-index: 2000;
 }
 
@@ -374,7 +374,7 @@ label > span,
   max-width: 100%;
   object-fit: contain;
   object-position: center;
-  width: 772px;
+  width: 386px;
 }
 
 .controlPanel .keyHelpTooltip {
