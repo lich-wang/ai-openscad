@@ -66,22 +66,50 @@ describe("renderWorker", () => {
 
     expect(createOpenSCAD).toHaveBeenCalledTimes(2);
     expect(renderToStl).toHaveBeenCalledWith("cube(10);");
-    expect(posted).toEqual([
-      {
-        id: "warm",
-        result: {
-          ok: false,
-          diagnostics: "wasm init failed"
-        }
-      },
-      {
-        id: "compile",
-        result: {
-          ok: true,
-          stl: "solid recovered\nendsolid recovered",
-          diagnostics: "Compiled to STL in browser."
-        }
+    expect(posted[0]).toMatchObject({
+      id: "warm",
+      result: {
+        ok: false,
+        diagnostics: expect.stringContaining("wasm init failed")
       }
-    ]);
+    });
+    expect(posted[1]).toEqual({
+      id: "compile",
+      result: {
+        ok: true,
+        stl: "solid recovered\nendsolid recovered",
+        diagnostics: "Compiled to STL in browser."
+      }
+    });
+  });
+
+  it("returns readable OpenSCAD diagnostics when compilation throws a numeric code", async () => {
+    const createOpenSCAD = vi.fn(async (options?: { printErr?: (text: string) => void }) => ({
+      renderToStl: async () => {
+        options?.printErr?.("WARNING: Can't open include file 'BOSL2/std.scad'.");
+        options?.printErr?.("WARNING: Ignoring unknown module 'ellipse'.");
+        throw 1371176;
+      }
+    }));
+    const posted: Array<{
+      id: string;
+      result: {
+        ok: boolean;
+        diagnostics: string;
+      };
+    }> = [];
+    const handler = createRenderWorkerHandler({
+      createOpenSCAD,
+      postMessage: (message) => posted.push(message)
+    });
+
+    await handler({ data: { id: "compile", kind: "compile", code: "ellipse();" } } as MessageEvent);
+
+    expect(posted).toHaveLength(1);
+    expect(posted[0].result.ok).toBe(false);
+    expect(posted[0].result.diagnostics).toContain("OpenSCAD render failed");
+    expect(posted[0].result.diagnostics).toContain("non-text error code: 1371176");
+    expect(posted[0].result.diagnostics).toContain("BOSL2/std.scad");
+    expect(posted[0].result.diagnostics).toContain("unknown module 'ellipse'");
   });
 });

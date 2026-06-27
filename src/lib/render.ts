@@ -131,13 +131,21 @@ export class WebRenderMcpAdapter implements RenderMcpAdapter {
       return compiled;
     }
 
-    const views = await this.captureViews(compiled.stl, {
-      onProgress: input.onProgress
-    });
-    return {
-      ...compiled,
-      views
-    };
+    try {
+      const views = await this.captureViews(compiled.stl, {
+        onProgress: input.onProgress
+      });
+      return {
+        ...compiled,
+        views
+      };
+    } catch (error) {
+      return {
+        ok: false,
+        stl: compiled.stl,
+        diagnostics: buildRenderFailureDiagnostics(error, [compiled.diagnostics])
+      };
+    }
   }
 
   private async compileInCurrentContext(code: string): Promise<RenderResult> {
@@ -156,7 +164,7 @@ export class WebRenderMcpAdapter implements RenderMcpAdapter {
     } catch (error) {
       return {
         ok: false,
-        diagnostics: error instanceof Error ? error.message : String(error)
+        diagnostics: buildRenderFailureDiagnostics(error)
       };
     }
   }
@@ -263,6 +271,62 @@ export async function renderOpenScadToStl(
       // Missing output is expected when Manifold failed before export.
     }
   }
+}
+
+export function buildRenderSuccessDiagnostics(logs: readonly string[] = []): string {
+  const openScadDiagnostics = meaningfulOpenScadLogs(logs);
+  if (openScadDiagnostics.length === 0) {
+    return "Compiled to STL in browser.";
+  }
+  return [
+    "Compiled to STL in browser.",
+    "OpenSCAD diagnostics:",
+    ...openScadDiagnostics
+  ].join("\n");
+}
+
+export function buildRenderFailureDiagnostics(
+  error: unknown,
+  logs: readonly string[] = []
+): string {
+  const reason = readableErrorMessage(error);
+  const openScadDiagnostics = meaningfulOpenScadLogs(logs);
+  return [
+    "OpenSCAD render failed.",
+    `Reason: ${reason}`,
+    ...(openScadDiagnostics.length > 0
+      ? ["OpenSCAD diagnostics:", ...openScadDiagnostics]
+      : [])
+  ].join("\n");
+}
+
+function readableErrorMessage(error: unknown): string {
+  if (error instanceof Error && error.message.trim()) {
+    return error.message;
+  }
+  if (typeof error === "number") {
+    return `non-text error code: ${error}`;
+  }
+  const message = String(error).trim();
+  if (/^\d+$/.test(message)) {
+    return `non-text error code: ${message}`;
+  }
+  return message || "Unknown render error.";
+}
+
+function meaningfulOpenScadLogs(logs: readonly string[]): string[] {
+  const meaningful = logs
+    .map((line) => line.replace(/^\[OpenSCAD\]:?\s*/, "").trim())
+    .filter(Boolean)
+    .filter((line) => !/^Status:\s+NoError$/i.test(line))
+    .filter((line) => !/^Top level object is a 3D object/i.test(line))
+    .filter((line) => !/^Geometries in cache:/i.test(line))
+    .filter((line) => !/^Geometry cache size in bytes:/i.test(line))
+    .filter((line) => !/^CGAL Polyhedrons in cache:/i.test(line))
+    .filter((line) => !/^CGAL cache size in bytes:/i.test(line))
+    .filter((line) => !/^Total rendering time:/i.test(line));
+
+  return meaningful.slice(-12);
 }
 
 function withTimeout<T>(

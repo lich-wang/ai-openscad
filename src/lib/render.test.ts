@@ -168,6 +168,37 @@ describe("WebRenderMcpAdapter", () => {
     expect(result.diagnostics).toContain("syntax error");
   });
 
+  it("returns readable diagnostics when view capture throws a numeric code", async () => {
+    const worker = new FakeRenderWorker((message) => ({
+      id: message.id,
+      result: {
+        ok: true,
+        stl: "solid cup\nendsolid cup",
+        diagnostics: [
+          "Compiled to STL in browser.",
+          "OpenSCAD diagnostics:",
+          "WARNING: Ignoring unknown module 'ellipse'."
+        ].join("\n")
+      }
+    }));
+    const adapter = new WebRenderMcpAdapter({
+      createWorker: () => worker.asWorker(),
+      captureViews: async () => {
+        throw 1114200;
+      },
+      timeoutMs: 1_000
+    });
+
+    const result = await adapter.render({ source: "ellipse();" });
+
+    expect(result.ok).toBe(false);
+    expect(result.stl).toBe("solid cup\nendsolid cup");
+    expect(result.views).toBeUndefined();
+    expect(result.diagnostics).toContain("OpenSCAD render failed");
+    expect(result.diagnostics).toContain("non-text error code: 1114200");
+    expect(result.diagnostics).toContain("unknown module 'ellipse'");
+  });
+
   it("terminates and recreates the worker when asynchronous compilation times out", async () => {
     const firstWorker = new FakeRenderWorker(() => undefined);
     const secondWorker = new FakeRenderWorker((message) => ({

@@ -1,5 +1,10 @@
 import { createOpenSCAD } from "openscad-wasm";
-import { renderOpenScadToStl, type RenderResult } from "./render";
+import {
+  buildRenderFailureDiagnostics,
+  buildRenderSuccessDiagnostics,
+  renderOpenScadToStl,
+  type RenderResult
+} from "./render";
 
 interface RenderWorkerRequest {
   kind?: "compile" | "warmup";
@@ -14,18 +19,28 @@ interface RenderWorkerDependencies {
 
 export function createRenderWorkerHandler(dependencies: RenderWorkerDependencies) {
   let instancePromise: ReturnType<typeof createOpenSCAD> | null = null;
+  let openScadLogs: string[] = [];
+  const captureOpenScadLog = (text: unknown) => {
+    openScadLogs.push(String(text));
+  };
   const getOpenScad = () => {
     if (!instancePromise) {
-      instancePromise = dependencies.createOpenSCAD().catch((error) => {
-        instancePromise = null;
-        throw error;
-      });
+      instancePromise = dependencies
+        .createOpenSCAD({
+          print: captureOpenScadLog,
+          printErr: captureOpenScadLog
+        })
+        .catch((error) => {
+          instancePromise = null;
+          throw error;
+        });
     }
     return instancePromise;
   };
 
   return async (event: MessageEvent<RenderWorkerRequest>) => {
     const { id, code, kind = "compile" } = event.data;
+    openScadLogs = [];
     try {
       const instance = await getOpenScad();
       if (kind === "warmup") {
@@ -47,7 +62,7 @@ export function createRenderWorkerHandler(dependencies: RenderWorkerDependencies
         result: {
           ok: true,
           stl,
-          diagnostics: "Compiled to STL in browser."
+          diagnostics: buildRenderSuccessDiagnostics(openScadLogs)
         }
       });
     } catch (error) {
@@ -55,7 +70,7 @@ export function createRenderWorkerHandler(dependencies: RenderWorkerDependencies
         id,
         result: {
           ok: false,
-          diagnostics: error instanceof Error ? error.message : String(error)
+          diagnostics: buildRenderFailureDiagnostics(error, openScadLogs)
         }
       });
     }

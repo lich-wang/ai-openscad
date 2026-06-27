@@ -153,7 +153,10 @@ Workbench acceptance criteria:
   the visible right-panel height at a 1440 px desktop viewport.
 - Manual OpenSCAD edits can be recompiled with the secondary rerender action
   whenever code exists. Rerender failures appear in the center stream and keep
-  the workbench interactive.
+  the workbench interactive. Render errors must include readable OpenSCAD
+  diagnostics, including missing include files, ignored or unknown modules, and
+  stderr warnings/errors; the UI must not show only numeric worker or runtime
+  codes.
 - Render timeouts explain that the draft exceeded the browser render complexity
   budget, keep the render stage in an error state, preserve the current
   editable OpenSCAD, and leave rerender available after the user simplifies the
