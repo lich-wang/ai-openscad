@@ -5,6 +5,14 @@ export interface VisionReview {
   confidence: number;
 }
 
+export interface RenderEvidence {
+  compileStatus: "success" | "failure";
+  diagnostics: string;
+  renderPrecision: "draft" | "final";
+  backend: string;
+  viewCount: number;
+}
+
 export interface ProjectIteration {
   id: string;
   createdAt: string;
@@ -55,12 +63,16 @@ export interface ProjectState {
   currentCode: string;
   proposedCode: string;
   compilerOutput: string;
+  renderEvidence: RenderEvidence | null;
   review: VisionReview | null;
   stl: string;
   views: {
     front: string;
-    top: string;
+    back: string;
+    left: string;
     right: string;
+    top: string;
+    isometric: string;
   };
   runEvents: RunEvent[];
   iterations: ProjectIteration[];
@@ -91,12 +103,16 @@ export function createEmptyProject(): ProjectState {
     currentCode: "",
     proposedCode: "",
     compilerOutput: "",
+    renderEvidence: null,
     review: null,
     stl: "",
     views: {
       front: "",
+      back: "",
+      left: "",
+      right: "",
       top: "",
-      right: ""
+      isometric: ""
     },
     runEvents: [],
     iterations: [],
@@ -207,10 +223,14 @@ export function importProject(serialized: string): ProjectState {
     ...parsed,
     requirement,
     originalRequirement: parsed.originalRequirement ?? requirement,
+    renderEvidence: parsed.renderEvidence ?? null,
     views: {
       front: parsed.views?.front ?? "",
+      back: parsed.views?.back ?? "",
+      left: parsed.views?.left ?? "",
+      right: parsed.views?.right ?? "",
       top: parsed.views?.top ?? "",
-      right: parsed.views?.right ?? ""
+      isometric: parsed.views?.isometric ?? ""
     },
     stl: parsed.stl ?? "",
     runEvents: parsed.runEvents ?? [],
@@ -284,8 +304,11 @@ function compactProjectForStorage(
       ? { ...project.views }
       : {
           front: "",
+          back: "",
+          left: "",
+          right: "",
           top: "",
-          right: ""
+          isometric: ""
         }
   };
 }

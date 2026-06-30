@@ -48,7 +48,7 @@ three columns:
   new model action and local model list.
 - Center agent panel: pipeline stage arrows, Codex-style chat run stream,
   requirement composer, workflow actions, and advanced OpenSCAD code editing.
-- Right result panel: large front/top/right views and asset downloads.
+- Right result panel: large multi-angle views and asset downloads.
 
 ### Main Workflow
 
@@ -57,10 +57,14 @@ three columns:
 3. The code model streams OpenSCAD into the center chat stream in real time.
 4. After the complete code arrives, the run stream collapses the code preview
    and the render adapter compiles the generated OpenSCAD in the browser.
-5. The app captures front, top, and right PNG views from the STL.
+   Compile failure automatically triggers a bounded compiler-repair text
+   generation using the failed code and readable diagnostics.
+5. The app captures front, back, left, right, top, and isometric PNG views from
+   the STL.
 6. User clicks **Review**.
-7. The vision model checks the three views against the original requirement and
-   returns a summary, issue list, confidence score, and correction prompt.
+7. The vision model checks the multi-angle views against the original
+   requirement and returns a summary, issue list, confidence score, and
+   correction prompt.
 8. The correction prompt becomes editable in the composer and gives concrete
    instructions about which OpenSCAD areas or geometry relationships should be
    changed.
@@ -73,7 +77,20 @@ three columns:
 
 ### User Control Rules
 
-- Visual review only reviews. It must not automatically call the text LLM.
+- Visual review only reviews. It must not automatically call the text LLM or
+  start an image-driven rewrite loop.
+- Browser compile failures may directly trigger a bounded text-to-OpenSCAD
+  compiler-repair loop. Each user-initiated generation, rerender, accepted
+  revision, or iteration may make at most two automatic compiler-repair text
+  requests before stopping with diagnostics.
+- The compiler-repair loop applies to the compile step owned by that user
+  action, whether it follows first generation, manual rerender, accepted
+  revision, or user-confirmed iteration. The two-attempt limit is counted per
+  user action and resets only when the user starts another generation, rerender,
+  accepted revision, or iteration.
+- This borrows the useful part of verified text-to-OpenSCAD workflows:
+  compiler evidence can repair invalid code automatically, while rendered image
+  evidence remains user-controlled review context.
 - The user can edit the correction prompt before another generation.
 - A pending revision must be accepted and rendered before project export.
 - Accepting a revision clears the old review, forcing a fresh review for the new
@@ -92,7 +109,8 @@ three columns:
 - The primary composer action follows project state: generate before rendering,
   review after rendering, and iterate again after review.
 - Token estimates and duplicate ready status badges are hidden from the normal
-  workbench surface to keep more room for the model list and the three views.
+  workbench surface to keep more room for the model list and the multi-angle
+  views.
 - AI prompt trace details are not part of the normal workbench surface.
 
 Workbench acceptance criteria:
@@ -118,14 +136,27 @@ Workbench acceptance criteria:
   generation becomes active again, rendering waits until code completion, and
   review waits for the new rendered views.
 - The composer primary action is disabled while any generation, render, review,
-  or export task is running. It shows Generate when no rendered views exist,
-  Review when views exist and there is no current review, and Iterate Again
-  after review when no pending revision is waiting for acceptance. Missing
-  inputs, provider-key failures, compile failures, and review failures appear in
-  the center stream without changing the right panel contract. While a pending
-  revision is waiting for acceptance, the composer shows an acceptance hint
-  instead of Generate, Review, or Iterate Again; the user must accept or reject
-  the revision before continuing the main workflow.
+  compiler-repair, or export task is running. It shows Generate when no rendered
+  views exist, Review when views exist and there is no current review, and
+  Iterate Again after review when no pending revision is waiting for acceptance.
+  Missing inputs, provider-key failures, compile failures, and review failures
+  appear in the center stream without changing the right panel contract. While a
+  pending revision is waiting for acceptance, the composer shows an acceptance
+  hint instead of Generate, Review, or Iterate Again; the user must accept or
+  reject the revision before continuing the main workflow.
+- If generated or manually edited code fails to compile, the failing draft
+  cannot advance to visual review or export. Any stale review, stale STL, and
+  stale view images from the current cycle are blocked from review/export for
+  that failing draft. The center stream shows readable diagnostics and
+  immediately starts the bounded compiler-repair generation when a code model
+  key is available. If the repair limit is exhausted or a key is missing, the
+  composer keeps visible editable diagnostic guidance for a manual retry while
+  preserving the current failing OpenSCAD code for inspection/editing.
+- During automatic compiler repair, the code generation stage is active, the
+  model rendering stage is waiting until repaired code streams, and no visual
+  review stage is active. The run stream states the repair attempt number, for
+  example `Compiler repair 1 of 2`, and primary, rerender, review, and export
+  actions stay disabled until that repair attempt finishes.
 - The center agent stream remains the place for user request records, streaming
   generated code, collapsed completed code, compiler output, render start,
   render progress, render completion, render errors, review summary, review
@@ -145,12 +176,20 @@ Workbench acceptance criteria:
 - Streaming and stage status updates should use polite live-region behavior or
   equivalent accessible status text. Collapsed code controls expose expanded or
   collapsed state through accessible labels.
-- The right result panel contains only the three orthographic views and asset
+- The right result panel contains only the six named view tiles and asset
   download controls. It must not contain compiler logs, review text, prompt
-  trace, or iteration history. On desktop, the front view is the largest view,
-  top and right views stay visible below it, and the panel reserves most of its
-  height for images rather than text. The view grid should use at least half of
-  the visible right-panel height at a 1440 px desktop viewport.
+  trace, or iteration history. The view order is front, back, left, right, top,
+  then isometric. On desktop, the front tile is the main/largest view and the
+  five supporting angles remain visible below it in a dense grid. In narrow
+  stacked layouts, all six tiles keep the same reading order and stable
+  accessible image names. The view grid should use at least half of the visible
+  right-panel height at a 1440 px desktop viewport.
+- Every view tile uses the visible label and image alt text for its angle:
+  Front, Back, Left, Right, Top, and Isometric. Each PNG download button uses a
+  matching accessible name and filename:
+  `ai-openscad-front.png`, `ai-openscad-back.png`,
+  `ai-openscad-left.png`, `ai-openscad-right.png`,
+  `ai-openscad-top.png`, and `ai-openscad-isometric.png`.
 - Manual OpenSCAD edits can be recompiled with the secondary rerender action
   whenever code exists. Rerender failures appear in the center stream and keep
   the workbench interactive. Render errors must include readable OpenSCAD
@@ -165,7 +204,8 @@ Workbench acceptance criteria:
   for draft review with coarse, inspectable wave geometry, without 100-layer
   stacked `linear_extrude()` bodies, dense polygon wave rings, or per-layer
   boolean hollowing. The generated draft should stay within the 45 second
-  browser render timeout and produce visible front, top, and right views.
+  browser render timeout and produce visible front, back, left, right, top, and
+  isometric views.
 - The same browser render complexity budget applies to first drafts,
   review-driven revisions, and user-edited correction-prompt iterations.
 - Stage strip and action states use text labels plus visual treatment, not color
@@ -185,10 +225,15 @@ Workbench acceptance criteria:
   states, including non-color state labels and keyboard focus order.
   Playwright pixel screenshot checks run only in local visual-regression checks
   and must be skipped in CI.
+- Tests must verify that compile failure triggers only the bounded compiler
+  repair text requests, while render completion, visual review completion, and
+  image evidence never trigger an unprompted `/api/llm` request.
 - Local E2E render coverage must include the full user-reported 20 cm wavy cup
   OpenSCAD file with layered `linear_extrude()` wave rings, verify that the
-  browser renderer completes, and confirm the three rendered views contain
-  visible model pixels.
+  browser renderer completes, and confirm the multi-angle rendered views contain
+  visible model pixels. Tests must assert that all six named view images appear
+  in order, each has non-background model pixels, and each matching PNG download
+  control has the expected accessible name.
 
 ## Feature Inventory
 
@@ -196,6 +241,11 @@ Workbench acceptance criteria:
 
 - Uses a code-focused system prompt that asks for valid, deterministic, complete
   OpenSCAD.
+- Treats generated OpenSCAD as a complete artifact that must compile before it
+  can advance through the workflow. Compile diagnostics can trigger bounded
+  automatic compiler-repair generation; rendered views become evidence for
+  review and later user-confirmed iteration, not a trigger for automatic image
+  rewrite loops.
 - Bundles the practical `lich-3D/SCAD` printable-modeling skill into text LLM
   prompts. The web app does not read local Codex skill folders at runtime;
   instead, the product prompt includes the source-derived modeling patterns,
@@ -237,16 +287,34 @@ Workbench acceptance criteria:
   rerender.
 - Enforces a default 45 second render timeout.
 - Uses draft precision for normal iteration by normalizing `$fn` to 32.
-- Captures three orthographic views from generated STL:
+- Captures six multi-angle views from generated STL:
   - Front
-  - Top
+  - Back
+  - Left
   - Right
+  - Top
+  - Isometric
 - Uses Three.js lighting and STL parsing to create PNG data URLs.
 
 ### Review And Iteration
 
-- Sends the original requirement, current OpenSCAD, and three rendered images to
-  the vision endpoint.
+- Sends the original requirement, current OpenSCAD, and the multi-angle rendered
+  images to the vision endpoint.
+- Visual review is allowed only when all six view keys have non-empty images.
+  The image array sent to the provider must follow the stable view order:
+  front, back, left, right, top, isometric. If capture fails or fewer than six
+  views are available, the app stays in render/error state and does not call the
+  vision endpoint.
+- Review requests include the latest compile/render evidence so the vision model
+  can check both visual fit and obvious artifact quality issues. This feedback
+  produces a user-editable correction prompt only; it does not directly call the
+  text model.
+- Render evidence is a bounded provider contract, not localized UI copy. It
+  includes compile status, readable diagnostics, render precision, backend, and
+  rendered view count. `viewCount` equals the number of non-empty rendered view
+  images in the stable view set and must be `6` for visual review. STL bodies,
+  screenshots beyond the requested review images, and prompt traces are not sent
+  unless they are explicitly part of the current model request.
 - Expects JSON with:
   - `summary`
   - `issues`
@@ -263,6 +331,11 @@ Workbench acceptance criteria:
   requirement, review summary, issue list, and editable review guidance to the
   text LLM so the next draft is a targeted modification rather than a fresh
   unrelated generation.
+- Compile failures from generated or manually edited code remain visible in the
+  run stream and are folded into bounded compiler-repair text requests
+  automatically. When the repair limit is exhausted, the same diagnostic-derived
+  guidance remains editable for a manual retry. Visual review findings still
+  require the user to choose the iteration action before the text model runs.
 - Stores prompt traces for generation, compilation, review, revision, and final
   export in local project data for export/debugging, but normal users do not see
   a prompt trace panel in the workbench.
@@ -271,8 +344,11 @@ Workbench acceptance criteria:
 
 - Draft outputs:
   - Front PNG
-  - Top PNG
+  - Back PNG
+  - Left PNG
   - Right PNG
+  - Top PNG
+  - Isometric PNG
   - STL
 - Final output:
   - High-precision SCAD
@@ -297,7 +373,7 @@ Workbench acceptance criteria:
 
 - Frontend: React, Vite, and TypeScript.
 - Rendering: `openscad-wasm` compiles OpenSCAD in the browser, preferably inside
-  a Web Worker. Three.js parses STL output and captures orthographic PNG views.
+  a Web Worker. Three.js parses STL output and captures multi-angle PNG views.
 - Model gateway: Cloudflare Pages Functions under `functions/api`.
 - Persistence: browser `localStorage`; there is no server-side project database.
 - Deployment: Cloudflare Pages project `ai-openscad`.
@@ -309,7 +385,7 @@ Important source areas:
 - `src/lib/models.ts`: supported model presets and provider routing.
 - `src/lib/render.ts`: browser OpenSCAD compile/render adapter.
 - `src/lib/renderWorker.ts`: worker compile path.
-- `src/lib/capture.ts`: STL to front/top/right PNG capture.
+- `src/lib/capture.ts`: STL to multi-angle PNG capture.
 - `src/lib/project.ts`: project persistence, import, and export.
 - `src/lib/i18n.ts`: English and Chinese UI strings.
 - `functions/_shared/modelGateway.ts`: provider proxy for MiMo and DeepSeek.
@@ -324,8 +400,21 @@ The core project state contains:
 - User input: `requirement`, `originalRequirement`
 - Model settings: `codeModelId`, `visionModelId`
 - Model assets: `currentCode`, `proposedCode`, `stl`, `views`
-- Runtime output: `compilerOutput`, `review`, `runEvents`
+- Runtime output: `compilerOutput`, `renderEvidence`, `review`, `runEvents`
 - Audit trail: `iterations`, `promptTrace`
+
+`views` is a keyed object with the stable `ViewKey` order:
+
+- `front`
+- `back`
+- `left`
+- `right`
+- `top`
+- `isometric`
+
+Every value is a PNG data URL or an empty string. The UI, downloads, render
+evidence, and vision payload use this same order. A project imported from an
+older three-view export fills missing keys with empty strings until rerendered.
 
 Data is local to the browser unless the user explicitly exports a project JSON
 file or calls an external model provider through the gateway.

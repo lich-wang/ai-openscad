@@ -4,6 +4,7 @@ import {
   buildRenderPrecisionInstruction,
   type RenderPrecision
 } from "./renderSkill";
+import type { RenderEvidence } from "./project";
 
 export const OPENSCAD_SKILL_CONTEXT = `
 You generate production-quality OpenSCAD code.
@@ -37,6 +38,7 @@ export function buildRevisionPrompt(input: {
   issues: string[];
   userNotes?: string;
   precision?: RenderPrecision;
+  renderEvidence?: RenderEvidence | null;
 }): string {
   return `Revise this OpenSCAD model after visual review.
 ${buildRenderPrecisionInstruction(input.precision ?? "draft")}
@@ -59,11 +61,13 @@ ${input.issues.map((issue) => `- ${issue}`).join("\n") || "- No specific issues"
 User iteration notes:
 ${input.userNotes?.trim() || "No extra user notes."}
 
+${formatRenderEvidence(input.renderEvidence)}
+
 Return the complete revised OpenSCAD code only.`;
 }
 
 export function buildVisionSystemPrompt(requirement = ""): string {
-  return `You review OpenSCAD-generated 3D models from front, top, and right orthographic views.
+  return `You review OpenSCAD-generated 3D models from front, back, left, right, top, and isometric views.
 ${buildLanguageInstruction(requirement)}
 Return JSON with keys: summary, issues, correctionPrompt, confidence.
 - issues must be an array of strings.
@@ -73,7 +77,11 @@ Return JSON with keys: summary, issues, correctionPrompt, confidence.
 - correctionPrompt should refer to affected OpenSCAD modules or geometry relationships, but avoid returning OpenSCAD code.`;
 }
 
-export function buildVisionUserPrompt(requirement: string, code: string): string {
+export function buildVisionUserPrompt(
+  requirement: string,
+  code: string,
+  renderEvidence?: RenderEvidence | null
+): string {
   return `Original user requirement:
 ${requirement}
 
@@ -82,5 +90,21 @@ Current OpenSCAD code:
 ${code}
 \`\`\`
 
+${formatRenderEvidence(renderEvidence)}
+
 Review whether the rendered views satisfy the requirement. Focus on geometry, missing features, proportions, and obvious modeling defects.`;
+}
+
+export function formatRenderEvidence(evidence?: RenderEvidence | null): string {
+  if (!evidence) {
+    return "";
+  }
+  return [
+    "Render evidence:",
+    `compileStatus: ${evidence.compileStatus}`,
+    `diagnostics: ${evidence.diagnostics}`,
+    `renderPrecision: ${evidence.renderPrecision}`,
+    `backend: ${evidence.backend}`,
+    `viewCount: ${evidence.viewCount}`
+  ].join("\n");
 }

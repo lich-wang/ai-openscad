@@ -39,6 +39,8 @@ import {
   saveVisionApiKey,
   upsertProjectList,
   type ProjectState,
+  type PromptTraceEntry,
+  type RenderEvidence,
   type RunEvent,
   type RunEventRole,
   type RunEventStatus
@@ -53,6 +55,71 @@ import { acceptRevision, rejectRevision } from "./lib/workflow";
 type BusyState = "idle" | "generating" | "compiling" | "reviewing" | "exporting";
 type WorkflowStage = "code" | "render" | "review";
 type WorkflowStageState = "waiting" | "active" | "complete" | "error";
+type ViewKey = keyof ProjectState["views"];
+type DraftCompileSuccess = {
+  ok: true;
+  diagnostics: string;
+  evidence: RenderEvidence;
+  trace: PromptTraceEntry;
+  views: ProjectState["views"];
+  stl: string;
+};
+type DraftCompileFailure = {
+  ok: false;
+  diagnostics: string;
+  evidence: RenderEvidence;
+  trace: PromptTraceEntry;
+  views: null;
+  stl: null;
+};
+type DraftCompileResult = DraftCompileSuccess | DraftCompileFailure;
+
+const VIEW_KEYS: ViewKey[] = ["front", "back", "left", "right", "top", "isometric"];
+const MAX_COMPILER_REPAIR_ATTEMPTS = 2;
+const VIEW_LABEL_KEYS: Record<ViewKey, MessageKey> = {
+  front: "front",
+  back: "back",
+  left: "left",
+  right: "right",
+  top: "top",
+  isometric: "isometric"
+};
+const VIEW_DOWNLOAD_KEYS: Record<ViewKey, MessageKey> = {
+  front: "downloadFrontPng",
+  back: "downloadBackPng",
+  left: "downloadLeftPng",
+  right: "downloadRightPng",
+  top: "downloadTopPng",
+  isometric: "downloadIsometricPng"
+};
+
+function emptyViews(): ProjectState["views"] {
+  return {
+    front: "",
+    back: "",
+    left: "",
+    right: "",
+    top: "",
+    isometric: ""
+  };
+}
+
+function renderedViewCount(views: ProjectState["views"]): number {
+  return VIEW_KEYS.filter((key) => Boolean(views[key])).length;
+}
+
+function allViewsRendered(views: ProjectState["views"]): boolean {
+  return renderedViewCount(views) === VIEW_KEYS.length;
+}
+
+function viewImagesInOrder(views: ProjectState["views"]): string[] {
+  return VIEW_KEYS.map((key) => views[key]);
+}
+
+function canUseCodeModel(modelId: string, apiKey: string): boolean {
+  const provider = getModelPreset(modelId, "code").provider;
+  return provider === "mimo" || Boolean(apiKey.trim());
+}
 
 export default function App() {
   const [initialWorkspace] = useState(() => loadProjectWorkspace());
@@ -72,8 +139,18 @@ export default function App() {
   const tr = (key: MessageKey) => t(locale, key);
   const adapter = useMemo(() => createRenderMcp("web"), []);
   const isBusy = busy !== "idle";
-  const hasRenderedViews = Boolean(project.views.front && project.views.top && project.views.right);
+  const hasRenderedViews = allViewsRendered(project.views);
+  const hasCurrentReview = Boolean(project.review && hasRenderedViews);
   const hasPendingRevision = Boolean(project.proposedCode.trim());
+  const canUseCodeModelForRepair = canUseCodeModel(project.codeModelId, llmApiKey);
+  const hasDiagnosticFix = Boolean(
+    project.currentCode.trim() &&
+      !hasRenderedViews &&
+      !hasPendingRevision &&
+      !hasCurrentReview &&
+      project.renderEvidence?.compileStatus === "failure" &&
+      canUseCodeModelForRepair
+  );
   const compilerOutputForDisplay =
     renderStatus ||
     (hasPendingRevision && busy === "idle" ? tr("revisionReady") : project.compilerOutput);
@@ -82,14 +159,12 @@ export default function App() {
     errorStage,
     hasCode: Boolean(project.currentCode.trim() || project.proposedCode.trim()),
     hasRenderedViews,
-    hasReview: Boolean(project.review)
+    hasReview: hasCurrentReview
   });
   const hasModelWork = Boolean(
     project.currentCode.trim() ||
       project.proposedCode.trim() ||
-      project.views.front ||
-      project.views.top ||
-      project.views.right ||
+      renderedViewCount(project.views) > 0 ||
       project.review
   );
 
@@ -160,6 +235,57 @@ export default function App() {
     return current.originalRequirement.trim() || current.requirement.trim();
   }
 
+  function buildDiagnosticFixPrompt(requirement: string, diagnostics: string): string {
+    if (locale === "zh") {
+      return [
+        "修复当前 OpenSCAD 渲染失败诊断。",
+        `原始需求：${requirement || "保留原始用户需求。"}`,
+        "当前编译/渲染诊断：",
+        diagnostics,
+        "返回完整修正后的 OpenSCAD 源码。保留可打印几何、尺寸，以及所有与该错误无关的需求细节。"
+      ].join("\n");
+    }
+    return [
+      "Fix the current OpenSCAD render failed diagnostic.",
+      `Original requirement: ${requirement || "Preserve the original user requirement."}`,
+      "Current compile/render diagnostics:",
+      diagnostics,
+      "Return a complete corrected OpenSCAD source file. Preserve printable geometry, dimensions, and any requirement details not related to the error."
+    ].join("\n");
+  }
+
+  function fallbackRenderEvidence(diagnostics: string): RenderEvidence {
+    return {
+      compileStatus: "failure",
+      diagnostics,
+      renderPrecision: "draft",
+      backend: "web-manifold",
+      viewCount: 0
+    };
+  }
+
+  function diagnosticFixPatch(current: ProjectState, diagnostics: string, evidence: RenderEvidence) {
+    const prompt = buildDiagnosticFixPrompt(originalRequirementFor(current), diagnostics);
+    return {
+      requirement: prompt,
+      compilerOutput: diagnostics,
+      renderEvidence: evidence,
+      proposedCode: "",
+      review: null,
+      stl: "",
+      views: emptyViews(),
+      runEvents: [
+        ...current.runEvents,
+        createRunEvent({
+          role: "tool",
+          title: tr("diagnosticFixPromptReady"),
+          content: prompt
+        })
+      ],
+      updatedAt: new Date().toISOString()
+    };
+  }
+
   async function runSafely(action: BusyState, task: () => Promise<void>) {
     updateBusy(action);
     setError("");
@@ -223,7 +349,8 @@ export default function App() {
         proposedCode: "",
         review: null,
         stl: "",
-        views: { front: "", top: "", right: "" },
+        views: emptyViews(),
+        renderEvidence: null,
         compilerOutput: tr("streamingCode"),
         runEvents: [userEvent, codeEvent]
       }));
@@ -249,7 +376,8 @@ export default function App() {
         proposedCode: "",
         review: null,
         stl: "",
-        views: { front: "", top: "", right: "" },
+        views: emptyViews(),
+        renderEvidence: null,
         compilerOutput: tr("renderingDraft"),
         runEvents: current.runEvents.map((event) =>
           event.id === codeEventId
@@ -276,11 +404,22 @@ export default function App() {
         title: tr("renderStarted"),
         content: tr("renderStarted")
       }));
-      const rendered = await compileDraftCode(code);
+      let finalCode = code;
+      let rendered = await compileDraftCode(code);
+      if (!rendered.ok || !rendered.views || !rendered.stl) {
+        const repaired = await repairDraftCompileIfPossible({
+          code,
+          rendered,
+          originalRequirement,
+          sourceCodeEventId: codeEventId
+        });
+        finalCode = repaired.code;
+        rendered = repaired.rendered;
+      }
       if (!rendered.ok || !rendered.views || !rendered.stl) {
         setProject((current) => ({
           ...current,
-          compilerOutput: rendered.diagnostics,
+          ...diagnosticFixPatch(current, rendered.diagnostics, rendered.evidence),
           promptTrace: [...current.promptTrace, rendered.trace],
           updatedAt: new Date().toISOString()
         }));
@@ -293,12 +432,13 @@ export default function App() {
       }));
       setProject((current) => ({
         ...current,
-        currentCode: code,
+        currentCode: finalCode,
         proposedCode: "",
         review: null,
         views: rendered.views,
         stl: rendered.stl,
         compilerOutput: `${rendered.diagnostics}\n${tr("compiledDraft")}`,
+        renderEvidence: rendered.evidence,
         promptTrace: [...current.promptTrace, rendered.trace],
         updatedAt: new Date().toISOString(),
         iterations: [
@@ -307,7 +447,7 @@ export default function App() {
             id: crypto.randomUUID(),
             createdAt: new Date().toISOString(),
             requirement: current.requirement,
-            code,
+            code: finalCode,
             modelId: current.codeModelId,
             status: "compiled"
           }
@@ -326,11 +466,22 @@ export default function App() {
         title: tr("renderStarted"),
         content: tr("renderStarted")
       }));
-      const rendered = await compileDraftCode(project.currentCode);
+      const originalRequirement = originalRequirementFor(project);
+      let finalCode = project.currentCode;
+      let rendered = await compileDraftCode(project.currentCode);
+      if (!rendered.ok || !rendered.views || !rendered.stl) {
+        const repaired = await repairDraftCompileIfPossible({
+          code: project.currentCode,
+          rendered,
+          originalRequirement
+        });
+        finalCode = repaired.code;
+        rendered = repaired.rendered;
+      }
       if (!rendered.ok || !rendered.views || !rendered.stl) {
         setProject((current) => ({
           ...current,
-          compilerOutput: rendered.diagnostics,
+          ...diagnosticFixPatch(current, rendered.diagnostics, rendered.evidence),
           promptTrace: [...current.promptTrace, rendered.trace],
           updatedAt: new Date().toISOString()
         }));
@@ -343,11 +494,13 @@ export default function App() {
       }));
       setProject((current) => ({
         ...current,
+        currentCode: finalCode,
         review: null,
         proposedCode: "",
         views: rendered.views,
         stl: rendered.stl,
         compilerOutput: `${rendered.diagnostics}\n${tr("compiledDraft")}`,
+        renderEvidence: rendered.evidence,
         promptTrace: [...current.promptTrace, rendered.trace],
         updatedAt: new Date().toISOString(),
         iterations: [
@@ -356,7 +509,7 @@ export default function App() {
             id: crypto.randomUUID(),
             createdAt: new Date().toISOString(),
             requirement: current.requirement,
-            code: current.currentCode,
+            code: finalCode,
             modelId: current.codeModelId,
             status: "compiled"
           }
@@ -365,7 +518,7 @@ export default function App() {
     });
   }
 
-  async function compileDraftCode(code: string) {
+  async function compileDraftCode(code: string): Promise<DraftCompileResult> {
     await updateRenderStatus("renderPreparing");
     const draftCode = normalizeOpenScadPrecision(code, "draft");
     const result = await adapter.render({
@@ -373,6 +526,13 @@ export default function App() {
       onProgress: (stage) => updateRenderStatus(renderMcpStageMessageKey(stage))
     });
     const diagnostics = addDraftRenderTimeoutGuidance(result.diagnostics);
+    const evidence: RenderEvidence = {
+      compileStatus: result.ok && Boolean(result.stl && result.views) ? "success" : "failure",
+      diagnostics,
+      renderPrecision: "draft",
+      backend: result.backend ?? "web",
+      viewCount: result.views ? renderedViewCount(result.views) : 0
+    };
     const trace = createPromptTraceEntry({
       phase: "compile",
       modelId: "render-mcp:web",
@@ -384,6 +544,7 @@ export default function App() {
       return {
         ok: false,
         diagnostics,
+        evidence,
         trace,
         views: null,
         stl: null
@@ -392,10 +553,143 @@ export default function App() {
     return {
       ok: true,
       diagnostics: result.diagnostics,
+      evidence,
       trace,
       views: result.views,
       stl: result.stl
     };
+  }
+
+  async function repairDraftCompileIfPossible(input: {
+    code: string;
+    rendered: DraftCompileResult;
+    originalRequirement: string;
+    sourceCodeEventId?: string;
+  }): Promise<{ code: string; rendered: DraftCompileResult }> {
+    let code = input.code;
+    let rendered = input.rendered;
+    if (rendered.ok || !canUseCodeModel(project.codeModelId, llmApiKey)) {
+      return { code, rendered };
+    }
+
+    for (let attempt = 1; attempt <= MAX_COMPILER_REPAIR_ATTEMPTS; attempt += 1) {
+      const diagnostics = rendered.diagnostics;
+      const renderEvidence = rendered.evidence;
+      const repairPrompt = buildDiagnosticFixPrompt(input.originalRequirement, diagnostics);
+      const codeEventId = crypto.randomUUID();
+      const title = `${tr("compilerRepairStarted")} ${attempt} of ${MAX_COMPILER_REPAIR_ATTEMPTS}`;
+
+      updateBusy("generating");
+      setProject((current) => ({
+        ...current,
+        currentCode: code,
+        proposedCode: "",
+        review: null,
+        stl: "",
+        views: emptyViews(),
+        renderEvidence,
+        compilerOutput: diagnostics,
+        runEvents: [
+          ...current.runEvents,
+          createRunEvent({
+            id: codeEventId,
+            role: "assistant",
+            title,
+            content: title,
+            status: "active"
+          })
+        ],
+        updatedAt: new Date().toISOString()
+      }));
+
+      let repairedCode: string;
+      let trace: PromptTraceEntry;
+      try {
+        const proposed = await proposeRevision({
+          apiKey: llmApiKey,
+          modelId: project.codeModelId,
+          requirement: input.originalRequirement,
+          code,
+          review: {
+            summary: "Compile failed before visual review.",
+            issues: [diagnostics],
+            correctionPrompt: repairPrompt,
+            confidence: 0.2
+          },
+          userNotes: repairPrompt,
+          renderEvidence,
+          precision: "draft",
+          onToken: (streamedCode) => {
+            setProject((current) => ({
+              ...current,
+              currentCode: streamedCode,
+              compilerOutput: tr("streamingIteration")
+            }));
+          }
+        });
+        repairedCode = proposed.code;
+        trace = proposed.trace;
+      } catch (caught) {
+        const message = caught instanceof Error ? caught.message : String(caught);
+        setProject((current) => ({
+          ...current,
+          currentCode: code,
+          runEvents: current.runEvents.map((event) =>
+            event.id === codeEventId
+              ? { ...event, content: message, status: "error" }
+              : event
+          ),
+          updatedAt: new Date().toISOString()
+        }));
+        updateBusy("compiling");
+        return { code, rendered };
+      }
+
+      code = repairedCode;
+      setProject((current) => ({
+        ...current,
+        currentCode: code,
+        proposedCode: "",
+        review: null,
+        stl: "",
+        views: emptyViews(),
+        renderEvidence: null,
+        compilerOutput: tr("renderingDraft"),
+        runEvents: current.runEvents.map((event) =>
+          event.id === codeEventId
+            ? { ...event, content: "", status: "complete" }
+            : event.id === input.sourceCodeEventId
+              ? { ...event, code }
+            : event
+        ),
+        promptTrace: [...current.promptTrace, trace],
+        updatedAt: new Date().toISOString(),
+        iterations: [
+          ...current.iterations,
+          {
+            id: crypto.randomUUID(),
+            createdAt: new Date().toISOString(),
+            requirement: repairPrompt,
+            code,
+            modelId: current.codeModelId,
+            status: "generated"
+          }
+        ]
+      }));
+
+      updateBusy("compiling");
+      appendRunEvent(createRunEvent({
+        role: "tool",
+        title: tr("renderStarted"),
+        content: tr("renderStarted")
+      }));
+      rendered = await compileDraftCode(code);
+      if (rendered.ok && rendered.views && rendered.stl) {
+        return { code, rendered };
+      }
+    }
+
+    return { code, rendered };
   }
 
   async function updateRenderStatus(key: MessageKey) {
@@ -411,7 +705,7 @@ export default function App() {
 
   async function handleReview() {
     await runSafely("reviewing", async () => {
-      if (!project.views.front || !project.views.top || !project.views.right) {
+      if (!allViewsRendered(project.views)) {
         throw new Error(tr("compileBeforeReview"));
       }
       requireVisionApiKey();
@@ -427,7 +721,8 @@ export default function App() {
         modelId: project.visionModelId,
         requirement: originalRequirement,
         code: project.currentCode,
-        images: [project.views.front, project.views.top, project.views.right]
+        images: viewImagesInOrder(project.views),
+        renderEvidence: project.renderEvidence
       });
       setProject((current) => ({
         ...current,
@@ -476,11 +771,170 @@ export default function App() {
     });
   }
 
+  async function handleDiagnosticFix() {
+    await runSafely("generating", async () => {
+      requireLlmApiKey();
+      if (!project.currentCode.trim()) {
+        throw new Error(tr("missingCode"));
+      }
+      const originalRequirement = originalRequirementFor(project);
+      const diagnostics = project.renderEvidence?.diagnostics || project.compilerOutput;
+      const renderEvidence = project.renderEvidence ?? fallbackRenderEvidence(diagnostics);
+      const fixPrompt =
+        project.requirement.trim() || buildDiagnosticFixPrompt(originalRequirement, diagnostics);
+      const codeEventId = crypto.randomUUID();
+      setProject((current) => ({
+        ...current,
+        currentCode: "",
+        proposedCode: "",
+        review: null,
+        views: emptyViews(),
+        stl: "",
+        renderEvidence: null,
+        compilerOutput: tr("streamingIteration"),
+        runEvents: [
+          ...(current.runEvents.length
+            ? current.runEvents
+            : [
+                createRunEvent({
+                  role: "user",
+                  title: tr("userRequest"),
+                  content: originalRequirement
+                })
+              ]),
+          createRunEvent({
+            role: "user",
+            title: tr("diagnosticFixStarted"),
+            content: fixPrompt
+          }),
+          createRunEvent({
+            id: codeEventId,
+            role: "assistant",
+            title: tr("generatedCode"),
+            content: tr("streamingIteration"),
+            status: "active"
+          })
+        ]
+      }));
+      const { code, trace } = await proposeRevision({
+        apiKey: llmApiKey,
+        modelId: project.codeModelId,
+        requirement: originalRequirement,
+        code: project.currentCode,
+        review: {
+          summary: "Compile failed before visual review.",
+          issues: [diagnostics],
+          correctionPrompt: fixPrompt,
+          confidence: 0.2
+        },
+        userNotes: fixPrompt,
+        renderEvidence,
+        precision: "draft",
+        onToken: (streamedCode) => {
+          setProject((current) => ({
+            ...current,
+            currentCode: streamedCode,
+            compilerOutput: tr("streamingIteration"),
+            runEvents: current.runEvents.map((event) =>
+              event.id === codeEventId ? { ...event, code: streamedCode } : event
+            )
+          }));
+        }
+      });
+      setProject((current) => ({
+        ...current,
+        currentCode: code,
+        proposedCode: "",
+        review: null,
+        views: emptyViews(),
+        stl: "",
+        renderEvidence: null,
+        compilerOutput: tr("renderingDraft"),
+        runEvents: current.runEvents.map((event) =>
+          event.id === codeEventId
+            ? { ...event, content: "", code, status: "complete" }
+            : event
+        ),
+        promptTrace: [...current.promptTrace, trace],
+        updatedAt: new Date().toISOString(),
+        iterations: [
+          ...current.iterations,
+          {
+            id: crypto.randomUUID(),
+            createdAt: new Date().toISOString(),
+            requirement: fixPrompt,
+            code,
+            modelId: current.codeModelId,
+            status: "generated"
+          }
+        ]
+      }));
+      updateBusy("compiling");
+      appendRunEvent(createRunEvent({
+        role: "tool",
+        title: tr("renderStarted"),
+        content: tr("renderStarted")
+      }));
+      let finalCode = code;
+      let rendered = await compileDraftCode(code);
+      if (!rendered.ok || !rendered.views || !rendered.stl) {
+        const repaired = await repairDraftCompileIfPossible({
+          code,
+          rendered,
+          originalRequirement,
+          sourceCodeEventId: codeEventId
+        });
+        finalCode = repaired.code;
+        rendered = repaired.rendered;
+      }
+      if (!rendered.ok || !rendered.views || !rendered.stl) {
+        setProject((current) => ({
+          ...current,
+          ...diagnosticFixPatch(current, rendered.diagnostics, rendered.evidence),
+          promptTrace: [...current.promptTrace, rendered.trace],
+          updatedAt: new Date().toISOString()
+        }));
+        throw new Error(rendered.diagnostics);
+      }
+      appendRunEvent(createRunEvent({
+        role: "tool",
+        title: tr("renderFinished"),
+        content: `${rendered.diagnostics}\n${tr("compiledDraft")}`
+      }));
+      setProject((current) => ({
+        ...current,
+        currentCode: finalCode,
+        proposedCode: "",
+        review: null,
+        views: rendered.views,
+        stl: rendered.stl,
+        compilerOutput: `${rendered.diagnostics}\n${tr("compiledDraft")}`,
+        renderEvidence: rendered.evidence,
+        promptTrace: [...current.promptTrace, rendered.trace],
+        updatedAt: new Date().toISOString(),
+        iterations: [
+          ...current.iterations,
+          {
+            id: crypto.randomUUID(),
+            createdAt: new Date().toISOString(),
+            requirement: fixPrompt,
+            code,
+            modelId: current.codeModelId,
+            status: "compiled"
+          }
+        ]
+      }));
+    });
+  }
+
   async function handleIterateAgain() {
     await runSafely("generating", async () => {
       requireLlmApiKey();
       if (!project.review) {
         throw new Error(tr("reviewBeforeIterate"));
+      }
+      if (!allViewsRendered(project.views)) {
+        throw new Error(tr("compileBeforeReview"));
       }
       const originalRequirement = originalRequirementFor(project);
       const iterationPrompt = project.requirement.trim() || project.review.correctionPrompt;
@@ -490,8 +944,9 @@ export default function App() {
         currentCode: "",
         proposedCode: "",
         review: null,
-        views: { front: "", top: "", right: "" },
+        views: emptyViews(),
         stl: "",
+        renderEvidence: null,
         compilerOutput: tr("streamingIteration"),
         runEvents: [
           ...(current.runEvents.length
@@ -524,6 +979,7 @@ export default function App() {
         code: project.currentCode,
         review: project.review,
         userNotes: iterationPrompt,
+        renderEvidence: project.renderEvidence,
         precision: "draft",
         onToken: (streamedCode) => {
           setProject((current) => ({
@@ -541,8 +997,9 @@ export default function App() {
         currentCode: code,
         proposedCode: "",
         review: null,
-        views: { front: "", top: "", right: "" },
+        views: emptyViews(),
         stl: "",
+        renderEvidence: null,
         compilerOutput: tr("renderingDraft"),
         runEvents: current.runEvents.map((event) =>
           event.id === codeEventId
@@ -569,11 +1026,22 @@ export default function App() {
         title: tr("renderStarted"),
         content: tr("renderStarted")
       }));
-      const rendered = await compileDraftCode(code);
+      let finalCode = code;
+      let rendered = await compileDraftCode(code);
+      if (!rendered.ok || !rendered.views || !rendered.stl) {
+        const repaired = await repairDraftCompileIfPossible({
+          code,
+          rendered,
+          originalRequirement,
+          sourceCodeEventId: codeEventId
+        });
+        finalCode = repaired.code;
+        rendered = repaired.rendered;
+      }
       if (!rendered.ok || !rendered.views || !rendered.stl) {
         setProject((current) => ({
           ...current,
-          compilerOutput: rendered.diagnostics,
+          ...diagnosticFixPatch(current, rendered.diagnostics, rendered.evidence),
           promptTrace: [...current.promptTrace, rendered.trace],
           updatedAt: new Date().toISOString()
         }));
@@ -586,12 +1054,13 @@ export default function App() {
       }));
       setProject((current) => ({
         ...current,
-        currentCode: code,
+        currentCode: finalCode,
         proposedCode: "",
         review: null,
         views: rendered.views,
         stl: rendered.stl,
         compilerOutput: `${rendered.diagnostics}\n${tr("compiledDraft")}`,
+        renderEvidence: rendered.evidence,
         promptTrace: [...current.promptTrace, rendered.trace],
         updatedAt: new Date().toISOString(),
         iterations: [
@@ -600,7 +1069,7 @@ export default function App() {
             id: crypto.randomUUID(),
             createdAt: new Date().toISOString(),
             requirement: iterationPrompt,
-            code,
+            code: finalCode,
             modelId: current.codeModelId,
             status: "compiled"
           }
@@ -618,6 +1087,9 @@ export default function App() {
       if (!project.currentCode.trim()) {
         throw new Error(tr("missingCode"));
       }
+      if (!allViewsRendered(project.views)) {
+        throw new Error(tr("compileBeforeReview"));
+      }
       const finalCode = normalizeOpenScadPrecision(project.currentCode, "final");
       await updateRenderStatus("renderPreparing");
       const result = await adapter.render({
@@ -625,6 +1097,15 @@ export default function App() {
         onProgress: (stage) => updateRenderStatus(renderMcpStageMessageKey(stage))
       });
       const diagnostics = addFinalExportTimeoutGuidance(result.diagnostics);
+      const evidence: RenderEvidence = {
+        compileStatus: result.ok && Boolean(result.stl && result.views) ? "success" : "failure",
+        diagnostics,
+        renderPrecision: "final",
+        backend: result.backend ?? "web",
+        viewCount: result.views
+          ? renderedViewCount(result.views)
+          : 0
+      };
       const trace = createPromptTraceEntry({
         phase: "final-export",
         modelId: "render-mcp:web",
@@ -651,6 +1132,7 @@ export default function App() {
         views: finalViews,
         stl: finalStl,
         compilerOutput: `${diagnostics}\n${tr("finalExportDone")}`,
+        renderEvidence: evidence,
         promptTrace: [...current.promptTrace, trace],
         updatedAt: new Date().toISOString()
       }));
@@ -664,11 +1146,22 @@ export default function App() {
       if (!accepted.currentCode.trim()) {
         throw new Error(tr("missingCode"));
       }
-      const rendered = await compileDraftCode(accepted.currentCode);
+      const originalRequirement = originalRequirementFor(accepted);
+      let finalCode = accepted.currentCode;
+      let rendered = await compileDraftCode(accepted.currentCode);
+      if (!rendered.ok || !rendered.views || !rendered.stl) {
+        const repaired = await repairDraftCompileIfPossible({
+          code: accepted.currentCode,
+          rendered,
+          originalRequirement
+        });
+        finalCode = repaired.code;
+        rendered = repaired.rendered;
+      }
       if (!rendered.ok || !rendered.views || !rendered.stl) {
         setProject((current) => ({
           ...current,
-          compilerOutput: rendered.diagnostics,
+          ...diagnosticFixPatch(current, rendered.diagnostics, rendered.evidence),
           promptTrace: [...current.promptTrace, rendered.trace],
           updatedAt: new Date().toISOString()
         }));
@@ -676,10 +1169,12 @@ export default function App() {
       }
       setProject((current) => ({
         ...current,
+        currentCode: finalCode,
         views: rendered.views,
         stl: rendered.stl,
         review: null,
         compilerOutput: `${rendered.diagnostics}\n${tr("compiledDraft")}`,
+        renderEvidence: rendered.evidence,
         promptTrace: [...current.promptTrace, rendered.trace],
         updatedAt: new Date().toISOString(),
         iterations: [
@@ -688,7 +1183,7 @@ export default function App() {
             id: crypto.randomUUID(),
             createdAt: new Date().toISOString(),
             requirement: current.requirement,
-            code: accepted.currentCode,
+            code: finalCode,
             modelId: current.codeModelId,
             status: "compiled"
           }
@@ -719,6 +1214,19 @@ export default function App() {
     setProject((current) => ({
       ...current,
       ...patch,
+      updatedAt: new Date().toISOString()
+    }));
+  }
+
+  function handleCodeEdit(code: string) {
+    setProject((current) => ({
+      ...current,
+      currentCode: code,
+      proposedCode: "",
+      review: null,
+      stl: "",
+      views: emptyViews(),
+      renderEvidence: null,
       updatedAt: new Date().toISOString()
     }));
   }
@@ -880,7 +1388,13 @@ export default function App() {
               {hasPendingRevision ? (
                 <p className="pendingActionHint">{tr("pendingRevisionActionHint")}</p>
               ) : null}
-              {!hasPendingRevision && !hasRenderedViews ? (
+              {hasDiagnosticFix ? (
+                <button className="primaryAction" disabled={isBusy} onClick={handleDiagnosticFix}>
+                  <RefreshCw size={16} />
+                  {tr("fixWithDiagnostics")}
+                </button>
+              ) : null}
+              {!hasPendingRevision && !hasRenderedViews && !hasDiagnosticFix ? (
                 <button className="primaryAction" disabled={isBusy} onClick={handleGenerate}>
                   <Send size={16} />
                   {tr("generate")}
@@ -912,7 +1426,7 @@ export default function App() {
                   </button>
                 </>
               ) : null}
-              {!hasPendingRevision && project.review ? (
+              {!hasPendingRevision && hasCurrentReview ? (
                 <>
                   <button className="primaryAction" disabled={isBusy} onClick={handleIterateAgain}>
                     <RefreshCw size={16} />
@@ -947,7 +1461,7 @@ export default function App() {
               className="codeEditor"
               spellCheck={false}
               value={project.currentCode}
-              onChange={(event) => updateProject({ currentCode: event.target.value })}
+              onChange={(event) => handleCodeEdit(event.target.value)}
             />
           </details>
 
@@ -1010,43 +1524,26 @@ export default function App() {
             <h2>{tr("views")}</h2>
           </div>
           <div className="viewGrid">
-            <ViewImage label={tr("front")} src={project.views.front} />
-            <ViewImage label={tr("top")} src={project.views.top} />
-            <ViewImage label={tr("right")} src={project.views.right} />
+            {VIEW_KEYS.map((key) => (
+              <ViewImage key={key} label={tr(VIEW_LABEL_KEYS[key])} src={project.views[key]} />
+            ))}
           </div>
 
           {hasRenderedViews || project.stl ? (
             <section className="renderAssetPanel" aria-label={tr("renderOutputs")}>
               <span>{tr("renderOutputs")}</span>
               <div className="renderAssetActions">
-                <button
-                  disabled={!project.views.front}
-                  onClick={() =>
-                    downloadDataUrl("ai-openscad-front.png", project.views.front)
-                  }
-                  type="button"
-                >
-                  <Download size={14} />
-                  {tr("downloadFrontPng")}
-                </button>
-                <button
-                  disabled={!project.views.top}
-                  onClick={() => downloadDataUrl("ai-openscad-top.png", project.views.top)}
-                  type="button"
-                >
-                  <Download size={14} />
-                  {tr("downloadTopPng")}
-                </button>
-                <button
-                  disabled={!project.views.right}
-                  onClick={() =>
-                    downloadDataUrl("ai-openscad-right.png", project.views.right)
-                  }
-                  type="button"
-                >
-                  <Download size={14} />
-                  {tr("downloadRightPng")}
-                </button>
+                {VIEW_KEYS.map((key) => (
+                  <button
+                    key={key}
+                    disabled={!project.views[key]}
+                    onClick={() => downloadDataUrl(`ai-openscad-${key}.png`, project.views[key])}
+                    type="button"
+                  >
+                    <Download size={14} />
+                    {tr(VIEW_DOWNLOAD_KEYS[key])}
+                  </button>
+                ))}
                 <button
                   disabled={!project.stl}
                   onClick={() =>
@@ -1331,8 +1828,11 @@ function renderMcpStageMessageKey(stage: RenderMcpStage): MessageKey {
   const keys: Record<RenderMcpStage, MessageKey> = {
     compile: "renderCompiling",
     front: "renderFront",
+    back: "renderBack",
+    left: "renderLeft",
+    right: "renderRight",
     top: "renderTop",
-    right: "renderRight"
+    isometric: "renderIsometric"
   };
   return keys[stage];
 }

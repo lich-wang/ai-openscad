@@ -129,9 +129,97 @@ describe("apiClient prompt assembly", () => {
     const prompt = buildVisionSystemPrompt("生成一个杯子");
 
     expect(prompt).toContain("correctionPrompt");
+    expect(prompt).toContain("front, back, left, right, top, and isometric");
     expect(prompt).toContain("avoid returning OpenSCAD code");
     expect(prompt).toContain("affected OpenSCAD modules");
     expect(prompt).toContain("sizing, placement, or proportion guidance");
+  });
+
+  it("includes bounded render evidence in vision review prompts", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        content: JSON.stringify({
+          summary: "Rendered correctly.",
+          issues: [],
+          correctionPrompt: "No change needed.",
+          confidence: 0.9
+        })
+      })
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await reviewViews({
+      apiKey: "sk-user",
+      modelId: "mimo-v2.5",
+      requirement: "Make a printable box",
+      code: "cube(10);",
+      images: [
+        "data:image/png;base64,front",
+        "data:image/png;base64,back",
+        "data:image/png;base64,left",
+        "data:image/png;base64,right",
+        "data:image/png;base64,top",
+        "data:image/png;base64,isometric"
+      ],
+      renderEvidence: {
+        compileStatus: "success",
+        diagnostics: "Compiled to STL in browser.",
+        renderPrecision: "draft",
+        backend: "web-manifold",
+        viewCount: 6,
+        stl: "solid secret\nendsolid secret",
+        promptTrace: "hidden prompt trace",
+        extraScreenshot: "data:image/png;base64,hidden"
+      } as never
+    });
+
+    const body = JSON.parse(String(fetchMock.mock.calls[0][1]?.body)) as {
+      messages: Array<{ content: unknown }>;
+    };
+    const userPrompt = JSON.stringify(body.messages[1].content);
+    expect(userPrompt).toContain("Render evidence");
+    expect(userPrompt).toContain("compileStatus: success");
+    expect(userPrompt).toContain("Compiled to STL in browser.");
+    expect(userPrompt).toContain("renderPrecision: draft");
+    expect(userPrompt).toContain("backend: web-manifold");
+    expect(userPrompt).toContain("viewCount: 6");
+    expect(userPrompt).not.toContain("solid secret");
+    expect(userPrompt).not.toContain("hidden prompt trace");
+    expect(userPrompt).not.toContain("extraScreenshot");
+    expect(userPrompt).not.toContain("data:image/png;base64,hidden");
+
+    vi.unstubAllGlobals();
+  });
+
+  it("includes compile diagnostics in user-triggered revision prompts", () => {
+    const request = buildRevisionRequest({
+      apiKey: "sk-user",
+      modelId: "mimo-v2.5",
+      requirement: "Make a printable cup",
+      code: "module cup() { cylinder(h=40, r=20);",
+      review: {
+        summary: "Compile failed before visual review.",
+        issues: ["OpenSCAD parser reported a missing closing brace."],
+        correctionPrompt: "Fix the OpenSCAD syntax error and preserve the cup requirement.",
+        confidence: 0.2
+      },
+      userNotes: "Fix the current compile error.",
+      renderEvidence: {
+        compileStatus: "failure",
+        diagnostics: "Parser error: syntax error in file input.scad, line 1",
+        renderPrecision: "draft",
+        backend: "web-manifold",
+        viewCount: 0
+      },
+      precision: "draft"
+    });
+
+    const userPrompt = String(request.body.messages[1].content);
+    expect(userPrompt).toContain("Render evidence");
+    expect(userPrompt).toContain("compileStatus: failure");
+    expect(userPrompt).toContain("Parser error: syntax error");
+    expect(userPrompt).toContain("viewCount: 0");
   });
 
   it("builds a concrete fallback when vision returns a vague correction prompt", async () => {
@@ -155,7 +243,14 @@ describe("apiClient prompt assembly", () => {
       modelId: "mimo-v2.5",
       requirement: "生成一个30ML的杯子模型",
       code: "module cup() { cup(); }",
-      images: ["data:image/png;base64,front", "data:image/png;base64,top"]
+      images: [
+        "data:image/png;base64,front",
+        "data:image/png;base64,back",
+        "data:image/png;base64,left",
+        "data:image/png;base64,right",
+        "data:image/png;base64,top",
+        "data:image/png;base64,isometric"
+      ]
     });
 
     expect(review.correctionPrompt).toContain("Original requirement");

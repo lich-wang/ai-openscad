@@ -5,6 +5,8 @@ const RUN_SCREENSHOT_ASSERTIONS = !process.env.CI;
 const INVITE_IMAGE_NATURAL_WIDTH = 772;
 const INVITE_IMAGE_NATURAL_HEIGHT = 1004;
 const INVITE_IMAGE_DISPLAY_SCALE = 0.5;
+const pixel =
+  "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADElEQVR42mP8z8AARQAFAAH/AnH9zAAAAABJRU5ErkJggg==";
 
 const project = {
   id: "project-ui-test",
@@ -25,12 +27,12 @@ const project = {
   },
   stl: "solid ui-test\nendsolid ui-test",
   views: {
-    front:
-      "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADElEQVR42mP8z8AARQAFAAH/AnH9zAAAAABJRU5ErkJggg==",
-    top:
-      "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADElEQVR42mP8z8AARQAFAAH/AnH9zAAAAABJRU5ErkJggg==",
-    right:
-      "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADElEQVR42mP8z8AARQAFAAH/AnH9zAAAAABJRU5ErkJggg=="
+    front: pixel,
+    back: pixel,
+    left: pixel,
+    right: pixel,
+    top: pixel,
+    isometric: pixel
   },
   iterations: [
     {
@@ -112,7 +114,7 @@ const emptyProject = {
   compilerOutput: "",
   review: null,
   stl: "",
-  views: { front: "", top: "", right: "" },
+  views: { front: "", back: "", left: "", right: "", top: "", isometric: "" },
   iterations: [],
   runEvents: [],
   promptTrace: [],
@@ -388,17 +390,25 @@ test("desktop workbench keeps controls visible", async ({
   );
   expect(controlBox!.x + controlBox!.width).toBeLessThan(codeBox!.x);
   expect(viewGridBox!.height).toBeGreaterThanOrEqual(resultBox!.height * 0.5);
+  await expect(page.locator(".viewTile")).toHaveCount(6);
+  await expect(page.locator(".viewTile figcaption")).toHaveText([
+    "Front",
+    "Back",
+    "Left",
+    "Right",
+    "Top",
+    "Isometric"
+  ]);
   const frontBox = await page.locator(".viewTile").first().boundingBox();
-  const topBox = await page.locator(".viewTile").nth(1).boundingBox();
-  const rightBox = await page.locator(".viewTile").nth(2).boundingBox();
   expect(frontBox).not.toBeNull();
-  expect(topBox).not.toBeNull();
-  expect(rightBox).not.toBeNull();
-  expect(frontBox!.width * frontBox!.height).toBeGreaterThan(
-    topBox!.width * topBox!.height
-  );
-  expect(topBox!.y).toBeGreaterThan(frontBox!.y);
-  expect(rightBox!.y).toBeGreaterThan(frontBox!.y);
+  for (let index = 1; index < 6; index += 1) {
+    const supportingBox = await page.locator(".viewTile").nth(index).boundingBox();
+    expect(supportingBox).not.toBeNull();
+    expect(frontBox!.width * frontBox!.height).toBeGreaterThan(
+      supportingBox!.width * supportingBox!.height
+    );
+    expect(supportingBox!.y).toBeGreaterThan(frontBox!.y);
+  }
 
   await page.locator(".controlPanel").getByRole("button", { name: "New model" }).focus();
   const focusedPanels: string[] = [];

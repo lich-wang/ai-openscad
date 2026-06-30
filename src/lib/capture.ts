@@ -3,11 +3,20 @@ import { STLLoader } from "three/examples/jsm/loaders/STLLoader.js";
 
 export interface ViewSet {
   front: string;
+  back: string;
+  left: string;
   top: string;
   right: string;
+  isometric: string;
 }
 
-export type ViewCaptureStage = "front" | "top" | "right";
+export type ViewCaptureStage =
+  | "front"
+  | "back"
+  | "left"
+  | "right"
+  | "top"
+  | "isometric";
 
 export async function captureOrthographicViews(
   stl: string,
@@ -66,12 +75,18 @@ export async function captureOrthographicViews(
 
   await options.onProgress?.("front");
   const front = render(new THREE.Vector3(0, -1, 0));
-  await options.onProgress?.("top");
-  const top = render(new THREE.Vector3(0, 0, 1));
+  await options.onProgress?.("back");
+  const back = render(new THREE.Vector3(0, 1, 0));
+  await options.onProgress?.("left");
+  const left = render(new THREE.Vector3(-1, 0, 0));
   await options.onProgress?.("right");
   const right = render(new THREE.Vector3(1, 0, 0));
+  await options.onProgress?.("top");
+  const top = render(new THREE.Vector3(0, 0, 1));
+  await options.onProgress?.("isometric");
+  const isometric = render(new THREE.Vector3(1, -1, 0.75).normalize());
 
-  const views = { front, top, right };
+  const views = { front, back, left, right, top, isometric };
 
   renderer.dispose();
   geometry.dispose();

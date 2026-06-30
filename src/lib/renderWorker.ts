@@ -2,7 +2,7 @@ import { createOpenSCAD, type OpenSCADInstance } from "openscad-wasm";
 import {
   buildRenderFailureDiagnostics,
   buildRenderSuccessDiagnostics,
-  renderOpenScadToStl,
+  renderOpenScadToStlWithBackend,
   type RenderResult
 } from "./render";
 
@@ -75,8 +75,11 @@ export function createRenderWorkerHandler(dependencies: RenderWorkerDependencies
       }
       const instance = await consumeOpenScad();
       let stl = "";
+      let backend = "web-default";
       try {
-        stl = await renderOpenScadToStl(instance, code);
+        const rendered = await renderOpenScadToStlWithBackend(instance, code);
+        stl = rendered.stl;
+        backend = rendered.backend;
       } finally {
         cleanupConsumedOpenScad(instance);
         prewarmNextOpenScad();
@@ -86,6 +89,7 @@ export function createRenderWorkerHandler(dependencies: RenderWorkerDependencies
         result: {
           ok: true,
           stl,
+          backend,
           diagnostics: buildRenderSuccessDiagnostics(openScadLogs)
         }
       });

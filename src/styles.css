@@ -1053,13 +1053,14 @@ textarea {
   display: grid;
   gap: 8px;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  grid-template-rows: minmax(0, 1.35fr) minmax(0, 1fr);
+  grid-template-rows: minmax(170px, 1.8fr) repeat(3, minmax(92px, 1fr));
   flex: 1;
   min-height: 0;
 }
 
 .viewGrid .viewTile:first-child {
   grid-column: 1 / -1;
+  grid-row: 1;
 }
 
 .viewTile {
@@ -1129,6 +1130,7 @@ textarea {
   .buttonGrid,
   .viewGrid {
     grid-template-columns: 1fr;
+    grid-template-rows: none;
   }
 
   .codeEditor {

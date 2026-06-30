@@ -10,7 +10,7 @@ const project = {
   proposedCode: "",
   compilerOutput: "",
   review: null,
-  views: { front: "", top: "", right: "" },
+  views: { front: "", back: "", left: "", right: "", top: "", isometric: "" },
   iterations: [],
   promptTrace: [],
   updatedAt: "2026-06-26T00:00:00.000Z"

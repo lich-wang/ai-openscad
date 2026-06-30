@@ -9,6 +9,7 @@ export interface RenderResult {
   ok: boolean;
   stl?: string;
   diagnostics: string;
+  backend?: string;
 }
 
 export interface RenderAdapter {
@@ -35,6 +36,11 @@ export interface RenderMcpAdapter extends RenderAdapter {
 export type OpenScadLoader = () => Promise<OpenSCADInstance>;
 export type RenderWorkerFactory = () => Worker;
 export type ViewCapture = typeof captureOrthographicViews;
+
+interface StlRenderOutput {
+  stl: string;
+  backend: string;
+}
 
 export interface WebRenderMcpAdapterOptions {
   loadOpenScad?: OpenScadLoader;
@@ -143,6 +149,7 @@ export class WebRenderMcpAdapter implements RenderMcpAdapter {
       return {
         ok: false,
         stl: compiled.stl,
+        backend: compiled.backend,
         diagnostics: buildRenderFailureDiagnostics(error, [compiled.diagnostics])
       };
     }
@@ -151,14 +158,15 @@ export class WebRenderMcpAdapter implements RenderMcpAdapter {
   private async compileInCurrentContext(code: string): Promise<RenderResult> {
     try {
       const instance = await this.loadOpenScad();
-      const stl = await withTimeout(
-        renderOpenScadToStl(instance, code),
+      const rendered = await withTimeout(
+        renderOpenScadToStlWithBackend(instance, code),
         this.timeoutMs,
         renderTimeoutMessage(this.timeoutMs)
       );
       return {
         ok: true,
-        stl,
+        stl: rendered.stl,
+        backend: rendered.backend,
         diagnostics: "Compiled to STL in browser."
       };
     } catch (error) {
@@ -237,9 +245,19 @@ export async function renderOpenScadToStl(
   instance: OpenSCADInstance,
   code: string
 ): Promise<string> {
+  return (await renderOpenScadToStlWithBackend(instance, code)).stl;
+}
+
+export async function renderOpenScadToStlWithBackend(
+  instance: OpenSCADInstance,
+  code: string
+): Promise<StlRenderOutput> {
   const openscad = instance.getInstance?.();
   if (!openscad) {
-    return instance.renderToStl(code);
+    return {
+      stl: await instance.renderToStl(code),
+      backend: "web-default"
+    };
   }
 
   try {
@@ -256,9 +274,15 @@ export async function renderOpenScadToStl(
     const result = openscad.FS.readFile("/output.stl", {
       encoding: "utf8"
     });
-    return typeof result === "string" ? result : new TextDecoder().decode(result);
+    return {
+      stl: typeof result === "string" ? result : new TextDecoder().decode(result),
+      backend: "web-manifold"
+    };
   } catch {
-    return instance.renderToStl(code);
+    return {
+      stl: await instance.renderToStl(code),
+      backend: "web-default"
+    };
   } finally {
     try {
       openscad.FS.unlink("/input.scad");

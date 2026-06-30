@@ -5,7 +5,7 @@ import {
   buildVisionSystemPrompt,
   buildVisionUserPrompt
 } from "./openscadSkills";
-import type { PromptTraceEntry, VisionReview } from "./project";
+import type { PromptTraceEntry, RenderEvidence, VisionReview } from "./project";
 import { createPromptTraceEntry } from "./promptTrace";
 import type { RenderPrecision } from "./renderSkill";
 import { readOpenAiStream } from "./streaming";
@@ -51,9 +51,14 @@ export async function reviewViews(input: {
   requirement: string;
   code: string;
   images: string[];
+  renderEvidence?: RenderEvidence | null;
 }): Promise<{ review: VisionReview; trace: PromptTraceEntry }> {
   const systemPrompt = buildVisionSystemPrompt(input.requirement);
-  const userPrompt = buildVisionUserPrompt(input.requirement, input.code);
+  const userPrompt = buildVisionUserPrompt(
+    input.requirement,
+    input.code,
+    input.renderEvidence
+  );
   const request = createModelRequest({
     apiKey: input.apiKey,
     modelId: input.modelId,
@@ -86,6 +91,7 @@ export async function proposeRevision(input: {
   review: VisionReview;
   userNotes?: string;
   precision?: RenderPrecision;
+  renderEvidence?: RenderEvidence | null;
   onToken?: (code: string) => void;
 }): Promise<{ code: string; trace: PromptTraceEntry }> {
   const request = buildRevisionRequest({
@@ -96,6 +102,7 @@ export async function proposeRevision(input: {
     review: input.review,
     userNotes: input.userNotes,
     precision: input.precision ?? "draft",
+    renderEvidence: input.renderEvidence,
     stream: Boolean(input.onToken)
   });
   const response = input.onToken
@@ -140,6 +147,7 @@ export function buildRevisionRequest(input: {
   review: VisionReview;
   userNotes?: string;
   precision?: RenderPrecision;
+  renderEvidence?: RenderEvidence | null;
   stream?: boolean;
 }) {
   return createModelRequest({
@@ -156,7 +164,8 @@ export function buildRevisionRequest(input: {
       reviewSummary: input.review.summary,
       issues: input.review.issues,
       userNotes: input.userNotes,
-      precision: input.precision ?? "draft"
+      precision: input.precision ?? "draft",
+      renderEvidence: input.renderEvidence
     }),
     stream: input.stream
   });

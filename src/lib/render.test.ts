@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   createRenderMcp,
   renderOpenScadToStl,
+  renderOpenScadToStlWithBackend,
   WebRenderMcpAdapter
 } from "./render";
 
@@ -107,7 +108,7 @@ describe("WebRenderMcpAdapter", () => {
     expect(worker.postedMessages[0].kind).toBe("warmup");
   });
 
-  it("renders OpenSCAD source to STL and three orthographic view images", async () => {
+  it("renders OpenSCAD source to STL and six multi-angle view images", async () => {
     const worker = new FakeRenderWorker((message) => ({
       id: message.id,
       result: {
@@ -120,12 +121,18 @@ describe("WebRenderMcpAdapter", () => {
       createWorker: () => worker.asWorker(),
       captureViews: async (stl, options) => {
         await options.onProgress?.("front");
-        await options.onProgress?.("top");
+        await options.onProgress?.("back");
+        await options.onProgress?.("left");
         await options.onProgress?.("right");
+        await options.onProgress?.("top");
+        await options.onProgress?.("isometric");
         return {
           front: `front:${stl}`,
+          back: `back:${stl}`,
+          left: `left:${stl}`,
+          right: `right:${stl}`,
           top: `top:${stl}`,
-          right: `right:${stl}`
+          isometric: `isometric:${stl}`
         };
       },
       timeoutMs: 1_000
@@ -142,10 +149,13 @@ describe("WebRenderMcpAdapter", () => {
     expect(result.stl).toBe("solid cup\nendsolid cup");
     expect(result.views).toEqual({
       front: "front:solid cup\nendsolid cup",
+      back: "back:solid cup\nendsolid cup",
+      left: "left:solid cup\nendsolid cup",
+      right: "right:solid cup\nendsolid cup",
       top: "top:solid cup\nendsolid cup",
-      right: "right:solid cup\nendsolid cup"
+      isometric: "isometric:solid cup\nendsolid cup"
     });
-    expect(stages).toEqual(["compile", "front", "top", "right"]);
+    expect(stages).toEqual(["compile", "front", "back", "left", "right", "top", "isometric"]);
   });
 
   it("does not capture views when OpenSCAD compilation fails", async () => {
@@ -174,6 +184,7 @@ describe("WebRenderMcpAdapter", () => {
       result: {
         ok: true,
         stl: "solid cup\nendsolid cup",
+        backend: "web-manifold",
         diagnostics: [
           "Compiled to STL in browser.",
           "OpenSCAD diagnostics:",
@@ -193,6 +204,7 @@ describe("WebRenderMcpAdapter", () => {
 
     expect(result.ok).toBe(false);
     expect(result.stl).toBe("solid cup\nendsolid cup");
+    expect(result.backend).toBe("web-manifold");
     expect(result.views).toBeUndefined();
     expect(result.diagnostics).toContain("OpenSCAD render failed");
     expect(result.diagnostics).toContain("non-text error code: 1114200");
@@ -255,8 +267,10 @@ describe("WebRenderMcpAdapter", () => {
     };
 
     const stl = await renderOpenScadToStl(instance as never, "cube(10);");
+    const rendered = await renderOpenScadToStlWithBackend(instance as never, "cube(10);");
 
     expect(stl).toContain("solid manifold");
+    expect(rendered.backend).toBe("web-manifold");
     expect(calls[0]).toEqual([
       "/input.scad",
       "--backend=manifold",
@@ -281,8 +295,10 @@ describe("WebRenderMcpAdapter", () => {
     };
 
     const stl = await renderOpenScadToStl(instance as never, "cube(10);");
+    const rendered = await renderOpenScadToStlWithBackend(instance as never, "cube(10);");
 
     expect(stl).toContain("solid fallback");
+    expect(rendered.backend).toBe("web-default");
   });
 
   it("accepts the real Manifold backend flag in the current wasm build", async () => {

@@ -45,6 +45,7 @@ describe("renderWorker", () => {
         result: {
           ok: true,
           stl: "solid instance-1\nendsolid instance-1",
+          backend: "web-default",
           diagnostics: "Compiled to STL in browser."
         }
       },
@@ -53,6 +54,7 @@ describe("renderWorker", () => {
         result: {
           ok: true,
           stl: "solid instance-2\nendsolid instance-2",
+          backend: "web-default",
           diagnostics: "Compiled to STL in browser."
         }
       }
@@ -89,6 +91,7 @@ describe("renderWorker", () => {
       result: {
         ok: true,
         stl: "solid recovered\nendsolid recovered",
+        backend: "web-default",
         diagnostics: "Compiled to STL in browser."
       }
     });
@@ -166,6 +169,7 @@ describe("renderWorker", () => {
         result: {
           ok: true,
           stl: "solid instance-1\nendsolid instance-1",
+          backend: "web-manifold",
           diagnostics: "Compiled to STL in browser."
         }
       },
@@ -174,6 +178,7 @@ describe("renderWorker", () => {
         result: {
           ok: true,
           stl: "solid instance-2\nendsolid instance-2",
+          backend: "web-manifold",
           diagnostics: "Compiled to STL in browser."
         }
       }

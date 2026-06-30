@@ -51,7 +51,37 @@ describe("project persistence", () => {
 
     expect(project).toMatchObject({
       originalRequirement: "",
+      views: {
+        front: "",
+        back: "",
+        left: "",
+        right: "",
+        top: "",
+        isometric: ""
+      },
       runEvents: []
+    });
+  });
+
+  it("imports legacy three-view projects with empty multi-angle view slots", () => {
+    const project = importProject(
+      JSON.stringify({
+        requirement: "legacy cup",
+        views: {
+          front: "data:image/png;base64,front",
+          top: "data:image/png;base64,top",
+          right: "data:image/png;base64,right"
+        }
+      })
+    );
+
+    expect(project.views).toEqual({
+      front: "data:image/png;base64,front",
+      back: "",
+      left: "",
+      right: "data:image/png;base64,right",
+      top: "data:image/png;base64,top",
+      isometric: ""
     });
   });
 
@@ -80,8 +110,11 @@ describe("project persistence", () => {
     project.currentCode = "water_cup();";
     project.stl = "solid large\nfacet normal 0 0 1\nendsolid large";
     project.views.front = "data:image/png;base64,front";
-    project.views.top = "data:image/png;base64,top";
+    project.views.back = "data:image/png;base64,back";
+    project.views.left = "data:image/png;base64,left";
     project.views.right = "data:image/png;base64,right";
+    project.views.top = "data:image/png;base64,top";
+    project.views.isometric = "data:image/png;base64,isometric";
 
     const originalSetItem = Storage.prototype.setItem;
     const setItem = vi
