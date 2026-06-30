@@ -41,6 +41,36 @@ const viewKeys = [
 ] as const;
 const renderedViews = Object.fromEntries(viewKeys.map((key) => [key, pixel]));
 const emptyViews = Object.fromEntries(viewKeys.map((key) => [key, ""]));
+const validStl = `solid ui-test
+facet normal 0 0 1
+  outer loop
+    vertex 0 0 0
+    vertex 42 0 0
+    vertex 0 28 0
+  endloop
+endfacet
+facet normal 0 -1 0
+  outer loop
+    vertex 0 0 0
+    vertex 8 6 36
+    vertex 42 0 0
+  endloop
+endfacet
+facet normal 1 1 1
+  outer loop
+    vertex 42 0 0
+    vertex 8 6 36
+    vertex 0 28 0
+  endloop
+endfacet
+facet normal -1 1 0
+  outer loop
+    vertex 0 28 0
+    vertex 8 6 36
+    vertex 0 0 0
+  endloop
+endfacet
+endsolid ui-test`;
 
 const project = {
   id: "project-ui-test",
@@ -59,7 +89,7 @@ const project = {
     correctionPrompt: "保持30ML杯子容量，增加杯口圆角倒角。",
     confidence: 0.86
   },
-  stl: "solid ui-test\nendsolid ui-test",
+  stl: validStl,
   views: renderedViews,
   iterations: [
     {
@@ -146,6 +176,13 @@ const emptyProject = {
   runEvents: [],
   promptTrace: [],
   updatedAt: "2026-06-26T00:00:00.000Z"
+};
+
+const invalidStlProject = {
+  ...project,
+  id: "project-invalid-stl-preview",
+  review: null,
+  stl: "this is not a valid stl body"
 };
 
 async function expectLeftPanelOrder(page: Page) {
@@ -349,9 +386,93 @@ async function expectFourteenViewPanelTextFits(page: Page) {
     await button.scrollIntoViewIfNeeded();
     await expect(button).toBeVisible();
   }
+  const sourceButton = page
+    .locator(".resultPanel")
+    .getByRole("button", { name: "Source SCAD", exact: true });
+  await sourceButton.scrollIntoViewIfNeeded();
+  await expect(sourceButton).toBeVisible();
   const stlButton = page.locator(".resultPanel").getByRole("button", { name: /STL/i });
   await stlButton.scrollIntoViewIfNeeded();
   await expect(stlButton).toBeVisible();
+}
+
+function interactivePreview(page: Page) {
+  return page.locator('[aria-label="Interactive STL preview"]').first();
+}
+
+async function previewCanvas(page: Page) {
+  const preview = interactivePreview(page);
+  await expect(preview).toBeVisible();
+  const isCanvas = await preview.evaluate((element) => element instanceof HTMLCanvasElement);
+  const canvas = isCanvas ? preview : preview.locator("canvas");
+  await expect(canvas).toBeVisible();
+  return canvas;
+}
+
+async function expectPreviewHasModelPixels(page: Page) {
+  const canvas = await previewCanvas(page);
+  const paintedPixels = await canvas.evaluate((node) => {
+    const element = node as HTMLCanvasElement;
+    const gl = element.getContext("webgl2") ?? element.getContext("webgl");
+    if (!gl) {
+      return 0;
+    }
+    const pixels = new Uint8Array(element.width * element.height * 4);
+    gl.readPixels(0, 0, element.width, element.height, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+    let painted = 0;
+    for (let index = 0; index < pixels.length; index += 16) {
+      const r = pixels[index];
+      const g = pixels[index + 1];
+      const b = pixels[index + 2];
+      const alpha = pixels[index + 3];
+      const isBackground =
+        Math.abs(r - 248) < 6 && Math.abs(g - 250) < 6 && Math.abs(b - 252) < 6;
+      if (alpha > 0 && !isBackground) {
+        painted += 1;
+      }
+    }
+    return painted;
+  });
+  expect(paintedPixels).toBeGreaterThan(250);
+}
+
+async function dragInteractivePreview(page: Page) {
+  const canvas = await previewCanvas(page);
+  const box = await canvas.boundingBox();
+  expect(box).not.toBeNull();
+  await page.mouse.move(box!.x + box!.width * 0.65, box!.y + box!.height * 0.5);
+  await page.mouse.down();
+  await page.mouse.move(box!.x + box!.width * 0.25, box!.y + box!.height * 0.42, {
+    steps: 8
+  });
+  await page.mouse.up();
+}
+
+async function expectPreviewDoesNotTrapKeyboardFocus(page: Page) {
+  const preview = interactivePreview(page);
+  await expect(preview).toBeVisible();
+  const focusableSelector =
+    'a[href], button, input, select, textarea, [contenteditable="true"], [tabindex]:not([tabindex="-1"])';
+  const previewIsFocusable = await preview.evaluate(
+    (element) => (element as HTMLElement).tabIndex >= 0
+  );
+  const focusableDescendants = preview.locator(focusableSelector);
+  const descendantCount = await focusableDescendants.count();
+  if (!previewIsFocusable && descendantCount === 0) {
+    expect(
+      await preview.evaluate((element) => (element as HTMLElement).tabIndex)
+    ).toBeLessThan(0);
+    return;
+  }
+
+  const focusTarget = previewIsFocusable ? preview : focusableDescendants.first();
+  await focusTarget.focus();
+  await expect(focusTarget).toBeFocused();
+  await page.keyboard.press("Tab");
+  const focusInsidePreview = await page.evaluate(() =>
+    Boolean(document.activeElement?.closest('[aria-label="Interactive STL preview"]'))
+  );
+  expect(focusInsidePreview).toBe(false);
 }
 
 test("desktop workbench keeps controls visible", async ({
@@ -491,8 +612,34 @@ test("desktop workbench keeps controls visible", async ({
   expect(viewGridBox!.height).toBeGreaterThanOrEqual(resultBox!.height * 0.5);
   await expect(page.locator(".viewTile")).toHaveCount(14);
   await expect(page.locator(".viewTile figcaption")).toHaveText(viewNames);
+  const preview = interactivePreview(page);
+  await expect(preview).toBeVisible();
+  await expectPreviewHasModelPixels(page);
+  await expectPreviewDoesNotTrapKeyboardFocus(page);
+  const previewBox = await preview.boundingBox();
   const frontBox = await page.locator(".viewTile").first().boundingBox();
   expect(frontBox).not.toBeNull();
+  expect(previewBox).not.toBeNull();
+  expect(previewBox!.y).toBeLessThan(viewGridBox!.y);
+  expect(previewBox!.width * previewBox!.height).toBeGreaterThan(
+    frontBox!.width * frontBox!.height
+  );
+  const fixedViewSourcesBeforeDrag = await page.locator(".viewTile img").evaluateAll((images) =>
+    images.map((image) => (image as HTMLImageElement).src)
+  );
+  const previewDataUrlBeforeDrag = await (await previewCanvas(page)).evaluate((canvas) =>
+    (canvas as HTMLCanvasElement).toDataURL("image/png")
+  );
+  await dragInteractivePreview(page);
+  await expect
+    .poll(async () => (await previewCanvas(page)).evaluate((canvas) =>
+      (canvas as HTMLCanvasElement).toDataURL("image/png")
+    ))
+    .not.toBe(previewDataUrlBeforeDrag);
+  const fixedViewSourcesAfterDrag = await page.locator(".viewTile img").evaluateAll((images) =>
+    images.map((image) => (image as HTMLImageElement).src)
+  );
+  expect(fixedViewSourcesAfterDrag).toEqual(fixedViewSourcesBeforeDrag);
   for (let index = 1; index < 14; index += 1) {
     const supportingBox = await page.locator(".viewTile").nth(index).boundingBox();
     expect(supportingBox).not.toBeNull();
@@ -509,6 +656,9 @@ test("desktop workbench keeps controls visible", async ({
   }));
   expect(resultPanelMetrics.scrollHeight).toBeGreaterThan(resultPanelMetrics.clientHeight);
   expect(resultPanelMetrics.scrollWidth).toBeLessThanOrEqual(resultPanelMetrics.clientWidth);
+  expect(previewBox!.height + viewGridBox!.height).toBeGreaterThan(
+    resultBox!.height * 0.5
+  );
   const labelMetrics = await page.locator(".viewTile figcaption").evaluateAll((labels) =>
     labels.map((label) => ({
       clientWidth: label.clientWidth,
@@ -591,6 +741,7 @@ test("empty task keeps the Agent Run surface without a thinking placeholder", as
   await expect(agentRun.getByRole("heading", { name: "Agent Run" })).toBeVisible();
   await expect(page.locator(".agentTimeline")).toBeVisible();
   await expect(page.locator(".agentTimeline .agentEvent")).toHaveCount(0);
+  await expect(interactivePreview(page)).toBeVisible();
   await expect(agentRun.getByRole("heading", { name: "Agent Thinking" })).toHaveCount(0);
   await expect(agentRun).not.toContainText("Generate, compile, or review to see prompts here.");
   expect(agentRunBox).not.toBeNull();
@@ -611,6 +762,27 @@ test("empty task keeps the Agent Run surface without a thinking placeholder", as
       maxDiffPixelRatio: WORKBENCH_SCREENSHOT_DIFF_RATIO
     });
   }
+});
+
+test("invalid STL keeps a labelled preview and leaves the workbench usable", async ({
+  page
+}) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.addInitScript((storedProject) => {
+    localStorage.setItem("ai-openscad.llm-api-key", "sk-llm");
+    localStorage.setItem("ai-openscad.vision-api-key", "sk-vision");
+    localStorage.setItem("ai-openscad.project", JSON.stringify(storedProject));
+  }, invalidStlProject);
+
+  await page.goto("/");
+
+  await expect(interactivePreview(page)).toBeVisible();
+  await expect(page.locator(".viewTile img")).toHaveCount(14);
+  await expect(
+    page.locator(".resultPanel").getByRole("button", { name: "Source SCAD", exact: true })
+  ).toBeVisible();
+  await expect(page.getByRole("button", { name: /^Review$/i })).toBeVisible();
+  await expect(page.locator(".agentRun").getByText("User request")).toBeVisible();
 });
 
 test("model history scrolls internally below setup controls", async ({ page }) => {

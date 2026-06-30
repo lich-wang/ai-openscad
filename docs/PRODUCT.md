@@ -48,7 +48,8 @@ three columns:
   new model action and local model list.
 - Center agent panel: pipeline stage arrows, Codex-style chat run stream,
   requirement composer, workflow actions, and advanced OpenSCAD code editing.
-- Right result panel: large multi-angle views and asset downloads.
+- Right result panel: a large interactive STL preview, fixed multi-angle review
+  views, and asset downloads.
 
 ### Main Workflow
 
@@ -59,27 +60,32 @@ three columns:
    and the render adapter compiles the generated OpenSCAD in the browser.
    Compile failure automatically triggers a bounded compiler-repair text
    generation using the failed code and readable diagnostics.
-5. The app captures fourteen PNG views from the STL: six orthographic
+5. The app shows the compiled STL in a large interactive preview in the right
+   result panel so the user can rotate, zoom, and pan the model directly.
+6. The app captures fourteen PNG views from the STL: six orthographic
    directions (front, back, left, right, top, bottom) and eight isometric
    directions around the model.
-6. User clicks **Review**.
-7. The vision model checks the multi-angle views against the original
+7. User clicks **Review**.
+8. The vision model checks the multi-angle views against the original
    requirement and returns a summary, issue list, confidence score, and
    correction prompt.
-8. The correction prompt becomes editable in the composer and gives concrete
+9. The correction prompt becomes editable in the composer and gives concrete
    instructions about which OpenSCAD areas or geometry relationships should be
    changed.
-9. User clicks **Iterate Again** to send the latest accepted/rendered
+10. User clicks **Iterate Again** to send the latest accepted/rendered
    OpenSCAD, the original requirement, review findings, and editable iteration
    guidance to the LLM, then generate and render the next draft.
-10. User clicks **Final Export** when satisfied.
-11. The app normalizes the model to final precision and downloads `.scad` and
+11. User clicks **Final Export** when satisfied.
+12. The app normalizes the model to final precision and downloads `.scad` and
     `.stl` files.
 
 ### User Control Rules
 
 - Visual review only reviews. It must not automatically call the text LLM or
   start an image-driven rewrite loop.
+- The interactive preview is for human inspection only. Dragging, zooming, or
+  panning the preview must not change the fourteen fixed review images and must
+  not affect the provider payload sent for visual review.
 - Browser compile failures may directly trigger a bounded text-to-OpenSCAD
   compiler-repair loop. Each user-initiated generation, rerender, accepted
   revision, or iteration may make at most two automatic compiler-repair text
@@ -179,21 +185,34 @@ Workbench acceptance criteria:
 - Streaming and stage status updates should use polite live-region behavior or
   equivalent accessible status text. Collapsed code controls expose expanded or
   collapsed state through accessible labels.
-- The right result panel contains only the fourteen named view tiles and asset
-  download controls. It must not contain compiler logs, review text, prompt
-  trace, or iteration history. The view order is front, back, left, right, top,
-  bottom, iso-front-right-top, iso-front-left-top, iso-back-right-top,
+- The right result panel contains only the interactive 3D preview, the fourteen
+  named view tiles, and asset download controls. It must not contain compiler
+  logs, review text, prompt trace, or iteration history. The interactive preview
+  is the largest visual area at the top of the panel after a successful render.
+  It renders the current STL in a Three.js canvas, supports pointer drag orbit,
+  wheel zoom, and pan gestures, and stays within the result panel without
+  growing the page. The preview region or canvas exposes the accessible name
+  `Interactive STL preview` in English and the localized equivalent in Chinese;
+  empty and invalid-STL states remain labelled, and keyboard focus must not be
+  trapped inside the preview controls. It must show an empty framed preview area
+  before an STL is available, dispose WebGL resources when the model changes or
+  unmounts, and recover cleanly from an invalid STL without breaking the rest of
+  the workbench. The fourteen fixed view tiles remain below the interactive
+  preview and keep the review-evidence order: front, back, left, right, top,
+  bottom,
+  iso-front-right-top, iso-front-left-top, iso-back-right-top,
   iso-back-left-top, iso-front-right-bottom, iso-front-left-bottom,
   iso-back-right-bottom, then iso-back-left-bottom. On desktop, the front tile
-  is the main/largest orthographic view and the remaining thirteen angles are
-  visible below it in a dense, scrollable grid. In narrow stacked layouts, all
-  fourteen tiles keep the same reading order and stable accessible image names.
-  The view grid should use at least half of the visible right-panel height at a
-  1440 px desktop viewport. The right panel or the view grid may scroll
-  internally, but the overall workbench must not grow vertically in a way that
-  hides the composer, workflow actions, code editor access, or asset download
-  controls. PNG and STL download controls remain reachable from the result panel
-  without mixing logs, review text, or prompt traces into that panel.
+  remains the main/largest fixed orthographic evidence tile within the
+  multi-angle grid and the remaining thirteen angles are visible below it in a
+  dense, scrollable grid. In narrow stacked layouts, all fourteen tiles keep the
+  same reading order and stable accessible image names. The interactive preview
+  plus fixed view grid should use the majority of the visible right-panel height
+  at a 1440 px desktop viewport. The right panel may scroll internally, but the
+  overall workbench must not grow vertically in a way that hides the composer,
+  workflow actions, code editor access, or asset download controls. PNG, SCAD,
+  and STL download controls remain reachable from the result panel without
+  mixing logs, review text, or prompt traces into that panel.
 - Every view tile uses the visible label and image alt text for its angle:
   Front, Back, Left, Right, Top, Bottom, Iso Front Right Top, Iso Front Left
   Top, Iso Back Right Top, Iso Back Left Top, Iso Front Right Bottom, Iso Front
@@ -213,6 +232,12 @@ Workbench acceptance criteria:
   Long view labels and download button labels must fit without overlap or
   horizontal overflow on desktop and narrow layouts; they may wrap or truncate
   visually only when the accessible name remains complete.
+- The asset download controls include the current OpenSCAD source file whenever
+  `currentCode` is non-empty. The source download uses the accessible name
+  `Source SCAD` and filename `ai-openscad-source.scad`. It downloads the current
+  editable source, not the high-precision final-export normalized source. The
+  existing Final Export action still downloads high-precision `.scad` and `.stl`
+  files after the user confirms export.
 - Manual OpenSCAD edits can be recompiled with the secondary rerender action
   whenever code exists. Rerender failures appear in the center stream and keep
   the workbench interactive. Render errors must include readable OpenSCAD
@@ -246,13 +271,20 @@ Workbench acceptance criteria:
   right-panel ownership, enlarged views, and primary action transitions across
   generate, render, review, pending-revision, rerender-failure, and iterate
   states, including non-color state labels and keyboard focus order.
+  E2E coverage should also verify the interactive STL preview is the largest
+  top visual area in the result panel, exposes its accessible name, can be
+  dragged without changing the fourteen fixed review images or the vision
+  provider payload, and keeps PNG/SCAD/STL downloads reachable with expected
+  accessible names on desktop and narrow layouts.
   Playwright pixel screenshot checks run only in local visual-regression checks
   and must be skipped in CI.
-- Local visual-regression screenshots must explicitly cover the fourteen-view
-  result panel: the front tile remains primary/largest, the thirteen supporting
-  views appear below it in the stable order, any internal scrolling is
-  constrained to the result panel/grid, labels do not overlap, there is no
-  horizontal overflow, and PNG/STL download controls remain visible or reachable.
+- Local visual-regression screenshots must explicitly cover the right result
+  panel: the interactive preview is the largest top visual area after render,
+  the front fixed tile remains primary/largest within the fourteen-view grid,
+  the thirteen supporting views appear below it in the stable order, any
+  internal scrolling is constrained to the result panel/grid, labels do not
+  overlap, there is no horizontal overflow, and PNG/SCAD/STL download controls
+  remain visible or reachable.
 - Tests must verify that compile failure triggers only the bounded compiler
   repair text requests, while render completion, visual review completion, and
   image evidence never trigger an unprompted `/api/llm` request.
@@ -334,6 +366,9 @@ Workbench acceptance criteria:
   - Iso Back Right Bottom
   - Iso Back Left Bottom
 - Uses Three.js lighting and STL parsing to create PNG data URLs.
+- Uses the same current STL for a local-only Three.js interactive preview in
+  the result panel. The preview is user-draggable inspection UI and is never
+  added to the visual-review provider payload.
 - Stable view directions:
   - `front`: camera direction `(0, -1, 0)`, up `(0, 0, 1)`
   - `back`: camera direction `(0, 1, 0)`, up `(0, 0, 1)`
@@ -408,6 +443,7 @@ Workbench acceptance criteria:
 ### Export
 
 - Draft outputs:
+  - Current source SCAD
   - Front PNG
   - Back PNG
   - Left PNG
@@ -446,7 +482,8 @@ Workbench acceptance criteria:
 
 - Frontend: React, Vite, and TypeScript.
 - Rendering: `openscad-wasm` compiles OpenSCAD in the browser, preferably inside
-  a Web Worker. Three.js parses STL output and captures multi-angle PNG views.
+  a Web Worker. Three.js parses STL output, captures multi-angle PNG views, and
+  renders the interactive preview in the result panel.
 - Model gateway: Cloudflare Pages Functions under `functions/api`.
 - Persistence: browser `localStorage`; there is no server-side project database.
 - Deployment: Cloudflare Pages project `ai-openscad`.
@@ -540,7 +577,8 @@ The app should preserve these guarantees:
 - The primary workflow fits on desktop without hiding key actions.
 - Draft generation and review make progress visible.
 - Invalid OpenSCAD surfaces an error and leaves the page usable.
-- STL download is available only after a successful compile.
+- STL download is available only after a successful compile; source SCAD
+  download is available whenever current code exists.
 - Review requests include rendered images.
 - Review does not trigger text generation.
 - New iterations clear stale review state.

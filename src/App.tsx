@@ -11,6 +11,7 @@ import {
   X
 } from "lucide-react";
 import { ChangeEvent, useEffect, useMemo, useRef, useState } from "react";
+import { InteractiveStlPreview } from "./InteractiveStlPreview";
 import {
   generateOpenScad,
   proposeRevision,
@@ -1570,16 +1571,34 @@ export default function App() {
           <div className="panelHeader">
             <h2>{tr("views")}</h2>
           </div>
+          <InteractiveStlPreview
+            label={tr("interactiveStlPreview")}
+            stl={project.stl}
+          />
           <div className="viewGrid">
             {VIEW_KEYS.map((key) => (
               <ViewImage key={key} label={tr(VIEW_LABEL_KEYS[key])} src={project.views[key]} />
             ))}
           </div>
 
-          {hasRenderedViews || project.stl ? (
+          {hasRenderedViews || project.stl || project.currentCode.trim() ? (
             <section className="renderAssetPanel" aria-label={tr("renderOutputs")}>
               <span>{tr("renderOutputs")}</span>
               <div className="renderAssetActions">
+                <button
+                  disabled={!project.currentCode.trim()}
+                  onClick={() =>
+                    downloadText(
+                      "ai-openscad-source.scad",
+                      project.currentCode,
+                      "text/plain;charset=utf-8"
+                    )
+                  }
+                  type="button"
+                >
+                  <Download size={14} />
+                  <span>{tr("downloadSourceScad")}</span>
+                </button>
                 {VIEW_KEYS.map((key) => (
                   <button
                     key={key}

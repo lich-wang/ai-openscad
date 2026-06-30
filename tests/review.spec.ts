@@ -174,6 +174,22 @@ function imageUrlsFromVisionContent(content: unknown): string[] {
     .map((part) => part.image_url.url);
 }
 
+async function dragInteractivePreview(page: Page) {
+  const preview = page.locator('[aria-label="Interactive STL preview"]').first();
+  await expect(preview).toBeVisible();
+  const isCanvas = await preview.evaluate((element) => element instanceof HTMLCanvasElement);
+  const canvas = isCanvas ? preview : preview.locator("canvas");
+  await expect(canvas).toBeVisible();
+  const box = await canvas.boundingBox();
+  expect(box).not.toBeNull();
+  await page.mouse.move(box!.x + box!.width * 0.7, box!.y + box!.height * 0.52);
+  await page.mouse.down();
+  await page.mouse.move(box!.x + box!.width * 0.32, box!.y + box!.height * 0.42, {
+    steps: 8
+  });
+  await page.mouse.up();
+}
+
 async function expectCompilerRepairInFlight(page: Page) {
   await expect(page.locator('.workflowStage[data-stage="code"]')).toContainText("Active");
   await expect(page.locator('.workflowStage[data-stage="render"]')).toContainText("Waiting");
@@ -415,10 +431,43 @@ test("generation streams code and automatically renders draft views", async ({ p
   expect(imageAltText).toEqual(viewNames);
   await page.evaluate(() => {
     (window as typeof window & { __downloadNames?: string[] }).__downloadNames = [];
+    (
+      window as typeof window & {
+        __blobTextByUrl?: Record<string, Promise<string>>;
+        __downloadBodies?: Array<{ filename: string; content: string }>;
+      }
+    ).__blobTextByUrl = {};
+    (
+      window as typeof window & {
+        __downloadBodies?: Array<{ filename: string; content: string }>;
+      }
+    ).__downloadBodies = [];
+    const originalCreateObjectUrl = URL.createObjectURL.bind(URL);
+    URL.createObjectURL = ((blob: Blob | MediaSource) => {
+      const url = originalCreateObjectUrl(blob);
+      if (blob instanceof Blob) {
+        (
+          window as typeof window & { __blobTextByUrl: Record<string, Promise<string>> }
+        ).__blobTextByUrl[url] = blob.text();
+      }
+      return url;
+    }) as typeof URL.createObjectURL;
     HTMLAnchorElement.prototype.click = function captureDownloadName() {
       (window as typeof window & { __downloadNames: string[] }).__downloadNames.push(
         this.download
       );
+      const blobText = (
+        window as typeof window & { __blobTextByUrl: Record<string, Promise<string>> }
+      ).__blobTextByUrl[this.href];
+      if (blobText) {
+        void blobText.then((content) => {
+          (
+            window as typeof window & {
+              __downloadBodies: Array<{ filename: string; content: string }>;
+            }
+          ).__downloadBodies.push({ filename: this.download, content });
+        });
+      }
     };
   });
   for (const name of viewNames) {
@@ -429,10 +478,39 @@ test("generation streams code and automatically renders draft views", async ({ p
     await expect(downloadButton).toBeVisible();
     await downloadButton.click();
   }
+  const sourceScadButton = page.getByRole("button", { name: "Source SCAD", exact: true });
+  await expect(sourceScadButton).toBeVisible();
+  await sourceScadButton.click();
   const downloadNames = await page.evaluate(
     () => (window as typeof window & { __downloadNames: string[] }).__downloadNames
   );
-  expect(downloadNames).toEqual(viewFileNames.map((name) => `ai-openscad-${name}.png`));
+  expect(downloadNames).toEqual([
+    ...viewFileNames.map((name) => `ai-openscad-${name}.png`),
+    "ai-openscad-source.scad"
+  ]);
+  await expect
+    .poll(
+      async () =>
+        page.evaluate(() => {
+          const bodies = (
+            window as typeof window & {
+              __downloadBodies?: Array<{ filename: string; content: string }>;
+            }
+          ).__downloadBodies ?? [];
+          return bodies.filter((body) => body.filename === "ai-openscad-source.scad").length;
+        })
+    )
+    .toBe(1);
+  const sourceDownloadBody = await page.evaluate(() => {
+    const bodies = (
+      window as typeof window & {
+        __downloadBodies: Array<{ filename: string; content: string }>;
+      }
+    ).__downloadBodies;
+    return bodies.find((body) => body.filename === "ai-openscad-source.scad")?.content ?? "";
+  });
+  expect(sourceDownloadBody.trim()).toBe("cube(10);");
+  expect(sourceDownloadBody).not.toContain("ai-openscad-final");
   await expect(page.getByRole("button", { name: /STL/i })).toBeVisible();
   await expect(page.locator(".agentRun").getByText("Render finished")).toBeVisible({
     timeout: 30000
@@ -458,6 +536,14 @@ test("generation streams code and automatically renders draft views", async ({ p
   await expect(generatedCodeDisclosure).toHaveAttribute("open", "");
   await expect(generatedCodeDisclosure.locator(".agentCodePreview")).toContainText("cube(10);");
   await expect(page.locator('.workflowStage[data-stage="render"]')).toContainText("Complete");
+  const renderedImageUrlsBeforePreviewDrag = await page
+    .locator(".viewTile img")
+    .evaluateAll((images) => images.map((image) => (image as HTMLImageElement).src));
+  await dragInteractivePreview(page);
+  const renderedImageUrlsAfterPreviewDrag = await page
+    .locator(".viewTile img")
+    .evaluateAll((images) => images.map((image) => (image as HTMLImageElement).src));
+  expect(renderedImageUrlsAfterPreviewDrag).toEqual(renderedImageUrlsBeforePreviewDrag);
   const storedAfterGenerate = await page.evaluate(() =>
     JSON.parse(localStorage.getItem("ai-openscad.project") ?? "{}")
   );
@@ -492,10 +578,7 @@ test("generation streams code and automatically renders draft views", async ({ p
   );
   expect(reviewRequirement).toContain("生成一个30ML的杯子模型");
   expect(reviewImageUrls).toHaveLength(14);
-  const renderedImageUrls = await page.locator(".viewTile img").evaluateAll((images) =>
-    images.map((image) => (image as HTMLImageElement).src)
-  );
-  expect(reviewImageUrls).toEqual(renderedImageUrls);
+  expect(reviewImageUrls).toEqual(renderedImageUrlsBeforePreviewDrag);
   expect(storedAfterFirstReview.originalRequirement).toBe("生成一个30ML的杯子模型");
   expect(storedAfterFirstReview.requirement).toContain("增加杯口倒角");
 });
