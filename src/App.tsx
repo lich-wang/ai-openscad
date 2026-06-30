@@ -50,12 +50,20 @@ import {
   buildRenderPrecisionInstruction,
   normalizeOpenScadPrecision
 } from "./lib/renderSkill";
+import {
+  VIEW_FILE_STEMS,
+  VIEW_KEYS,
+  countRenderedViews,
+  createEmptyViewSet,
+  hasCompleteViewSet,
+  viewImagesInOrder,
+  type ViewKey
+} from "./lib/viewSpecs";
 import { acceptRevision, rejectRevision } from "./lib/workflow";
 
 type BusyState = "idle" | "generating" | "compiling" | "reviewing" | "exporting";
 type WorkflowStage = "code" | "render" | "review";
 type WorkflowStageState = "waiting" | "active" | "complete" | "error";
-type ViewKey = keyof ProjectState["views"];
 type DraftCompileSuccess = {
   ok: true;
   diagnostics: string;
@@ -69,12 +77,12 @@ type DraftCompileFailure = {
   diagnostics: string;
   evidence: RenderEvidence;
   trace: PromptTraceEntry;
+  repairable: boolean;
   views: null;
   stl: null;
 };
 type DraftCompileResult = DraftCompileSuccess | DraftCompileFailure;
 
-const VIEW_KEYS: ViewKey[] = ["front", "back", "left", "right", "top", "isometric"];
 const MAX_COMPILER_REPAIR_ATTEMPTS = 2;
 const VIEW_LABEL_KEYS: Record<ViewKey, MessageKey> = {
   front: "front",
@@ -82,7 +90,15 @@ const VIEW_LABEL_KEYS: Record<ViewKey, MessageKey> = {
   left: "left",
   right: "right",
   top: "top",
-  isometric: "isometric"
+  bottom: "bottom",
+  isoFrontRightTop: "isoFrontRightTop",
+  isoFrontLeftTop: "isoFrontLeftTop",
+  isoBackRightTop: "isoBackRightTop",
+  isoBackLeftTop: "isoBackLeftTop",
+  isoFrontRightBottom: "isoFrontRightBottom",
+  isoFrontLeftBottom: "isoFrontLeftBottom",
+  isoBackRightBottom: "isoBackRightBottom",
+  isoBackLeftBottom: "isoBackLeftBottom"
 };
 const VIEW_DOWNLOAD_KEYS: Record<ViewKey, MessageKey> = {
   front: "downloadFrontPng",
@@ -90,30 +106,27 @@ const VIEW_DOWNLOAD_KEYS: Record<ViewKey, MessageKey> = {
   left: "downloadLeftPng",
   right: "downloadRightPng",
   top: "downloadTopPng",
-  isometric: "downloadIsometricPng"
+  bottom: "downloadBottomPng",
+  isoFrontRightTop: "downloadIsoFrontRightTopPng",
+  isoFrontLeftTop: "downloadIsoFrontLeftTopPng",
+  isoBackRightTop: "downloadIsoBackRightTopPng",
+  isoBackLeftTop: "downloadIsoBackLeftTopPng",
+  isoFrontRightBottom: "downloadIsoFrontRightBottomPng",
+  isoFrontLeftBottom: "downloadIsoFrontLeftBottomPng",
+  isoBackRightBottom: "downloadIsoBackRightBottomPng",
+  isoBackLeftBottom: "downloadIsoBackLeftBottomPng"
 };
 
 function emptyViews(): ProjectState["views"] {
-  return {
-    front: "",
-    back: "",
-    left: "",
-    right: "",
-    top: "",
-    isometric: ""
-  };
+  return createEmptyViewSet();
 }
 
 function renderedViewCount(views: ProjectState["views"]): number {
-  return VIEW_KEYS.filter((key) => Boolean(views[key])).length;
+  return countRenderedViews(views);
 }
 
 function allViewsRendered(views: ProjectState["views"]): boolean {
-  return renderedViewCount(views) === VIEW_KEYS.length;
-}
-
-function viewImagesInOrder(views: ProjectState["views"]): string[] {
-  return VIEW_KEYS.map((key) => views[key]);
+  return hasCompleteViewSet(views);
 }
 
 function canUseCodeModel(modelId: string, apiKey: string): boolean {
@@ -149,6 +162,7 @@ export default function App() {
       !hasPendingRevision &&
       !hasCurrentReview &&
       project.renderEvidence?.compileStatus === "failure" &&
+      project.renderEvidence.repairable !== false &&
       canUseCodeModelForRepair
   );
   const compilerOutputForDisplay =
@@ -180,6 +194,17 @@ export default function App() {
       return diagnostics;
     }
     return `${diagnostics} The high precision final export timed out. Simplify the accepted source or try a lower-complexity model before exporting again.`;
+  }
+
+  function addIncompleteViewGuidance(
+    diagnostics: string,
+    result: { ok: boolean; stl?: string; views?: ProjectState["views"] },
+    viewCount: number
+  ): string {
+    if (!result.ok || !result.stl || !result.views || viewCount === VIEW_KEYS.length) {
+      return diagnostics;
+    }
+    return `${diagnostics}\nRendered ${viewCount} of ${VIEW_KEYS.length} required views. Rerender all views before review or export.`;
   }
 
   useEffect(() => {
@@ -260,28 +285,32 @@ export default function App() {
       diagnostics,
       renderPrecision: "draft",
       backend: "web-manifold",
-      viewCount: 0
+      viewCount: 0,
+      repairable: true
     };
   }
 
   function diagnosticFixPatch(current: ProjectState, diagnostics: string, evidence: RenderEvidence) {
+    const canRepairWithText = evidence.repairable !== false;
     const prompt = buildDiagnosticFixPrompt(originalRequirementFor(current), diagnostics);
     return {
-      requirement: prompt,
+      requirement: canRepairWithText ? prompt : current.requirement,
       compilerOutput: diagnostics,
       renderEvidence: evidence,
       proposedCode: "",
       review: null,
       stl: "",
       views: emptyViews(),
-      runEvents: [
-        ...current.runEvents,
-        createRunEvent({
-          role: "tool",
-          title: tr("diagnosticFixPromptReady"),
-          content: prompt
-        })
-      ],
+      runEvents: canRepairWithText
+        ? [
+            ...current.runEvents,
+            createRunEvent({
+              role: "tool",
+              title: tr("diagnosticFixPromptReady"),
+              content: prompt
+            })
+          ]
+        : current.runEvents,
       updatedAt: new Date().toISOString()
     };
   }
@@ -525,13 +554,19 @@ export default function App() {
       source: draftCode,
       onProgress: (stage) => updateRenderStatus(renderMcpStageMessageKey(stage))
     });
-    const diagnostics = addDraftRenderTimeoutGuidance(result.diagnostics);
+    const viewCount = result.views ? renderedViewCount(result.views) : 0;
+    const hasCompleteViews = result.views ? allViewsRendered(result.views) : false;
+    const renderSucceeded = result.ok && Boolean(result.stl) && hasCompleteViews;
+    const diagnostics = addDraftRenderTimeoutGuidance(
+      addIncompleteViewGuidance(result.diagnostics, result, viewCount)
+    );
     const evidence: RenderEvidence = {
-      compileStatus: result.ok && Boolean(result.stl && result.views) ? "success" : "failure",
+      compileStatus: renderSucceeded ? "success" : "failure",
       diagnostics,
       renderPrecision: "draft",
       backend: result.backend ?? "web",
-      viewCount: result.views ? renderedViewCount(result.views) : 0
+      viewCount,
+      repairable: renderSucceeded ? undefined : !result.stl
     };
     const trace = createPromptTraceEntry({
       phase: "compile",
@@ -540,19 +575,20 @@ export default function App() {
       userPrompt: tr("compileDraftTrace"),
       response: diagnostics
     });
-    if (!result.ok || !result.stl || !result.views) {
+    if (!result.ok || !result.stl || !result.views || !hasCompleteViews) {
       return {
         ok: false,
         diagnostics,
         evidence,
         trace,
+        repairable: evidence.repairable !== false,
         views: null,
         stl: null
       };
     }
     return {
       ok: true,
-      diagnostics: result.diagnostics,
+      diagnostics,
       evidence,
       trace,
       views: result.views,
@@ -568,7 +604,11 @@ export default function App() {
   }): Promise<{ code: string; rendered: DraftCompileResult }> {
     let code = input.code;
     let rendered = input.rendered;
-    if (rendered.ok || !canUseCodeModel(project.codeModelId, llmApiKey)) {
+    if (
+      rendered.ok ||
+      !rendered.repairable ||
+      !canUseCodeModel(project.codeModelId, llmApiKey)
+    ) {
       return { code, rendered };
     }
 
@@ -684,7 +724,10 @@ export default function App() {
         content: tr("renderStarted")
       }));
       rendered = await compileDraftCode(code);
-      if (rendered.ok && rendered.views && rendered.stl) {
+      if (rendered.ok) {
+        return { code, rendered };
+      }
+      if (!rendered.repairable) {
         return { code, rendered };
       }
     }
@@ -1096,15 +1139,19 @@ export default function App() {
         source: finalCode,
         onProgress: (stage) => updateRenderStatus(renderMcpStageMessageKey(stage))
       });
-      const diagnostics = addFinalExportTimeoutGuidance(result.diagnostics);
+      const viewCount = result.views ? renderedViewCount(result.views) : 0;
+      const hasCompleteViews = result.views ? allViewsRendered(result.views) : false;
+      const renderSucceeded = result.ok && Boolean(result.stl) && hasCompleteViews;
+      const diagnostics = addFinalExportTimeoutGuidance(
+        addIncompleteViewGuidance(result.diagnostics, result, viewCount)
+      );
       const evidence: RenderEvidence = {
-        compileStatus: result.ok && Boolean(result.stl && result.views) ? "success" : "failure",
+        compileStatus: renderSucceeded ? "success" : "failure",
         diagnostics,
         renderPrecision: "final",
         backend: result.backend ?? "web",
-        viewCount: result.views
-          ? renderedViewCount(result.views)
-          : 0
+        viewCount,
+        repairable: renderSucceeded ? undefined : false
       };
       const trace = createPromptTraceEntry({
         phase: "final-export",
@@ -1113,7 +1160,7 @@ export default function App() {
         userPrompt: tr("finalExportTrace"),
         response: diagnostics
       });
-      if (!result.ok || !result.stl || !result.views) {
+      if (!result.ok || !result.stl || !result.views || !hasCompleteViews) {
         setProject((current) => ({
           ...current,
           compilerOutput: diagnostics,
@@ -1537,11 +1584,16 @@ export default function App() {
                   <button
                     key={key}
                     disabled={!project.views[key]}
-                    onClick={() => downloadDataUrl(`ai-openscad-${key}.png`, project.views[key])}
+                    onClick={() =>
+                      downloadDataUrl(
+                        `ai-openscad-${VIEW_FILE_STEMS[key]}.png`,
+                        project.views[key]
+                      )
+                    }
                     type="button"
                   >
                     <Download size={14} />
-                    {tr(VIEW_DOWNLOAD_KEYS[key])}
+                    <span>{tr(VIEW_DOWNLOAD_KEYS[key])}</span>
                   </button>
                 ))}
                 <button
@@ -1552,7 +1604,7 @@ export default function App() {
                   type="button"
                 >
                   <Download size={14} />
-                  {tr("downloadStl")}
+                  <span>{tr("downloadStl")}</span>
                 </button>
               </div>
             </section>
@@ -1832,7 +1884,15 @@ function renderMcpStageMessageKey(stage: RenderMcpStage): MessageKey {
     left: "renderLeft",
     right: "renderRight",
     top: "renderTop",
-    isometric: "renderIsometric"
+    bottom: "renderBottom",
+    isoFrontRightTop: "renderIsoFrontRightTop",
+    isoFrontLeftTop: "renderIsoFrontLeftTop",
+    isoBackRightTop: "renderIsoBackRightTop",
+    isoBackLeftTop: "renderIsoBackLeftTop",
+    isoFrontRightBottom: "renderIsoFrontRightBottom",
+    isoFrontLeftBottom: "renderIsoFrontLeftBottom",
+    isoBackRightBottom: "renderIsoBackRightBottom",
+    isoBackLeftBottom: "renderIsoBackLeftBottom"
   };
   return keys[stage];
 }

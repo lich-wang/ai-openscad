@@ -1,22 +1,37 @@
 import * as THREE from "three";
 import { STLLoader } from "three/examples/jsm/loaders/STLLoader.js";
+import {
+  createEmptyViewSet,
+  type ViewKey,
+  type ViewSet
+} from "./viewSpecs";
 
-export interface ViewSet {
-  front: string;
-  back: string;
-  left: string;
-  top: string;
-  right: string;
-  isometric: string;
+export type { ViewSet } from "./viewSpecs";
+
+export type ViewCaptureStage = ViewKey;
+
+export interface ViewCaptureSpec {
+  key: ViewKey;
+  direction: [number, number, number];
+  up: [number, number, number];
 }
 
-export type ViewCaptureStage =
-  | "front"
-  | "back"
-  | "left"
-  | "right"
-  | "top"
-  | "isometric";
+export const VIEW_CAPTURE_SPECS: ViewCaptureSpec[] = [
+  { key: "front", direction: [0, -1, 0], up: [0, 0, 1] },
+  { key: "back", direction: [0, 1, 0], up: [0, 0, 1] },
+  { key: "left", direction: [-1, 0, 0], up: [0, 0, 1] },
+  { key: "right", direction: [1, 0, 0], up: [0, 0, 1] },
+  { key: "top", direction: [0, 0, 1], up: [0, 1, 0] },
+  { key: "bottom", direction: [0, 0, -1], up: [0, 1, 0] },
+  { key: "isoFrontRightTop", direction: normalizeDirection([1, -1, 0.75]), up: [0, 0, 1] },
+  { key: "isoFrontLeftTop", direction: normalizeDirection([-1, -1, 0.75]), up: [0, 0, 1] },
+  { key: "isoBackRightTop", direction: normalizeDirection([1, 1, 0.75]), up: [0, 0, 1] },
+  { key: "isoBackLeftTop", direction: normalizeDirection([-1, 1, 0.75]), up: [0, 0, 1] },
+  { key: "isoFrontRightBottom", direction: normalizeDirection([1, -1, -0.75]), up: [0, 0, 1] },
+  { key: "isoFrontLeftBottom", direction: normalizeDirection([-1, -1, -0.75]), up: [0, 0, 1] },
+  { key: "isoBackRightBottom", direction: normalizeDirection([1, 1, -0.75]), up: [0, 0, 1] },
+  { key: "isoBackLeftBottom", direction: normalizeDirection([-1, 1, -0.75]), up: [0, 0, 1] }
+];
 
 export async function captureOrthographicViews(
   stl: string,
@@ -65,33 +80,32 @@ export async function captureOrthographicViews(
     maxDimension * 8
   );
 
-  const render = (position: THREE.Vector3) => {
-    camera.position.copy(position.multiplyScalar(maxDimension * 2.5));
+  const render = (spec: ViewCaptureSpec) => {
+    camera.up.set(...spec.up);
+    camera.position
+      .set(...spec.direction)
+      .multiplyScalar(maxDimension * 2.5);
     camera.lookAt(0, 0, 0);
     camera.updateProjectionMatrix();
     renderer.render(scene, camera);
     return renderer.domElement.toDataURL("image/png");
   };
 
-  await options.onProgress?.("front");
-  const front = render(new THREE.Vector3(0, -1, 0));
-  await options.onProgress?.("back");
-  const back = render(new THREE.Vector3(0, 1, 0));
-  await options.onProgress?.("left");
-  const left = render(new THREE.Vector3(-1, 0, 0));
-  await options.onProgress?.("right");
-  const right = render(new THREE.Vector3(1, 0, 0));
-  await options.onProgress?.("top");
-  const top = render(new THREE.Vector3(0, 0, 1));
-  await options.onProgress?.("isometric");
-  const isometric = render(new THREE.Vector3(1, -1, 0.75).normalize());
-
-  const views = { front, back, left, right, top, isometric };
+  const views = createEmptyViewSet();
+  for (const spec of VIEW_CAPTURE_SPECS) {
+    await options.onProgress?.(spec.key);
+    views[spec.key] = render(spec);
+  }
 
   renderer.dispose();
   geometry.dispose();
   material.dispose();
   return views;
+}
+
+function normalizeDirection(direction: [number, number, number]): [number, number, number] {
+  const length = Math.hypot(...direction);
+  return [direction[0] / length, direction[1] / length, direction[2] / length];
 }
 
 export function downloadText(

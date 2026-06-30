@@ -7,6 +7,40 @@ const INVITE_IMAGE_NATURAL_HEIGHT = 1004;
 const INVITE_IMAGE_DISPLAY_SCALE = 0.5;
 const pixel =
   "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADElEQVR42mP8z8AARQAFAAH/AnH9zAAAAABJRU5ErkJggg==";
+const viewNames = [
+  "Front",
+  "Back",
+  "Left",
+  "Right",
+  "Top",
+  "Bottom",
+  "Iso Front Right Top",
+  "Iso Front Left Top",
+  "Iso Back Right Top",
+  "Iso Back Left Top",
+  "Iso Front Right Bottom",
+  "Iso Front Left Bottom",
+  "Iso Back Right Bottom",
+  "Iso Back Left Bottom"
+];
+const viewKeys = [
+  "front",
+  "back",
+  "left",
+  "right",
+  "top",
+  "bottom",
+  "isoFrontRightTop",
+  "isoFrontLeftTop",
+  "isoBackRightTop",
+  "isoBackLeftTop",
+  "isoFrontRightBottom",
+  "isoFrontLeftBottom",
+  "isoBackRightBottom",
+  "isoBackLeftBottom"
+] as const;
+const renderedViews = Object.fromEntries(viewKeys.map((key) => [key, pixel]));
+const emptyViews = Object.fromEntries(viewKeys.map((key) => [key, ""]));
 
 const project = {
   id: "project-ui-test",
@@ -26,14 +60,7 @@ const project = {
     confidence: 0.86
   },
   stl: "solid ui-test\nendsolid ui-test",
-  views: {
-    front: pixel,
-    back: pixel,
-    left: pixel,
-    right: pixel,
-    top: pixel,
-    isometric: pixel
-  },
+  views: renderedViews,
   iterations: [
     {
       id: "generated",
@@ -114,7 +141,7 @@ const emptyProject = {
   compilerOutput: "",
   review: null,
   stl: "",
-  views: { front: "", back: "", left: "", right: "", top: "", isometric: "" },
+  views: emptyViews,
   iterations: [],
   runEvents: [],
   promptTrace: [],
@@ -255,6 +282,78 @@ async function expectTimelineOrder(page: Page, labels: string[]) {
   }
 }
 
+async function expectNoHorizontalPageOverflow(page: Page) {
+  const pageMetrics = await page.evaluate(() => ({
+    clientWidth: document.documentElement.clientWidth,
+    scrollWidth: document.documentElement.scrollWidth
+  }));
+  expect(pageMetrics.scrollWidth).toBeLessThanOrEqual(pageMetrics.clientWidth);
+}
+
+async function expectFourteenViewPanelTextFits(page: Page) {
+  await expect(page.locator(".viewTile")).toHaveCount(14);
+  await expect(page.locator(".viewTile figcaption")).toHaveText(viewNames);
+
+  const resultPanelMetrics = await page.locator(".resultPanel").evaluate((element) => ({
+    clientWidth: element.clientWidth,
+    scrollWidth: element.scrollWidth
+  }));
+  expect(resultPanelMetrics.scrollWidth).toBeLessThanOrEqual(
+    resultPanelMetrics.clientWidth + 1
+  );
+
+  const textMetrics = await page
+    .locator(".viewTile figcaption, .renderAssetActions button")
+    .evaluateAll((elements) =>
+      elements.map((element) => ({
+        clientWidth: element.clientWidth,
+        label: element.textContent ?? "",
+        scrollWidth: element.scrollWidth
+      }))
+    );
+  for (const metrics of textMetrics) {
+    expect(metrics.scrollWidth, metrics.label).toBeLessThanOrEqual(
+      metrics.clientWidth + 1
+    );
+  }
+
+  const downloadButtonRects = await page.locator(".renderAssetActions button").evaluateAll(
+    (buttons) =>
+      buttons.map((button) => {
+        const rect = button.getBoundingClientRect();
+        return {
+          bottom: rect.bottom,
+          label: button.textContent ?? "",
+          left: rect.left,
+          right: rect.right,
+          top: rect.top
+        };
+      })
+  );
+  for (let first = 0; first < downloadButtonRects.length; first += 1) {
+    for (let second = first + 1; second < downloadButtonRects.length; second += 1) {
+      const a = downloadButtonRects[first];
+      const b = downloadButtonRects[second];
+      const overlapX = Math.min(a.right, b.right) - Math.max(a.left, b.left);
+      const overlapY = Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top);
+      expect(overlapX > 1 && overlapY > 1, `${a.label} overlaps ${b.label}`).toBe(
+        false
+      );
+    }
+  }
+
+  for (const name of viewNames) {
+    const button = page
+      .locator(".resultPanel")
+      .getByRole("button", { name: `${name} PNG`, exact: true });
+    await button.scrollIntoViewIfNeeded();
+    await expect(button).toBeVisible();
+  }
+  const stlButton = page.locator(".resultPanel").getByRole("button", { name: /STL/i });
+  await stlButton.scrollIntoViewIfNeeded();
+  await expect(stlButton).toBeVisible();
+}
+
 test("desktop workbench keeps controls visible", async ({
   page
 }) => {
@@ -390,18 +489,11 @@ test("desktop workbench keeps controls visible", async ({
   );
   expect(controlBox!.x + controlBox!.width).toBeLessThan(codeBox!.x);
   expect(viewGridBox!.height).toBeGreaterThanOrEqual(resultBox!.height * 0.5);
-  await expect(page.locator(".viewTile")).toHaveCount(6);
-  await expect(page.locator(".viewTile figcaption")).toHaveText([
-    "Front",
-    "Back",
-    "Left",
-    "Right",
-    "Top",
-    "Isometric"
-  ]);
+  await expect(page.locator(".viewTile")).toHaveCount(14);
+  await expect(page.locator(".viewTile figcaption")).toHaveText(viewNames);
   const frontBox = await page.locator(".viewTile").first().boundingBox();
   expect(frontBox).not.toBeNull();
-  for (let index = 1; index < 6; index += 1) {
+  for (let index = 1; index < 14; index += 1) {
     const supportingBox = await page.locator(".viewTile").nth(index).boundingBox();
     expect(supportingBox).not.toBeNull();
     expect(frontBox!.width * frontBox!.height).toBeGreaterThan(
@@ -409,6 +501,24 @@ test("desktop workbench keeps controls visible", async ({
     );
     expect(supportingBox!.y).toBeGreaterThan(frontBox!.y);
   }
+  const resultPanelMetrics = await page.locator(".resultPanel").evaluate((element) => ({
+    clientHeight: element.clientHeight,
+    clientWidth: element.clientWidth,
+    scrollHeight: element.scrollHeight,
+    scrollWidth: element.scrollWidth
+  }));
+  expect(resultPanelMetrics.scrollHeight).toBeGreaterThan(resultPanelMetrics.clientHeight);
+  expect(resultPanelMetrics.scrollWidth).toBeLessThanOrEqual(resultPanelMetrics.clientWidth);
+  const labelMetrics = await page.locator(".viewTile figcaption").evaluateAll((labels) =>
+    labels.map((label) => ({
+      clientWidth: label.clientWidth,
+      scrollWidth: label.scrollWidth
+    }))
+  );
+  for (const metrics of labelMetrics) {
+    expect(metrics.scrollWidth).toBeLessThanOrEqual(metrics.clientWidth + 1);
+  }
+  await expectFourteenViewPanelTextFits(page);
 
   await page.locator(".controlPanel").getByRole("button", { name: "New model" }).focus();
   const focusedPanels: string[] = [];
@@ -445,6 +555,9 @@ test("desktop workbench keeps controls visible", async ({
   );
 
   if (RUN_SCREENSHOT_ASSERTIONS) {
+    await page.locator(".resultPanel").evaluate((panel) => {
+      panel.scrollTop = 0;
+    });
     await expect(page.locator(".workspace")).toHaveScreenshot("desktop-workbench.png", {
       animations: "disabled",
       maxDiffPixelRatio: WORKBENCH_SCREENSHOT_DIFF_RATIO
@@ -555,6 +668,10 @@ test("stacked layout keeps setup controls before model actions", async ({ page }
     pageWidthWithTooltip.clientWidth
   );
   await page.mouse.move(0, 0);
+
+  await page.locator(".resultPanel").scrollIntoViewIfNeeded();
+  await expectFourteenViewPanelTextFits(page);
+  await expectNoHorizontalPageOverflow(page);
 
   await page.locator(".agentRun").scrollIntoViewIfNeeded();
   const stackedChatCode = page.locator(".chatCodeDisclosure").first();

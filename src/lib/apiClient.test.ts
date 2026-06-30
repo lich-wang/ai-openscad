@@ -7,6 +7,23 @@ import {
 } from "./apiClient";
 import { buildVisionSystemPrompt } from "./openscadSkills";
 
+const reviewImages = [
+  "data:image/png;base64,front",
+  "data:image/png;base64,back",
+  "data:image/png;base64,left",
+  "data:image/png;base64,right",
+  "data:image/png;base64,top",
+  "data:image/png;base64,bottom",
+  "data:image/png;base64,iso-front-right-top",
+  "data:image/png;base64,iso-front-left-top",
+  "data:image/png;base64,iso-back-right-top",
+  "data:image/png;base64,iso-back-left-top",
+  "data:image/png;base64,iso-front-right-bottom",
+  "data:image/png;base64,iso-front-left-bottom",
+  "data:image/png;base64,iso-back-right-bottom",
+  "data:image/png;base64,iso-back-left-bottom"
+];
+
 describe("apiClient prompt assembly", () => {
   it("adds Chinese output instruction for Chinese requirements", () => {
     const request = buildGenerationRequest({
@@ -129,7 +146,9 @@ describe("apiClient prompt assembly", () => {
     const prompt = buildVisionSystemPrompt("生成一个杯子");
 
     expect(prompt).toContain("correctionPrompt");
-    expect(prompt).toContain("front, back, left, right, top, and isometric");
+    expect(prompt).toContain("front, back, left, right, top, bottom");
+    expect(prompt).toContain("isoFrontRightTop");
+    expect(prompt).toContain("isoBackLeftBottom");
     expect(prompt).toContain("avoid returning OpenSCAD code");
     expect(prompt).toContain("affected OpenSCAD modules");
     expect(prompt).toContain("sizing, placement, or proportion guidance");
@@ -154,20 +173,13 @@ describe("apiClient prompt assembly", () => {
       modelId: "mimo-v2.5",
       requirement: "Make a printable box",
       code: "cube(10);",
-      images: [
-        "data:image/png;base64,front",
-        "data:image/png;base64,back",
-        "data:image/png;base64,left",
-        "data:image/png;base64,right",
-        "data:image/png;base64,top",
-        "data:image/png;base64,isometric"
-      ],
+      images: reviewImages,
       renderEvidence: {
         compileStatus: "success",
         diagnostics: "Compiled to STL in browser.",
         renderPrecision: "draft",
         backend: "web-manifold",
-        viewCount: 6,
+        viewCount: 14,
         stl: "solid secret\nendsolid secret",
         promptTrace: "hidden prompt trace",
         extraScreenshot: "data:image/png;base64,hidden"
@@ -183,12 +195,37 @@ describe("apiClient prompt assembly", () => {
     expect(userPrompt).toContain("Compiled to STL in browser.");
     expect(userPrompt).toContain("renderPrecision: draft");
     expect(userPrompt).toContain("backend: web-manifold");
-    expect(userPrompt).toContain("viewCount: 6");
+    expect(userPrompt).toContain("viewCount: 14");
     expect(userPrompt).not.toContain("solid secret");
     expect(userPrompt).not.toContain("hidden prompt trace");
     expect(userPrompt).not.toContain("extraScreenshot");
     expect(userPrompt).not.toContain("data:image/png;base64,hidden");
 
+    vi.unstubAllGlobals();
+  });
+
+  it("rejects oversized fourteen-view payloads before calling the vision endpoint", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      reviewViews({
+        apiKey: "sk-user",
+        modelId: "mimo-v2.5",
+        requirement: "Make a printable box",
+        code: "cube(10);",
+        images: reviewImages.map((image) => `${image}${"A".repeat(600_000)}`),
+        renderEvidence: {
+          compileStatus: "success",
+          diagnostics: "Compiled to STL in browser.",
+          renderPrecision: "draft",
+          backend: "web-manifold",
+          viewCount: 14
+        }
+      })
+    ).rejects.toThrow(/vision payload/i);
+
+    expect(fetchMock).not.toHaveBeenCalled();
     vi.unstubAllGlobals();
   });
 
@@ -243,14 +280,7 @@ describe("apiClient prompt assembly", () => {
       modelId: "mimo-v2.5",
       requirement: "生成一个30ML的杯子模型",
       code: "module cup() { cup(); }",
-      images: [
-        "data:image/png;base64,front",
-        "data:image/png;base64,back",
-        "data:image/png;base64,left",
-        "data:image/png;base64,right",
-        "data:image/png;base64,top",
-        "data:image/png;base64,isometric"
-      ]
+      images: reviewImages
     });
 
     expect(review.correctionPrompt).toContain("Original requirement");

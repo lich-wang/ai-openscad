@@ -1,3 +1,9 @@
+import {
+  createEmptyViewSet,
+  normalizeViewSet,
+  type ViewSet
+} from "./viewSpecs";
+
 export interface VisionReview {
   summary: string;
   issues: string[];
@@ -11,6 +17,7 @@ export interface RenderEvidence {
   renderPrecision: "draft" | "final";
   backend: string;
   viewCount: number;
+  repairable?: boolean;
 }
 
 export interface ProjectIteration {
@@ -66,14 +73,7 @@ export interface ProjectState {
   renderEvidence: RenderEvidence | null;
   review: VisionReview | null;
   stl: string;
-  views: {
-    front: string;
-    back: string;
-    left: string;
-    right: string;
-    top: string;
-    isometric: string;
-  };
+  views: ViewSet;
   runEvents: RunEvent[];
   iterations: ProjectIteration[];
   promptTrace: PromptTraceEntry[];
@@ -106,14 +106,7 @@ export function createEmptyProject(): ProjectState {
     renderEvidence: null,
     review: null,
     stl: "",
-    views: {
-      front: "",
-      back: "",
-      left: "",
-      right: "",
-      top: "",
-      isometric: ""
-    },
+    views: createEmptyViewSet(),
     runEvents: [],
     iterations: [],
     promptTrace: [],
@@ -224,14 +217,7 @@ export function importProject(serialized: string): ProjectState {
     requirement,
     originalRequirement: parsed.originalRequirement ?? requirement,
     renderEvidence: parsed.renderEvidence ?? null,
-    views: {
-      front: parsed.views?.front ?? "",
-      back: parsed.views?.back ?? "",
-      left: parsed.views?.left ?? "",
-      right: parsed.views?.right ?? "",
-      top: parsed.views?.top ?? "",
-      isometric: parsed.views?.isometric ?? ""
-    },
+    views: normalizeViewSet(parsed.views as Parameters<typeof normalizeViewSet>[0]),
     stl: parsed.stl ?? "",
     runEvents: parsed.runEvents ?? [],
     iterations: parsed.iterations ?? [],
@@ -302,14 +288,7 @@ function compactProjectForStorage(
     stl: "",
     views: keepViews
       ? { ...project.views }
-      : {
-          front: "",
-          back: "",
-          left: "",
-          right: "",
-          top: "",
-          isometric: ""
-        }
+      : createEmptyViewSet()
   };
 }
 

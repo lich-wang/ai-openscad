@@ -8,6 +8,23 @@ import {
   saveProject
 } from "./project";
 
+const emptyViews = {
+  front: "",
+  back: "",
+  left: "",
+  right: "",
+  top: "",
+  bottom: "",
+  isoFrontRightTop: "",
+  isoFrontLeftTop: "",
+  isoBackRightTop: "",
+  isoBackLeftTop: "",
+  isoFrontRightBottom: "",
+  isoFrontLeftBottom: "",
+  isoBackRightBottom: "",
+  isoBackLeftBottom: ""
+};
+
 describe("project persistence", () => {
   beforeEach(() => {
     localStorage.clear();
@@ -51,19 +68,12 @@ describe("project persistence", () => {
 
     expect(project).toMatchObject({
       originalRequirement: "",
-      views: {
-        front: "",
-        back: "",
-        left: "",
-        right: "",
-        top: "",
-        isometric: ""
-      },
+      views: emptyViews,
       runEvents: []
     });
   });
 
-  it("imports legacy three-view projects with empty multi-angle view slots", () => {
+  it("imports legacy three-view projects with empty fourteen-view slots", () => {
     const project = importProject(
       JSON.stringify({
         requirement: "legacy cup",
@@ -76,12 +86,36 @@ describe("project persistence", () => {
     );
 
     expect(project.views).toEqual({
+      ...emptyViews,
       front: "data:image/png;base64,front",
-      back: "",
-      left: "",
+      right: "data:image/png;base64,right",
+      top: "data:image/png;base64,top"
+    });
+  });
+
+  it("imports legacy six-view projects while preserving the old isometric direction", () => {
+    const project = importProject(
+      JSON.stringify({
+        requirement: "legacy six-view cup",
+        views: {
+          front: "data:image/png;base64,front",
+          back: "data:image/png;base64,back",
+          left: "data:image/png;base64,left",
+          right: "data:image/png;base64,right",
+          top: "data:image/png;base64,top",
+          isometric: "data:image/png;base64,isometric"
+        }
+      })
+    );
+
+    expect(project.views).toEqual({
+      ...emptyViews,
+      front: "data:image/png;base64,front",
+      back: "data:image/png;base64,back",
+      left: "data:image/png;base64,left",
       right: "data:image/png;base64,right",
       top: "data:image/png;base64,top",
-      isometric: ""
+      isoFrontRightTop: "data:image/png;base64,isometric"
     });
   });
 
@@ -109,12 +143,9 @@ describe("project persistence", () => {
     project.id = "large-render";
     project.currentCode = "water_cup();";
     project.stl = "solid large\nfacet normal 0 0 1\nendsolid large";
-    project.views.front = "data:image/png;base64,front";
-    project.views.back = "data:image/png;base64,back";
-    project.views.left = "data:image/png;base64,left";
-    project.views.right = "data:image/png;base64,right";
-    project.views.top = "data:image/png;base64,top";
-    project.views.isometric = "data:image/png;base64,isometric";
+    for (const key of Object.keys(project.views) as Array<keyof typeof project.views>) {
+      project.views[key] = `data:image/png;base64,${key}`;
+    }
 
     const originalSetItem = Storage.prototype.setItem;
     const setItem = vi

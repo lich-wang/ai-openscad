@@ -5,6 +5,7 @@ import {
   type RenderPrecision
 } from "./renderSkill";
 import type { RenderEvidence } from "./project";
+import { VIEW_KEYS } from "./viewSpecs";
 
 export const OPENSCAD_SKILL_CONTEXT = `
 You generate production-quality OpenSCAD code.
@@ -67,7 +68,7 @@ Return the complete revised OpenSCAD code only.`;
 }
 
 export function buildVisionSystemPrompt(requirement = ""): string {
-  return `You review OpenSCAD-generated 3D models from front, back, left, right, top, and isometric views.
+  return `You review OpenSCAD-generated 3D models from these 14 views in order: ${VIEW_KEYS.join(", ")}.
 ${buildLanguageInstruction(requirement)}
 Return JSON with keys: summary, issues, correctionPrompt, confidence.
 - issues must be an array of strings.

@@ -1,15 +1,60 @@
 import { expect, test, type Page } from "@playwright/test";
 
-const viewNames = ["Front", "Back", "Left", "Right", "Top", "Isometric"];
-const viewKeys = ["front", "back", "left", "right", "top", "isometric"] as const;
-const viewDataUrls = {
-  front: "data:image/png;base64,front-view",
-  back: "data:image/png;base64,back-view",
-  left: "data:image/png;base64,left-view",
-  right: "data:image/png;base64,right-view",
-  top: "data:image/png;base64,top-view",
-  isometric: "data:image/png;base64,isometric-view"
-};
+const viewNames = [
+  "Front",
+  "Back",
+  "Left",
+  "Right",
+  "Top",
+  "Bottom",
+  "Iso Front Right Top",
+  "Iso Front Left Top",
+  "Iso Back Right Top",
+  "Iso Back Left Top",
+  "Iso Front Right Bottom",
+  "Iso Front Left Bottom",
+  "Iso Back Right Bottom",
+  "Iso Back Left Bottom"
+];
+const viewKeys = [
+  "front",
+  "back",
+  "left",
+  "right",
+  "top",
+  "bottom",
+  "isoFrontRightTop",
+  "isoFrontLeftTop",
+  "isoBackRightTop",
+  "isoBackLeftTop",
+  "isoFrontRightBottom",
+  "isoFrontLeftBottom",
+  "isoBackRightBottom",
+  "isoBackLeftBottom"
+] as const;
+const viewFileNames = [
+  "front",
+  "back",
+  "left",
+  "right",
+  "top",
+  "bottom",
+  "iso-front-right-top",
+  "iso-front-left-top",
+  "iso-back-right-top",
+  "iso-back-left-top",
+  "iso-front-right-bottom",
+  "iso-front-left-bottom",
+  "iso-back-right-bottom",
+  "iso-back-left-bottom"
+];
+const viewDataUrls = Object.fromEntries(
+  viewKeys.map((key) => [key, `data:image/png;base64,${key}-view`])
+) as Record<(typeof viewKeys)[number], string>;
+const emptyViews = Object.fromEntries(viewKeys.map((key) => [key, ""])) as Record<
+  (typeof viewKeys)[number],
+  string
+>;
 const pixel =
   "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADElEQVR42mP8z8AARQAFAAH/AnH9zAAAAABJRU5ErkJggg==";
 
@@ -106,7 +151,7 @@ async function expectRenderedViewsHaveModelPixels(page: Page) {
     )
   );
 
-  expect(paintedPixelCounts).toHaveLength(6);
+  expect(paintedPixelCounts).toHaveLength(14);
   for (const count of paintedPixelCounts) {
     expect(count).toBeGreaterThan(2);
   }
@@ -233,6 +278,60 @@ test("review sends MiMo multimodal model and shows editable correction prompt", 
   expect(llmRequests).toBe(0);
 });
 
+test("oversized fourteen-view payload fails before vision and keeps retry controls", async ({
+  page
+}) => {
+  const oversizedViews = Object.fromEntries(
+    viewKeys.map((key) => [key, `data:image/png;base64,${"A".repeat(600_000)}`])
+  ) as Record<(typeof viewKeys)[number], string>;
+  const oversizedProject = {
+    ...project,
+    views: oversizedViews,
+    renderEvidence: {
+      compileStatus: "success",
+      diagnostics: "Fourteen oversized PNG views.",
+      renderPrecision: "draft",
+      backend: "web-manifold",
+      viewCount: 14
+    },
+    review: null,
+    promptTrace: []
+  };
+  await page.addInitScript(() => {
+    localStorage.setItem("ai-openscad.vision-api-key", "sk-vision");
+  });
+
+  let visionRequests = 0;
+  await page.route("**/api/vision", async (route) => {
+    visionRequests += 1;
+    await route.fulfill({
+      status: 500,
+      contentType: "application/json",
+      body: JSON.stringify({ error: "Vision should not receive oversized payloads" })
+    });
+  });
+
+  await page.goto("/");
+  await page.locator('input[type="file"]').setInputFiles({
+    name: "oversized-fourteen-view-project.json",
+    mimeType: "application/json",
+    buffer: Buffer.from(JSON.stringify(oversizedProject))
+  });
+  await expect(page.locator(".viewTile img")).toHaveCount(14);
+  const reviewButton = page.getByRole("button", { name: /^Review$/i });
+  await expect(reviewButton).toBeEnabled();
+
+  await reviewButton.click();
+
+  await expect(page.locator('.workflowStage[data-stage="review"]')).toContainText("Error", {
+    timeout: 30_000
+  });
+  await expect(page.locator(".agentRun")).toContainText(/vision payload/i);
+  await expect(reviewButton).toBeEnabled();
+  await expect(page.getByRole("button", { name: /^Rerender$/i })).toBeEnabled();
+  expect(visionRequests).toBe(0);
+});
+
 test("generation streams code and automatically renders draft views", async ({ page }) => {
   await page.addInitScript((storedProject) => {
     localStorage.setItem("ai-openscad.llm-api-key", "sk-llm");
@@ -308,7 +407,7 @@ test("generation streams code and automatically renders draft views", async ({ p
   await expect(page.locator(".agentRun").getByText("Render started")).toBeVisible({
     timeout: 10000
   });
-  await expect(page.locator(".viewTile img")).toHaveCount(6, { timeout: 30000 });
+  await expect(page.locator(".viewTile img")).toHaveCount(14, { timeout: 30000 });
   await expect(page.locator(".viewTile figcaption")).toHaveText(viewNames);
   const imageAltText = await page.locator(".viewTile img").evaluateAll((images) =>
     images.map((image) => (image as HTMLImageElement).alt)
@@ -323,13 +422,17 @@ test("generation streams code and automatically renders draft views", async ({ p
     };
   });
   for (const name of viewNames) {
-    await expect(page.getByRole("button", { name: new RegExp(`${name} PNG`, "i") })).toBeVisible();
-    await page.getByRole("button", { name: new RegExp(`${name} PNG`, "i") }).click();
+    const downloadButton = page.getByRole("button", {
+      name: `${name} PNG`,
+      exact: true
+    });
+    await expect(downloadButton).toBeVisible();
+    await downloadButton.click();
   }
   const downloadNames = await page.evaluate(
     () => (window as typeof window & { __downloadNames: string[] }).__downloadNames
   );
-  expect(downloadNames).toEqual(viewKeys.map((key) => `ai-openscad-${key}.png`));
+  expect(downloadNames).toEqual(viewFileNames.map((name) => `ai-openscad-${name}.png`));
   await expect(page.getByRole("button", { name: /STL/i })).toBeVisible();
   await expect(page.locator(".agentRun").getByText("Render finished")).toBeVisible({
     timeout: 30000
@@ -388,7 +491,7 @@ test("generation streams code and automatically renders draft views", async ({ p
     JSON.parse(localStorage.getItem("ai-openscad.project") ?? "{}")
   );
   expect(reviewRequirement).toContain("生成一个30ML的杯子模型");
-  expect(reviewImageUrls).toHaveLength(6);
+  expect(reviewImageUrls).toHaveLength(14);
   const renderedImageUrls = await page.locator(".viewTile img").evaluateAll((images) =>
     images.map((image) => (image as HTMLImageElement).src)
   );
@@ -463,7 +566,7 @@ test("compile failure automatically repairs code while visual review never loops
   await expectCompilerRepairInFlight(page);
   expect(repairPrompt).toContain("cube(");
   expect(repairPrompt).toContain("OpenSCAD render failed");
-  await expect(page.locator(".viewTile img")).toHaveCount(6, { timeout: 30_000 });
+  await expect(page.locator(".viewTile img")).toHaveCount(14, { timeout: 30_000 });
   await expect(page.getByRole("button", { name: /^Review$/i })).toBeVisible();
   await expect(page.getByRole("button", { name: /Fix with diagnostics/i })).toHaveCount(0);
 
@@ -594,9 +697,107 @@ test("legacy three-view projects must rerender before review or export", async (
 
   await page.getByRole("button", { name: /^Rerender$/i }).click();
 
-  await expect(page.locator(".viewTile img")).toHaveCount(6, { timeout: 30_000 });
+  await expect(page.locator(".viewTile img")).toHaveCount(14, { timeout: 30_000 });
   await expect(page.getByRole("button", { name: /^Review$/i })).toBeVisible();
   await expect(page.getByRole("button", { name: /Final Export/i })).toBeVisible();
+});
+
+test("legacy six-view projects keep old isometric but must rerender before review", async ({
+  page
+}) => {
+  await page.addInitScript(({ storedProject, png }) => {
+    localStorage.setItem(
+      "ai-openscad.project",
+      JSON.stringify({
+        ...storedProject,
+        views: {
+          front: png,
+          back: png,
+          left: png,
+          right: png,
+          top: png,
+          isometric: png
+        },
+        renderEvidence: {
+          compileStatus: "success",
+          diagnostics: "Legacy six-view render.",
+          renderPrecision: "draft",
+          backend: "web-manifold",
+          viewCount: 6
+        },
+        review: {
+          summary: "Stale review from the old six-view project.",
+          issues: ["Old visual evidence is incomplete."],
+          correctionPrompt: "Rerender before iterating.",
+          confidence: 0.3
+        },
+        promptTrace: []
+      })
+    );
+  }, { storedProject: project, png: pixel });
+
+  await page.goto("/");
+
+  await expect(page.locator(".viewTile img")).toHaveCount(6);
+  await expect(page.getByRole("button", { name: /^Review$/i })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: /Final Export/i })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: /Iterate Again/i })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: /^Rerender$/i })).toBeVisible();
+
+  await page.getByRole("button", { name: /^Rerender$/i }).click();
+
+  await expect(page.locator(".viewTile img")).toHaveCount(14, { timeout: 30_000 });
+  await expect(page.locator(".viewTile figcaption")).toHaveText(viewNames);
+  await expect(page.getByRole("button", { name: /^Review$/i })).toBeVisible();
+  await expect(page.getByRole("button", { name: /Final Export/i })).toBeVisible();
+});
+
+test("partial thirteen-view capture blocks vision review and stale actions", async ({
+  page
+}) => {
+  const partialViews = { ...viewDataUrls, isoBackLeftBottom: "" };
+  await page.addInitScript(({ storedProject, views }) => {
+    localStorage.setItem(
+      "ai-openscad.project",
+      JSON.stringify({
+        ...storedProject,
+        views,
+        renderEvidence: {
+          compileStatus: "success",
+          diagnostics: "Partial thirteen-view render.",
+          renderPrecision: "draft",
+          backend: "web-manifold",
+          viewCount: 13
+        },
+        review: {
+          summary: "Stale review should be blocked.",
+          issues: ["Only thirteen views exist."],
+          correctionPrompt: "Rerender all views before iterating.",
+          confidence: 0.4
+        },
+        promptTrace: []
+      })
+    );
+  }, { storedProject: project, views: partialViews });
+
+  let visionRequests = 0;
+  await page.route("**/api/vision", async (route) => {
+    visionRequests += 1;
+    await route.fulfill({
+      status: 500,
+      contentType: "application/json",
+      body: JSON.stringify({ error: "Vision should not run with 13/14 views" })
+    });
+  });
+
+  await page.goto("/");
+
+  await expect(page.locator(".viewTile img")).toHaveCount(13);
+  await expect(page.getByRole("button", { name: /^Review$/i })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: /Final Export/i })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: /Iterate Again/i })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: /^Rerender$/i })).toBeVisible();
+  expect(visionRequests).toBe(0);
 });
 
 test("manual code edits clear stale views before automatic rerender repair", async ({ page }) => {
@@ -625,7 +826,7 @@ test("manual code edits clear stale views before automatic rerender repair", asy
   await page.goto("/");
   await expect(page.getByRole("button", { name: /^Review$/i })).toBeVisible();
   await expect(page.getByRole("button", { name: /Final Export/i })).toBeVisible();
-  await expect(page.locator(".viewTile img")).toHaveCount(6);
+  await expect(page.locator(".viewTile img")).toHaveCount(14);
 
   await page.getByText("Advanced: view/edit OpenSCAD code").click();
   await page.locator(".codeEditor").fill("cube(");
@@ -641,7 +842,7 @@ test("manual code edits clear stale views before automatic rerender repair", asy
   });
   expect(repairPrompt).toContain("cube(");
   expect(repairPrompt).toContain("OpenSCAD render failed");
-  await expect(page.locator(".viewTile img")).toHaveCount(6, { timeout: 30_000 });
+  await expect(page.locator(".viewTile img")).toHaveCount(14, { timeout: 30_000 });
   await expect(page.getByRole("button", { name: /^Review$/i })).toBeVisible();
   await expect(page.getByRole("button", { name: /Final Export/i })).toBeVisible();
   await expect(page.getByRole("button", { name: /Fix with diagnostics/i })).toHaveCount(0);
@@ -715,7 +916,7 @@ water_cup();
   await expect(page.locator(".codeEditor").first()).not.toHaveValue(/layer_h\s*=/);
   await expect(page.locator(".codeEditor").first()).not.toHaveValue(/layers\s*=\s*ceil/);
   await expect(page.locator(".codeEditor").first()).not.toHaveValue(/wave_segments\s*=\s*72/);
-  await expect(page.locator(".viewTile img")).toHaveCount(6, { timeout: 45000 });
+  await expect(page.locator(".viewTile img")).toHaveCount(14, { timeout: 45000 });
   await expectRenderedViewsHaveModelPixels(page);
   await expect(page.locator('.workflowStage[data-stage="render"]')).toContainText("Complete");
   expect(prompt).toContain("browser render complexity budget");
@@ -902,7 +1103,7 @@ echo(str("波浪振幅: ", wave_amplitude, "mm"));
   await expect(page.locator(".agentRun").getByText("Render started")).toBeVisible({
     timeout: 10_000
   });
-  await expect(page.locator(".viewTile img")).toHaveCount(6, { timeout: 60_000 });
+  await expect(page.locator(".viewTile img")).toHaveCount(14, { timeout: 60_000 });
   await expectRenderedViewsHaveModelPixels(page);
   await expect(page.locator(".agentRun").getByText("Render finished")).toBeVisible({
     timeout: 10_000
@@ -917,7 +1118,7 @@ echo(str("波浪振幅: ", wave_amplitude, "mm"));
       timeout: 60_000
     });
     await expect(page.locator(".agentRun").getByRole("alert")).toHaveCount(0);
-    await expect(page.locator(".viewTile img")).toHaveCount(6);
+    await expect(page.locator(".viewTile img")).toHaveCount(14);
     await expectRenderedViewsHaveModelPixels(page);
     await expect(page.locator('.workflowStage[data-stage="render"]')).toContainText("Complete");
   }
@@ -1035,7 +1236,7 @@ test("iterate again uses the editable correction prompt then renders a new model
   await expect(page.locator(".codeEditor").first()).toHaveValue(/revised/);
   await expect(page.locator(".chatCodeDisclosure")).toBeVisible();
   await expect(page.locator(".agentCodePreview")).toHaveCount(0);
-  await expect(page.locator(".viewTile img")).toHaveCount(6, { timeout: 30000 });
+  await expect(page.locator(".viewTile img")).toHaveCount(14, { timeout: 30000 });
   await expect(page.getByRole("button", { name: /Review/i })).toBeVisible();
   await expect(page.locator('.workflowStage[data-stage="review"]')).toContainText("Waiting");
   await expect(page.locator(".agentRun").getByText("Iteration started")).toBeVisible();
@@ -1158,7 +1359,7 @@ test("accepting a revision requires a fresh visual review before another iterati
   await expect(page.getByRole("button", { name: /^Review$/i })).toBeVisible({
     timeout: 45000
   });
-  await expect(page.locator(".viewTile img")).toHaveCount(6);
+  await expect(page.locator(".viewTile img")).toHaveCount(14);
   await expect(page.getByRole("button", { name: /Iterate Again/i })).toHaveCount(0);
   await expect(page.locator(".resultPanel").getByText("No review yet.")).toHaveCount(0);
   await expect(page.locator(".agentRun")).not.toContainText("旧评审：杯口太厚");
@@ -1284,7 +1485,7 @@ test("final export timeout keeps final guidance separate from draft budget", asy
           diagnostics: "Compiled draft preview.",
           renderPrecision: "draft",
           backend: "web-manifold",
-          viewCount: 6
+          viewCount: 14
         },
         promptTrace: []
       })
@@ -1335,7 +1536,7 @@ test("final export timeout keeps final guidance separate from draft budget", asy
   expect(reviewPrompt).toContain("diagnostics: Compiled draft preview.");
   expect(reviewPrompt).toContain("renderPrecision: draft");
   expect(reviewPrompt).toContain("backend: web-manifold");
-  expect(reviewPrompt).toContain("viewCount: 6");
+  expect(reviewPrompt).toContain("viewCount: 14");
   expect(reviewPrompt).not.toContain("high precision final export timed out");
   expect(reviewPrompt).not.toContain("renderPrecision: final");
 });

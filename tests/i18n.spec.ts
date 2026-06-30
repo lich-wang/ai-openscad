@@ -1,5 +1,23 @@
 import { expect, test } from "@playwright/test";
 
+const viewKeys = [
+  "front",
+  "back",
+  "left",
+  "right",
+  "top",
+  "bottom",
+  "isoFrontRightTop",
+  "isoFrontLeftTop",
+  "isoBackRightTop",
+  "isoBackLeftTop",
+  "isoFrontRightBottom",
+  "isoFrontLeftBottom",
+  "isoBackRightBottom",
+  "isoBackLeftBottom"
+] as const;
+const emptyViews = Object.fromEntries(viewKeys.map((key) => [key, ""]));
+
 const project = {
   id: "project-i18n-test",
   title: "I18n Test",
@@ -10,7 +28,7 @@ const project = {
   proposedCode: "",
   compilerOutput: "",
   review: null,
-  views: { front: "", back: "", left: "", right: "", top: "", isometric: "" },
+  views: emptyViews,
   iterations: [],
   promptTrace: [],
   updatedAt: "2026-06-26T00:00:00.000Z"

@@ -14,6 +14,8 @@ interface GatewayResponse {
   content: string;
 }
 
+const MAX_VISION_PAYLOAD_BYTES = 7_500_000;
+
 export async function generateOpenScad(input: {
   apiKey: string;
   modelId: string;
@@ -68,6 +70,7 @@ export async function reviewViews(input: {
     images: input.images,
     responseFormat: "json"
   });
+  assertVisionPayloadWithinBudget(request);
   const content = await sendGatewayRequest(request);
   const review = parseReview(content, input.requirement);
   return {
@@ -182,6 +185,26 @@ export function estimateTokenUsage(input: {
     visionTokens: estimateTextTokens(input.visionText) + input.imageCount * 1100,
     imageCount: input.imageCount
   };
+}
+
+function assertVisionPayloadWithinBudget(request: ReturnType<typeof createModelRequest>) {
+  if (request.endpoint !== "/api/vision") {
+    return;
+  }
+  const payload = JSON.stringify(request.body);
+  const payloadBytes = new TextEncoder().encode(payload).byteLength;
+  if (payloadBytes <= MAX_VISION_PAYLOAD_BYTES) {
+    return;
+  }
+  throw new Error(
+    `Vision payload is too large for review (${formatBytes(payloadBytes)} > ${formatBytes(
+      MAX_VISION_PAYLOAD_BYTES
+    )}). Rerender with bounded captures before reviewing.`
+  );
+}
+
+function formatBytes(bytes: number): string {
+  return `${(bytes / 1_000_000).toFixed(1)} MB`;
 }
 
 async function sendGatewayRequest(request: ReturnType<typeof createModelRequest>) {

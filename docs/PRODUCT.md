@@ -59,8 +59,9 @@ three columns:
    and the render adapter compiles the generated OpenSCAD in the browser.
    Compile failure automatically triggers a bounded compiler-repair text
    generation using the failed code and readable diagnostics.
-5. The app captures front, back, left, right, top, and isometric PNG views from
-   the STL.
+5. The app captures fourteen PNG views from the STL: six orthographic
+   directions (front, back, left, right, top, bottom) and eight isometric
+   directions around the model.
 6. User clicks **Review**.
 7. The vision model checks the multi-angle views against the original
    requirement and returns a summary, issue list, confidence score, and
@@ -136,9 +137,11 @@ Workbench acceptance criteria:
   generation becomes active again, rendering waits until code completion, and
   review waits for the new rendered views.
 - The composer primary action is disabled while any generation, render, review,
-  compiler-repair, or export task is running. It shows Generate when no rendered
-  views exist, Review when views exist and there is no current review, and
-  Iterate Again after review when no pending revision is waiting for acceptance.
+  compiler-repair, or export task is running. It shows Generate when no current
+  fourteen-view render exists, Review only when all fourteen current rendered
+  view keys are non-empty and there is no current review, and Iterate Again only
+  after the current fourteen-view render has been reviewed and no pending
+  revision is waiting for acceptance.
   Missing inputs, provider-key failures, compile failures, and review failures
   appear in the center stream without changing the right panel contract. While a
   pending revision is waiting for acceptance, the composer shows an acceptance
@@ -176,20 +179,40 @@ Workbench acceptance criteria:
 - Streaming and stage status updates should use polite live-region behavior or
   equivalent accessible status text. Collapsed code controls expose expanded or
   collapsed state through accessible labels.
-- The right result panel contains only the six named view tiles and asset
+- The right result panel contains only the fourteen named view tiles and asset
   download controls. It must not contain compiler logs, review text, prompt
   trace, or iteration history. The view order is front, back, left, right, top,
-  then isometric. On desktop, the front tile is the main/largest view and the
-  five supporting angles remain visible below it in a dense grid. In narrow
-  stacked layouts, all six tiles keep the same reading order and stable
-  accessible image names. The view grid should use at least half of the visible
-  right-panel height at a 1440 px desktop viewport.
+  bottom, iso-front-right-top, iso-front-left-top, iso-back-right-top,
+  iso-back-left-top, iso-front-right-bottom, iso-front-left-bottom,
+  iso-back-right-bottom, then iso-back-left-bottom. On desktop, the front tile
+  is the main/largest orthographic view and the remaining thirteen angles are
+  visible below it in a dense, scrollable grid. In narrow stacked layouts, all
+  fourteen tiles keep the same reading order and stable accessible image names.
+  The view grid should use at least half of the visible right-panel height at a
+  1440 px desktop viewport. The right panel or the view grid may scroll
+  internally, but the overall workbench must not grow vertically in a way that
+  hides the composer, workflow actions, code editor access, or asset download
+  controls. PNG and STL download controls remain reachable from the result panel
+  without mixing logs, review text, or prompt traces into that panel.
 - Every view tile uses the visible label and image alt text for its angle:
-  Front, Back, Left, Right, Top, and Isometric. Each PNG download button uses a
-  matching accessible name and filename:
+  Front, Back, Left, Right, Top, Bottom, Iso Front Right Top, Iso Front Left
+  Top, Iso Back Right Top, Iso Back Left Top, Iso Front Right Bottom, Iso Front
+  Left Bottom, Iso Back Right Bottom, and Iso Back Left Bottom. Each PNG
+  download button uses a matching accessible name and filename:
   `ai-openscad-front.png`, `ai-openscad-back.png`,
   `ai-openscad-left.png`, `ai-openscad-right.png`,
-  `ai-openscad-top.png`, and `ai-openscad-isometric.png`.
+  `ai-openscad-top.png`, `ai-openscad-bottom.png`,
+  `ai-openscad-iso-front-right-top.png`,
+  `ai-openscad-iso-front-left-top.png`,
+  `ai-openscad-iso-back-right-top.png`,
+  `ai-openscad-iso-back-left-top.png`,
+  `ai-openscad-iso-front-right-bottom.png`,
+  `ai-openscad-iso-front-left-bottom.png`,
+  `ai-openscad-iso-back-right-bottom.png`, and
+  `ai-openscad-iso-back-left-bottom.png`.
+  Long view labels and download button labels must fit without overlap or
+  horizontal overflow on desktop and narrow layouts; they may wrap or truncate
+  visually only when the accessible name remains complete.
 - Manual OpenSCAD edits can be recompiled with the secondary rerender action
   whenever code exists. Rerender failures appear in the center stream and keep
   the workbench interactive. Render errors must include readable OpenSCAD
@@ -204,7 +227,7 @@ Workbench acceptance criteria:
   for draft review with coarse, inspectable wave geometry, without 100-layer
   stacked `linear_extrude()` bodies, dense polygon wave rings, or per-layer
   boolean hollowing. The generated draft should stay within the 45 second
-  browser render timeout and produce visible front, back, left, right, top, and
+  browser render timeout and produce all fourteen visible orthographic and
   isometric views.
 - The same browser render complexity budget applies to first drafts,
   review-driven revisions, and user-edited correction-prompt iterations.
@@ -225,15 +248,20 @@ Workbench acceptance criteria:
   states, including non-color state labels and keyboard focus order.
   Playwright pixel screenshot checks run only in local visual-regression checks
   and must be skipped in CI.
+- Local visual-regression screenshots must explicitly cover the fourteen-view
+  result panel: the front tile remains primary/largest, the thirteen supporting
+  views appear below it in the stable order, any internal scrolling is
+  constrained to the result panel/grid, labels do not overlap, there is no
+  horizontal overflow, and PNG/STL download controls remain visible or reachable.
 - Tests must verify that compile failure triggers only the bounded compiler
   repair text requests, while render completion, visual review completion, and
   image evidence never trigger an unprompted `/api/llm` request.
 - Local E2E render coverage must include the full user-reported 20 cm wavy cup
   OpenSCAD file with layered `linear_extrude()` wave rings, verify that the
   browser renderer completes, and confirm the multi-angle rendered views contain
-  visible model pixels. Tests must assert that all six named view images appear
-  in order, each has non-background model pixels, and each matching PNG download
-  control has the expected accessible name.
+  visible model pixels. Tests must assert that all fourteen named view images
+  appear in order, each has non-background model pixels, and each matching PNG
+  download control has the expected accessible name.
 
 ## Feature Inventory
 
@@ -287,24 +315,61 @@ Workbench acceptance criteria:
   rerender.
 - Enforces a default 45 second render timeout.
 - Uses draft precision for normal iteration by normalizing `$fn` to 32.
-- Captures six multi-angle views from generated STL:
+- Captures fourteen multi-angle views from generated STL. Camera directions are
+  stable vectors from the model center to the camera; front/back/left/right use
+  screen-up `+Z`, top/bottom use screen-up `+Y`, and isometric views use
+  screen-up `+Z` unless that is parallel to the camera direction:
   - Front
   - Back
   - Left
   - Right
   - Top
-  - Isometric
+  - Bottom
+  - Iso Front Right Top
+  - Iso Front Left Top
+  - Iso Back Right Top
+  - Iso Back Left Top
+  - Iso Front Right Bottom
+  - Iso Front Left Bottom
+  - Iso Back Right Bottom
+  - Iso Back Left Bottom
 - Uses Three.js lighting and STL parsing to create PNG data URLs.
+- Stable view directions:
+  - `front`: camera direction `(0, -1, 0)`, up `(0, 0, 1)`
+  - `back`: camera direction `(0, 1, 0)`, up `(0, 0, 1)`
+  - `left`: camera direction `(-1, 0, 0)`, up `(0, 0, 1)`
+  - `right`: camera direction `(1, 0, 0)`, up `(0, 0, 1)`
+  - `top`: camera direction `(0, 0, 1)`, up `(0, 1, 0)`
+  - `bottom`: camera direction `(0, 0, -1)`, up `(0, 1, 0)`
+  - `isoFrontRightTop`: camera direction `normalize(1, -1, 0.75)`
+  - `isoFrontLeftTop`: camera direction `normalize(-1, -1, 0.75)`
+  - `isoBackRightTop`: camera direction `normalize(1, 1, 0.75)`
+  - `isoBackLeftTop`: camera direction `normalize(-1, 1, 0.75)`
+  - `isoFrontRightBottom`: camera direction `normalize(1, -1, -0.75)`
+  - `isoFrontLeftBottom`: camera direction `normalize(-1, -1, -0.75)`
+  - `isoBackRightBottom`: camera direction `normalize(1, 1, -0.75)`
+  - `isoBackLeftBottom`: camera direction `normalize(-1, 1, -0.75)`
+- Draft capture uses a bounded browser payload budget for vision review. Each
+  PNG is capped at the configured review capture size and encoded as a data URL;
+  if the combined provider request would exceed the browser/gateway payload
+  budget, the app stops before calling the vision endpoint, shows a readable
+  error in the center stream, and keeps rerender/retry available.
 
 ### Review And Iteration
 
 - Sends the original requirement, current OpenSCAD, and the multi-angle rendered
   images to the vision endpoint.
-- Visual review is allowed only when all six view keys have non-empty images.
+- Visual review is allowed only when all fourteen view keys have non-empty images.
   The image array sent to the provider must follow the stable view order:
-  front, back, left, right, top, isometric. If capture fails or fewer than six
+  front, back, left, right, top, bottom, isoFrontRightTop, isoFrontLeftTop,
+  isoBackRightTop, isoBackLeftTop, isoFrontRightBottom, isoFrontLeftBottom,
+  isoBackRightBottom, isoBackLeftBottom. If capture fails or fewer than fourteen
   views are available, the app stays in render/error state and does not call the
   vision endpoint.
+- Legacy three-view or six-view projects, partial capture results such as
+  13/14 views, and stale reviews attached to incomplete current views must block
+  Review, Final Export, and Iterate Again until the current code rerenders all
+  fourteen views.
 - Review requests include the latest compile/render evidence so the vision model
   can check both visual fit and obvious artifact quality issues. This feedback
   produces a user-editable correction prompt only; it does not directly call the
@@ -312,7 +377,7 @@ Workbench acceptance criteria:
 - Render evidence is a bounded provider contract, not localized UI copy. It
   includes compile status, readable diagnostics, render precision, backend, and
   rendered view count. `viewCount` equals the number of non-empty rendered view
-  images in the stable view set and must be `6` for visual review. STL bodies,
+  images in the stable view set and must be `14` for visual review. STL bodies,
   screenshots beyond the requested review images, and prompt traces are not sent
   unless they are explicitly part of the current model request.
 - Expects JSON with:
@@ -348,7 +413,15 @@ Workbench acceptance criteria:
   - Left PNG
   - Right PNG
   - Top PNG
-  - Isometric PNG
+  - Bottom PNG
+  - Iso Front Right Top PNG
+  - Iso Front Left Top PNG
+  - Iso Back Right Top PNG
+  - Iso Back Left Top PNG
+  - Iso Front Right Bottom PNG
+  - Iso Front Left Bottom PNG
+  - Iso Back Right Bottom PNG
+  - Iso Back Left Bottom PNG
   - STL
 - Final output:
   - High-precision SCAD
@@ -410,11 +483,20 @@ The core project state contains:
 - `left`
 - `right`
 - `top`
-- `isometric`
+- `bottom`
+- `isoFrontRightTop`
+- `isoFrontLeftTop`
+- `isoBackRightTop`
+- `isoBackLeftTop`
+- `isoFrontRightBottom`
+- `isoFrontLeftBottom`
+- `isoBackRightBottom`
+- `isoBackLeftBottom`
 
 Every value is a PNG data URL or an empty string. The UI, downloads, render
 evidence, and vision payload use this same order. A project imported from an
-older three-view export fills missing keys with empty strings until rerendered.
+older three-view or six-view export fills missing keys with empty strings until
+rerendered.
 
 Data is local to the browser unless the user explicitly exports a project JSON
 file or calls an external model provider through the gateway.

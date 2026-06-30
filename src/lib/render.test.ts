@@ -108,7 +108,23 @@ describe("WebRenderMcpAdapter", () => {
     expect(worker.postedMessages[0].kind).toBe("warmup");
   });
 
-  it("renders OpenSCAD source to STL and six multi-angle view images", async () => {
+  it("renders OpenSCAD source to STL and fourteen multi-angle view images", async () => {
+    const viewStages = [
+      "front",
+      "back",
+      "left",
+      "right",
+      "top",
+      "bottom",
+      "isoFrontRightTop",
+      "isoFrontLeftTop",
+      "isoBackRightTop",
+      "isoBackLeftTop",
+      "isoFrontRightBottom",
+      "isoFrontLeftBottom",
+      "isoBackRightBottom",
+      "isoBackLeftBottom"
+    ] as const;
     const worker = new FakeRenderWorker((message) => ({
       id: message.id,
       result: {
@@ -120,20 +136,12 @@ describe("WebRenderMcpAdapter", () => {
     const adapter = new WebRenderMcpAdapter({
       createWorker: () => worker.asWorker(),
       captureViews: async (stl, options) => {
-        await options.onProgress?.("front");
-        await options.onProgress?.("back");
-        await options.onProgress?.("left");
-        await options.onProgress?.("right");
-        await options.onProgress?.("top");
-        await options.onProgress?.("isometric");
-        return {
-          front: `front:${stl}`,
-          back: `back:${stl}`,
-          left: `left:${stl}`,
-          right: `right:${stl}`,
-          top: `top:${stl}`,
-          isometric: `isometric:${stl}`
-        };
+        for (const stage of viewStages) {
+          await options.onProgress?.(stage);
+        }
+        return Object.fromEntries(
+          viewStages.map((stage) => [stage, `${stage}:${stl}`])
+        ) as Record<(typeof viewStages)[number], string>;
       },
       timeoutMs: 1_000
     });
@@ -147,15 +155,12 @@ describe("WebRenderMcpAdapter", () => {
     expect(worker.postedMessages.at(-1)?.code).toBe("cube(10);");
     expect(result.ok).toBe(true);
     expect(result.stl).toBe("solid cup\nendsolid cup");
-    expect(result.views).toEqual({
-      front: "front:solid cup\nendsolid cup",
-      back: "back:solid cup\nendsolid cup",
-      left: "left:solid cup\nendsolid cup",
-      right: "right:solid cup\nendsolid cup",
-      top: "top:solid cup\nendsolid cup",
-      isometric: "isometric:solid cup\nendsolid cup"
-    });
-    expect(stages).toEqual(["compile", "front", "back", "left", "right", "top", "isometric"]);
+    expect(result.views).toEqual(
+      Object.fromEntries(
+        viewStages.map((stage) => [stage, `${stage}:solid cup\nendsolid cup`])
+      )
+    );
+    expect(stages).toEqual(["compile", ...viewStages]);
   });
 
   it("does not capture views when OpenSCAD compilation fails", async () => {
