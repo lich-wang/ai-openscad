@@ -475,6 +475,38 @@ async function expectPreviewDoesNotTrapKeyboardFocus(page: Page) {
   expect(focusInsidePreview).toBe(false);
 }
 
+async function expectInteractivePreviewIsOnlyLargeView(page: Page) {
+  const preview = interactivePreview(page);
+  await expect(preview).toBeVisible();
+  const previewBox = await preview.boundingBox();
+  const viewGridBox = await page.locator(".viewGrid").boundingBox();
+  expect(previewBox).not.toBeNull();
+  expect(viewGridBox).not.toBeNull();
+  expect(previewBox!.y).toBeLessThan(viewGridBox!.y);
+
+  const fixedTileBoxes = await page.locator(".viewTile").evaluateAll((tiles) =>
+    tiles.map((tile) => {
+      const rect = tile.getBoundingClientRect();
+      return {
+        height: rect.height,
+        width: rect.width
+      };
+    })
+  );
+  expect(fixedTileBoxes).toHaveLength(14);
+  const frontTileBox = fixedTileBoxes[0];
+  for (const tileBox of fixedTileBoxes) {
+    expect(Math.abs(tileBox.width - frontTileBox.width)).toBeLessThanOrEqual(2);
+    expect(Math.abs(tileBox.height - frontTileBox.height)).toBeLessThanOrEqual(2);
+  }
+
+  const largestFixedTileArea = Math.max(
+    ...fixedTileBoxes.map((tileBox) => tileBox.width * tileBox.height)
+  );
+  expect(previewBox!.width * previewBox!.height).toBeGreaterThan(largestFixedTileArea);
+  return previewBox;
+}
+
 test("desktop workbench keeps controls visible", async ({
   page
 }) => {
@@ -616,14 +648,7 @@ test("desktop workbench keeps controls visible", async ({
   await expect(preview).toBeVisible();
   await expectPreviewHasModelPixels(page);
   await expectPreviewDoesNotTrapKeyboardFocus(page);
-  const previewBox = await preview.boundingBox();
-  const frontBox = await page.locator(".viewTile").first().boundingBox();
-  expect(frontBox).not.toBeNull();
-  expect(previewBox).not.toBeNull();
-  expect(previewBox!.y).toBeLessThan(viewGridBox!.y);
-  expect(previewBox!.width * previewBox!.height).toBeGreaterThan(
-    frontBox!.width * frontBox!.height
-  );
+  const previewBox = await expectInteractivePreviewIsOnlyLargeView(page);
   const fixedViewSourcesBeforeDrag = await page.locator(".viewTile img").evaluateAll((images) =>
     images.map((image) => (image as HTMLImageElement).src)
   );
@@ -640,14 +665,6 @@ test("desktop workbench keeps controls visible", async ({
     images.map((image) => (image as HTMLImageElement).src)
   );
   expect(fixedViewSourcesAfterDrag).toEqual(fixedViewSourcesBeforeDrag);
-  for (let index = 1; index < 14; index += 1) {
-    const supportingBox = await page.locator(".viewTile").nth(index).boundingBox();
-    expect(supportingBox).not.toBeNull();
-    expect(frontBox!.width * frontBox!.height).toBeGreaterThan(
-      supportingBox!.width * supportingBox!.height
-    );
-    expect(supportingBox!.y).toBeGreaterThan(frontBox!.y);
-  }
   const resultPanelMetrics = await page.locator(".resultPanel").evaluate((element) => ({
     clientHeight: element.clientHeight,
     clientWidth: element.clientWidth,
@@ -843,6 +860,7 @@ test("stacked layout keeps setup controls before model actions", async ({ page }
 
   await page.locator(".resultPanel").scrollIntoViewIfNeeded();
   await expectFourteenViewPanelTextFits(page);
+  await expectInteractivePreviewIsOnlyLargeView(page);
   await expectNoHorizontalPageOverflow(page);
 
   await page.locator(".agentRun").scrollIntoViewIfNeeded();

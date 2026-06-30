@@ -1098,15 +1098,9 @@ textarea {
   display: grid;
   gap: 8px;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  grid-template-rows: minmax(210px, 240px);
   grid-auto-rows: minmax(112px, 128px);
   flex: 0 0 auto;
   min-height: 0;
-}
-
-.viewGrid .viewTile:first-child {
-  grid-column: 1 / -1;
-  grid-row: 1;
 }
 
 .viewTile {

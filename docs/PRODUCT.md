@@ -202,17 +202,18 @@ Workbench acceptance criteria:
   bottom,
   iso-front-right-top, iso-front-left-top, iso-back-right-top,
   iso-back-left-top, iso-front-right-bottom, iso-front-left-bottom,
-  iso-back-right-bottom, then iso-back-left-bottom. On desktop, the front tile
-  remains the main/largest fixed orthographic evidence tile within the
-  multi-angle grid and the remaining thirteen angles are visible below it in a
-  dense, scrollable grid. In narrow stacked layouts, all fourteen tiles keep the
-  same reading order and stable accessible image names. The interactive preview
-  plus fixed view grid should use the majority of the visible right-panel height
-  at a 1440 px desktop viewport. The right panel may scroll internally, but the
-  overall workbench must not grow vertically in a way that hides the composer,
-  workflow actions, code editor access, or asset download controls. PNG, SCAD,
-  and STL download controls remain reachable from the result panel without
-  mixing logs, review text, or prompt traces into that panel.
+  iso-back-right-bottom, then iso-back-left-bottom. On desktop, all fourteen
+  fixed view tiles use the same visual size in a dense, scrollable grid; the
+  front view must not be enlarged or span extra grid columns. In narrow stacked
+  layouts, all fourteen tiles keep the same reading order, equal tile treatment,
+  and stable accessible image names. The interactive preview plus fixed view
+  grid should use the majority of the visible right-panel height at a 1440 px
+  desktop viewport, with the interactive preview as the only enlarged model
+  view. The right panel may scroll internally, but the overall workbench must
+  not grow vertically in a way that hides the composer, workflow actions, code
+  editor access, or asset download controls. PNG, SCAD, and STL download
+  controls remain reachable from the result panel without mixing logs, review
+  text, or prompt traces into that panel.
 - Every view tile uses the visible label and image alt text for its angle:
   Front, Back, Left, Right, Top, Bottom, Iso Front Right Top, Iso Front Left
   Top, Iso Back Right Top, Iso Back Left Top, Iso Front Right Bottom, Iso Front
@@ -268,9 +269,10 @@ Workbench acceptance criteria:
   requests containing original requirement, latest accepted code, and editable
   guidance, left-panel ordering
   on desktop and narrower stacked layouts, hidden token/duplicate ready UI,
-  right-panel ownership, enlarged views, and primary action transitions across
-  generate, render, review, pending-revision, rerender-failure, and iterate
-  states, including non-color state labels and keyboard focus order.
+  right-panel ownership, the interactive preview as the only enlarged model
+  view, equal-size fourteen fixed view tiles, and primary action transitions
+  across generate, render, review, pending-revision, rerender-failure, and
+  iterate states, including non-color state labels and keyboard focus order.
   E2E coverage should also verify the interactive STL preview is the largest
   top visual area in the result panel, exposes its accessible name, can be
   dragged without changing the fourteen fixed review images or the vision
@@ -280,8 +282,7 @@ Workbench acceptance criteria:
   and must be skipped in CI.
 - Local visual-regression screenshots must explicitly cover the right result
   panel: the interactive preview is the largest top visual area after render,
-  the front fixed tile remains primary/largest within the fourteen-view grid,
-  the thirteen supporting views appear below it in the stable order, any
+  all fourteen fixed view tiles use equal visual size in stable order, any
   internal scrolling is constrained to the result panel/grid, labels do not
   overlap, there is no horizontal overflow, and PNG/SCAD/STL download controls
   remain visible or reachable.
