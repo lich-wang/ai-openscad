@@ -71,11 +71,12 @@ three columns:
 8. The vision model checks the multi-angle views against the original
    requirement and returns a summary, issue list, confidence score as a review
    conclusion, and correction prompt.
-9. The correction prompt becomes editable in the composer for manual iteration
-   and gives concrete instructions about which OpenSCAD areas or geometry
-   relationships should be changed. Review confidence is displayed as part of
-   the review conclusion, but is not copied into the correction prompt and is
-   not sent to the text LLM.
+9. The review event displays the confidence percentage together with the
+   summary. The correction prompt is shown once for that review, then becomes
+   editable in the composer for manual iteration and gives concrete
+   instructions about which OpenSCAD areas or geometry relationships should be
+   changed. Review confidence is displayed as part of the review conclusion,
+   but is not copied into the correction prompt and is not sent to the text LLM.
 10. User clicks **Iterate Again** to send the latest accepted/rendered
    OpenSCAD, the original requirement, review findings, and editable iteration
    guidance to the LLM, then generate and render the next draft. If the user
@@ -100,6 +101,15 @@ three columns:
   summary, issue list, and correction prompt, then render and review again.
   The run stops when the target confidence is reached, the automatic iteration
   limit is exhausted, or a provider/compile/review error occurs.
+- Before each follow-up automatic revision, the app keeps a checkpoint of the
+  current rendered and reviewed draft. If the newly rendered draft receives a
+  lower confidence score than that checkpoint, the app must restore the
+  checkpoint code, STL, fourteen views, render evidence, and review state
+  before any further revision. It then performs a fresh visual review of the
+  restored checkpoint to get a current correction prompt; any later automatic
+  revision must use that restored model and fresh review guidance, not the
+  lower-confidence draft. The failed follow-up revision still counts as an
+  automatic iteration; rollback and re-review do not refund it.
 - Review confidence is a displayed/stored conclusion, not prompt input. It must
   never be inserted into the editable correction prompt and must never be
   included in generation or revision text LLM prompts. Text prompts may include
@@ -218,9 +228,12 @@ Workbench acceptance criteria:
 - The center agent stream remains the place for user request records, streaming
   generated code, collapsed completed code, compiler output, render start,
   render progress, render completion, render errors, review summary, review
-  issues, confidence, correction prompt, and iteration events. Completed code is
-  collapsed by default so it does not dominate the center panel, while the
-  advanced OpenSCAD editor remains available below the composer.
+  issues, confidence, correction prompt, rollback events, and iteration events.
+  Each review event renders only one correction prompt block; the same
+  correction prompt must not be duplicated as a nested prompt card inside the
+  review event. Completed code is collapsed by default so it does not dominate
+  the center panel, while the advanced OpenSCAD editor remains available below
+  the composer.
 - During a bounded confidence run, the center agent stream shows automatic
   review/revision progress, the latest confidence conclusion, automatic
   iteration count consumed, and the stop reason: target confidence reached,
@@ -359,6 +372,17 @@ Workbench acceptance criteria:
   bounded confidence run stops when the target confidence is reached or the
   automatic iteration limit is exhausted, and that revision prompts omit review
   confidence.
+- Automated E2E coverage must verify that review UI displays the confidence
+  percentage in the review conclusion and renders exactly one correction prompt
+  block per review event. It must also cover lower-confidence automatic
+  follow-up regression: the app restores checkpoint `currentCode`, STL,
+  fourteen fixed views, render evidence, review/confidence, and editable
+  correction guidance; the failed follow-up consumes one automatic iteration
+  and rollback/re-review does not refund it; a fresh `/api/vision` review is
+  sent for the restored checkpoint before any later auto revision; no
+  subsequent `/api/llm` request uses the lower-confidence draft or its
+  correction prompt; and revision prompts still omit confidence, target, and
+  threshold instructions.
 - Local E2E render coverage must include the full user-reported 20 cm wavy cup
   OpenSCAD file with layered `linear_extrude()` wave rings, verify that the
   browser renderer completes, and confirm the multi-angle rendered views contain
@@ -493,9 +517,10 @@ Workbench acceptance criteria:
   - `correctionPrompt`
   - `confidence`
 - `confidence` is normalized to a 0-1 score for storage and displayed to the
-  user as a percentage. It is part of the review conclusion and stop-decision
-  state only. It must not be appended to the editable correction prompt, prompt
-  trace shown to the user, or any text LLM generation/revision prompt.
+  user as a percentage in the review event and any stop conclusion. It is part
+  of the review conclusion and stop-decision state only. It must not be
+  appended to the editable correction prompt, prompt trace shown to the user, or
+  any text LLM generation/revision prompt.
 - If `confidence` is missing, non-numeric, or cannot be normalized into the 0-1
   range, the review is treated as a review failure for bounded confidence runs.
   The run stops with a readable reason and must not send a follow-up text LLM
@@ -525,6 +550,17 @@ Workbench acceptance criteria:
   as the current draft, then compiled, rendered, and reviewed. They do not pause
   as pending revisions requiring Accept Revision or Reject Revision. Manual
   pending-revision accept/reject behavior remains for non-auto revision flows.
+- If a follow-up automatic revision renders successfully but its visual review
+  confidence is lower than the previous checkpoint confidence, the lower-scored
+  draft is treated as a regression. The app restores the checkpoint and records
+  a rollback event in the agent stream. The rollback event must state that the
+  previous checkpoint was restored, show the checkpoint confidence and the lower
+  regressed confidence, and state that a fresh review of the restored model is
+  running before any further automatic revision. Before using any further
+  correction prompt, the app requests a fresh visual review for the restored
+  checkpoint. Subsequent automatic revisions, if any iteration budget remains,
+  use that fresh review guidance and the restored checkpoint code. The app must
+  not iterate from the lower-confidence draft or its correction prompt.
 - If an initial draft, user-clicked iteration, or automatic follow-up revision
   fails to compile during a bounded confidence run, the existing bounded
   compiler-repair loop may run for that compile step. Compiler-repair text LLM

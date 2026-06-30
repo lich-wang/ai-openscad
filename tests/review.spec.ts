@@ -300,6 +300,7 @@ test("review sends MiMo multimodal model and shows editable correction prompt", 
   await expect(page.getByRole("heading", { name: "Proposed Revision" })).toHaveCount(0);
   await expect(page.locator(".agentRun").getByText("Vision review complete.")).toBeVisible();
   await expect(page.locator('.workflowStage[data-stage="review"]')).toContainText("Complete");
+  await expect(page.locator(".agentRun")).toContainText("Confidence 86%");
   await expect(page.locator(".controlPanel .status")).toHaveCount(0);
   await expect(page.getByRole("button", { name: /Iterate Again/i })).toBeVisible();
   await expect(page.getByRole("button", { name: /Final Export/i })).toBeVisible();
@@ -322,6 +323,13 @@ test("review sends MiMo multimodal model and shows editable correction prompt", 
       exact: false
     })
   ).toBeVisible();
+  await expect(
+    page.locator(".agentRun").getByText(
+      "保持30ML杯子容量，修改当前OpenSCAD：增加杯口圆角倒角，并让杯壁更薄。",
+      { exact: true }
+    )
+  ).toHaveCount(1);
+  await expect(page.locator(".agentRun .correctionPromptPreview")).toHaveCount(1);
   expect(visionModel).toBe("mimo-v2.5");
   expect(llmRequests).toBe(0);
 });
@@ -778,6 +786,152 @@ test("generate bounded confidence run stops after target confidence and omits co
   expect(llmBodies[1]).not.toContain("0.41");
   expect(llmBodies[1]).not.toContain("41%");
   expect(llmBodies[1]).not.toContain("85");
+});
+
+test("bounded confidence run rolls back when a follow-up lowers confidence", async ({
+  page
+}) => {
+  await page.addInitScript((storedProject) => {
+    localStorage.setItem("ai-openscad.llm-api-key", "sk-llm");
+    localStorage.setItem("ai-openscad.vision-api-key", "sk-vision");
+    localStorage.setItem(
+      "ai-openscad.project",
+      JSON.stringify({
+        ...storedProject,
+        currentCode: "",
+        originalRequirement: "",
+        views: { front: "", back: "", left: "", right: "", top: "", isometric: "" },
+        review: null,
+        promptTrace: []
+      })
+    );
+  }, project);
+
+  const llmBodies: string[] = [];
+  const visionBodies: string[] = [];
+  const visionImageBatches: string[][] = [];
+  const generatedCodes = [
+    "module checkpoint_a() { cube([12, 12, 12], center = true); } checkpoint_a();",
+    "module regressed_b() { sphere(r = 5); } regressed_b();",
+    "module improved_c() { cylinder(h = 14, r = 7, center = true); } improved_c();"
+  ];
+
+  await page.route("**/api/llm", async (route) => {
+    const bodyText = JSON.stringify(route.request().postDataJSON());
+    llmBodies.push(bodyText);
+    expect(llmBodies.length, "unexpected extra /api/llm request").toBeLessThanOrEqual(3);
+    if (llmBodies.length === 3) {
+      await expect(page.locator(".agentInput")).toHaveValue(/Fresh checkpoint prompt/);
+      expect(bodyText).toContain("checkpoint_a");
+      expect(bodyText).toContain("Fresh checkpoint prompt");
+      expect(bodyText).not.toContain("regressed_b");
+      expect(bodyText).not.toContain("Bad regression prompt");
+      expect(bodyText).not.toMatch(/confidence/i);
+      expect(bodyText).not.toMatch(/threshold/i);
+      expect(bodyText).not.toMatch(/target confidence|confidence target|stop threshold/i);
+      expect(bodyText).not.toContain("95");
+      expect(bodyText).not.toContain("40%");
+    }
+    await route.fulfill({
+      status: 200,
+      contentType: "text/event-stream",
+      body: sseChunks(generatedCodes[llmBodies.length - 1])
+    });
+  });
+
+  await page.route("**/api/vision", async (route) => {
+    const body = route.request().postDataJSON() as {
+      messages: Array<{ content: unknown }>;
+    };
+    const bodyText = JSON.stringify(body);
+    const imageUrls = imageUrlsFromVisionContent(body.messages[1].content);
+    visionBodies.push(bodyText);
+    visionImageBatches.push(imageUrls);
+    expect(visionBodies.length, "unexpected extra /api/vision request").toBeLessThanOrEqual(4);
+    expect(imageUrls).toHaveLength(14);
+    expect(bodyText).toContain("compileStatus: success");
+    expect(bodyText).toContain("viewCount: 14");
+    const responses = [
+      {
+        expectedCode: "checkpoint_a",
+        summary: "Checkpoint draft is usable but below target.",
+        issues: ["Handle still needs more clearance."],
+        correctionPrompt: "Checkpoint prompt: deepen the handle without changing the cup.",
+        confidence: 0.7
+      },
+      {
+        expectedCode: "regressed_b",
+        summary: "The automatic follow-up lost important cup structure.",
+        issues: ["Cup body regressed."],
+        correctionPrompt: "Bad regression prompt: keep working from the regressed draft.",
+        confidence: 0.4
+      },
+      {
+        expectedCode: "checkpoint_a",
+        summary: "Restored checkpoint still needs a smaller targeted fix.",
+        issues: ["Only the handle clearance remains low."],
+        correctionPrompt: "Fresh checkpoint prompt: adjust only the handle from the restored model.",
+        confidence: 0.75
+      },
+      {
+        expectedCode: "improved_c",
+        summary: "The restored-model follow-up now matches the request.",
+        issues: [],
+        correctionPrompt: "No further changes.",
+        confidence: 0.96
+      }
+    ];
+    const response = responses[visionBodies.length - 1];
+    expect(bodyText).toContain(response.expectedCode);
+    if (visionBodies.length === 3) {
+      expect(bodyText).not.toContain("regressed_b");
+    }
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ content: JSON.stringify(response) })
+    });
+  });
+
+  await page.goto("/");
+  await configureBoundedAutoRun(page, { autoIterations: 2, targetConfidence: 95 });
+  await page.getByRole("button", { name: /^Generate$/i }).click();
+
+  await expect(page.locator(".agentRun")).toContainText(/Target confidence reached/i, {
+    timeout: 60_000
+  });
+  const rollbackEvent = page.locator(".agentEvent", { hasText: /Regressed confidence/i });
+  await expect(rollbackEvent).toHaveCount(1);
+  await expect(rollbackEvent).toContainText(/restored checkpoint/i);
+  await expect(rollbackEvent).toContainText(/Checkpoint confidence\s+70%/i);
+  await expect(rollbackEvent).toContainText(/Regressed confidence\s+40%/i);
+  await expect(rollbackEvent).toContainText(/fresh review/i);
+  await expect(page.locator(".agentRun")).toContainText(/Fresh checkpoint prompt/);
+  await expect(page.locator(".agentRun")).toContainText("Confidence 96%");
+  await expect(page.locator(".agentRun")).toContainText(/Auto iteration 1 of 2/i);
+  await expect(page.locator(".agentRun")).toContainText(/Auto iteration 2 of 2/i);
+  await expect(page.locator(".codeEditor").first()).toHaveValue(/improved_c/);
+
+  expect(llmBodies).toHaveLength(3);
+  expect(visionBodies).toHaveLength(4);
+  expect(visionImageBatches).toHaveLength(4);
+  for (const imageBatch of visionImageBatches) {
+    expect(imageBatch).toHaveLength(14);
+  }
+  expect(visionImageBatches[2]).toEqual(visionImageBatches[0]);
+  expect(visionImageBatches[2]).not.toEqual(visionImageBatches[1]);
+  expect(visionBodies[2]).toContain("checkpoint_a");
+  expect(visionBodies[2]).not.toContain("regressed_b");
+  expect(llmBodies[2]).toContain("checkpoint_a");
+  expect(llmBodies[2]).toContain("Fresh checkpoint prompt");
+  expect(llmBodies[2]).not.toContain("regressed_b");
+  expect(llmBodies[2]).not.toContain("Bad regression prompt");
+
+  const storedAfterRun = await page.evaluate(() =>
+    JSON.parse(localStorage.getItem("ai-openscad.project") ?? "{}")
+  );
+  expect(storedAfterRun.currentCode).toContain("improved_c");
+  expect(storedAfterRun.review.confidence).toBe(0.96);
 });
 
 test("generate bounded confidence run stops at the automatic iteration limit", async ({

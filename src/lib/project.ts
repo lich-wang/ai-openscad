@@ -41,6 +41,7 @@ export interface RunEvent {
   content: string;
   status: RunEventStatus;
   code?: string;
+  review?: VisionReview;
 }
 
 export type PromptTracePhase =

@@ -83,6 +83,13 @@ type DraftCompileFailure = {
   stl: null;
 };
 type DraftCompileResult = DraftCompileSuccess | DraftCompileFailure;
+type AutoRunCheckpoint = {
+  code: string;
+  views: ProjectState["views"];
+  stl: string;
+  renderEvidence: RenderEvidence;
+  review: NonNullable<ProjectState["review"]>;
+};
 
 const MAX_COMPILER_REPAIR_ATTEMPTS = 2;
 const TARGET_CONFIDENCE_STORAGE_KEY = "ai-openscad.target-confidence-percent";
@@ -176,6 +183,10 @@ function writeStoredInteger(key: string, value: number): void {
     return;
   }
   localStorage.setItem(key, String(value));
+}
+
+function formatConfidencePercent(confidence: number): string {
+  return `${Math.round(confidence * 100)}%`;
 }
 
 export default function App() {
@@ -344,6 +355,23 @@ export default function App() {
     });
   }
 
+  function autoRunRollbackEvent(input: {
+    checkpointConfidence: number;
+    regressedConfidence: number;
+  }): RunEvent {
+    return createRunEvent({
+      role: "tool",
+      title: tr("autoRunRollbackTitle"),
+      content: [
+        tr("autoRunRollbackRestored"),
+        `${tr("checkpointConfidence")} ${formatConfidencePercent(input.checkpointConfidence)}`,
+        `${tr("regressedConfidence")} ${formatConfidencePercent(input.regressedConfidence)}`,
+        tr("autoRunRollbackFreshReview")
+      ].join("\n"),
+      status: "complete"
+    });
+  }
+
   function createRunEvent(input: {
     role: RunEventRole;
     title: string;
@@ -351,6 +379,7 @@ export default function App() {
     status?: RunEventStatus;
     code?: string;
     id?: string;
+    review?: NonNullable<ProjectState["review"]>;
   }): RunEvent {
     return {
       id: input.id ?? crypto.randomUUID(),
@@ -359,7 +388,8 @@ export default function App() {
       title: input.title,
       content: input.content,
       status: input.status ?? "complete",
-      code: input.code
+      code: input.code,
+      review: input.review
     };
   }
 
@@ -645,6 +675,7 @@ export default function App() {
           originalRequirement,
           code: finalCode,
           views: rendered.views,
+          stl: rendered.stl,
           renderEvidence: rendered.evidence
         });
       }
@@ -994,6 +1025,7 @@ export default function App() {
           role: "review",
           title: tr("visualReview"),
           content: review.summary,
+          review,
           status: "complete"
         }),
         createRunEvent({
@@ -1025,11 +1057,14 @@ export default function App() {
     originalRequirement: string;
     code: string;
     views: ProjectState["views"];
+    stl: string;
     renderEvidence: RenderEvidence;
   }) {
     let code = input.code;
     let views = input.views;
+    let stl = input.stl;
     let renderEvidence: RenderEvidence | null = input.renderEvidence;
+    let pendingCheckpoint: AutoRunCheckpoint | null = null;
     let usedAutoIterations = 0;
     const targetConfidence = targetConfidencePercentRef.current / 100;
     const iterationLimit = autoIterationLimitRef.current;
@@ -1057,6 +1092,57 @@ export default function App() {
       }
       ensureAutoRunCurrent(input.autoRunToken);
 
+      if (pendingCheckpoint && review.confidence < pendingCheckpoint.review.confidence) {
+        const checkpoint: AutoRunCheckpoint = pendingCheckpoint;
+        const regressedReview = review;
+        pendingCheckpoint = null;
+        code = checkpoint.code;
+        views = checkpoint.views;
+        stl = checkpoint.stl;
+        renderEvidence = checkpoint.renderEvidence;
+        setProject((current) => ({
+          ...current,
+          currentCode: checkpoint.code,
+          proposedCode: "",
+          review: checkpoint.review,
+          requirement: checkpoint.review.correctionPrompt || current.requirement,
+          views: checkpoint.views,
+          stl: checkpoint.stl,
+          renderEvidence: checkpoint.renderEvidence,
+          compilerOutput: `${checkpoint.renderEvidence.diagnostics}\n${tr("compiledDraft")}`,
+          runEvents: [
+            ...current.runEvents,
+            autoRunRollbackEvent({
+              checkpointConfidence: checkpoint.review.confidence,
+              regressedConfidence: regressedReview.confidence
+            })
+          ],
+          updatedAt: new Date().toISOString()
+        }));
+        ensureAutoRunCurrent(input.autoRunToken);
+        updateBusy("reviewing");
+        try {
+          review = await reviewRenderedDraft({
+            originalRequirement: input.originalRequirement,
+            code,
+            views,
+            renderEvidence,
+            strictConfidence: true,
+            autoRunToken: input.autoRunToken
+          });
+        } catch (caught) {
+          if (caught instanceof AutoRunCanceledError) {
+            throw caught;
+          }
+          const message = caught instanceof Error ? caught.message : String(caught);
+          appendRunEvent(autoRunStopEvent(message));
+          throw caught;
+        }
+        ensureAutoRunCurrent(input.autoRunToken);
+      } else {
+        pendingCheckpoint = null;
+      }
+
       if (review.confidence >= targetConfidence) {
         appendRunEvent(autoRunStopEvent(tr("targetConfidenceReached")));
         return;
@@ -1066,6 +1152,17 @@ export default function App() {
         return;
       }
 
+      if (!renderEvidence) {
+        appendRunEvent(autoRunStopEvent(tr("autoRunCompileStopped")));
+        throw new Error(tr("compileBeforeReview"));
+      }
+      pendingCheckpoint = {
+        code,
+        views,
+        stl,
+        renderEvidence,
+        review
+      };
       usedAutoIterations += 1;
       const autoIterationTitle = `${tr("autoIterationStarted")} ${usedAutoIterations} of ${iterationLimit}`;
       appendRunEvent(createRunEvent({
@@ -1218,6 +1315,7 @@ export default function App() {
         ]
       }));
       views = rendered.views;
+      stl = rendered.stl;
       renderEvidence = rendered.evidence;
     }
   }
@@ -1593,6 +1691,7 @@ export default function App() {
           originalRequirement,
           code: finalCode,
           views: rendered.views,
+          stl: rendered.stl,
           renderEvidence: rendered.evidence
         });
       }
@@ -2280,6 +2379,16 @@ function AgentRunPanel(props: {
 
         {events.map((event) => {
           const codeOpen = Boolean(openCodeEvents[event.id]);
+          const eventReview =
+            event.title === t(props.locale, "visualReview")
+              ? event.review ?? props.project.review
+              : null;
+          const showEventContent =
+            Boolean(event.content) &&
+            event.title !== t(props.locale, "correctionPrompt") &&
+            event.content !== event.title &&
+            (!event.content.startsWith(event.title) ||
+              event.title === t(props.locale, "autoRunRollbackTitle"));
           return (
             <article
               className={`agentEvent chatEvent ${event.role} ${event.status}`}
@@ -2288,19 +2397,17 @@ function AgentRunPanel(props: {
               key={event.id}
             >
               <h3>{event.title}</h3>
-              {event.content && !event.content.startsWith(event.title) ? (
-                <p>{event.content}</p>
-              ) : null}
-              {event.title === t(props.locale, "visualReview") && props.project.review ? (
+              {showEventContent ? <p>{event.content}</p> : null}
+              {eventReview ? (
                 <>
                   <ul>
-                    {props.project.review.issues.map((issue) => (
+                    {eventReview.issues.map((issue) => (
                       <li key={issue}>{issue}</li>
                     ))}
                   </ul>
                   <p className="confidence">
                     {t(props.locale, "confidence")}{" "}
-                    {Math.round(props.project.review.confidence * 100)}%
+                    {formatConfidencePercent(eventReview.confidence)}
                   </p>
                 </>
               ) : null}
