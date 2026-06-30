@@ -189,6 +189,45 @@ function formatConfidencePercent(confidence: number): string {
   return `${Math.round(confidence * 100)}%`;
 }
 
+function hasUnsafeRenderDiagnostics(diagnostics?: string | null): boolean {
+  if (!diagnostics) {
+    return false;
+  }
+  const unsafePatterns = [
+    /\bundefined operation\b/i,
+    /\bIgnoring unknown variable\b/i,
+    /\bIgnoring unknown module\b/i,
+    /\bUnable to convert\b.*\bparameter\b/i,
+    /\bCan'?t open (include|library|file)\b/i,
+    /\bCould not open (include|library|file)\b/i,
+    /^\s*ERROR:/im,
+    /\bNaN\b/i,
+    /\bnon[-\s]?finite\b/i
+  ];
+  return unsafePatterns.some((pattern) => pattern.test(diagnostics));
+}
+
+function addUnsafeRenderDiagnosticsGuidance(diagnostics: string): string {
+  if (!hasUnsafeRenderDiagnostics(diagnostics)) {
+    return diagnostics;
+  }
+  return `${diagnostics}\nUnsafe OpenSCAD diagnostics were reported. The render may be incomplete or invalid; repair before review or export.`;
+}
+
+function renderEvidenceIsClean(renderEvidence?: RenderEvidence | null): boolean {
+  if (!renderEvidence) {
+    return false;
+  }
+  return (
+    renderEvidence.compileStatus === "success" &&
+    !hasUnsafeRenderDiagnostics(renderEvidence.diagnostics)
+  );
+}
+
+function hasCleanRenderedViews(project: ProjectState): boolean {
+  return allViewsRendered(project.views) && renderEvidenceIsClean(project.renderEvidence);
+}
+
 export default function App() {
   const [initialWorkspace] = useState(() => loadProjectWorkspace());
   const [project, setProject] = useState<ProjectState>(() => initialWorkspace.activeProject);
@@ -228,8 +267,8 @@ export default function App() {
   const tr = (key: MessageKey) => t(locale, key);
   const adapter = useMemo(() => createRenderMcp("web"), []);
   const isBusy = busy !== "idle";
-  const controlsLocked = autoRunActive;
-  const hasRenderedViews = allViewsRendered(project.views);
+  const controlsLocked = autoRunActive || isBusy;
+  const hasRenderedViews = hasCleanRenderedViews(project);
   const hasCurrentReview = Boolean(project.review && hasRenderedViews);
   const hasPendingRevision = Boolean(project.proposedCode.trim());
   const canUseCodeModelForRepair = canUseCodeModel(project.codeModelId, llmApiKey);
@@ -764,17 +803,21 @@ export default function App() {
     }
     const viewCount = result.views ? renderedViewCount(result.views) : 0;
     const hasCompleteViews = result.views ? allViewsRendered(result.views) : false;
-    const renderSucceeded = result.ok && Boolean(result.stl) && hasCompleteViews;
     const diagnostics = addDraftRenderTimeoutGuidance(
-      addIncompleteViewGuidance(result.diagnostics, result, viewCount)
+      addUnsafeRenderDiagnosticsGuidance(
+        addIncompleteViewGuidance(result.diagnostics, result, viewCount)
+      )
     );
+    const hasUnsafeDiagnostics = hasUnsafeRenderDiagnostics(diagnostics);
+    const renderSucceeded =
+      result.ok && Boolean(result.stl) && hasCompleteViews && !hasUnsafeDiagnostics;
     const evidence: RenderEvidence = {
       compileStatus: renderSucceeded ? "success" : "failure",
       diagnostics,
       renderPrecision: "draft",
       backend: result.backend ?? "web",
       viewCount,
-      repairable: renderSucceeded ? undefined : !result.stl
+      repairable: renderSucceeded ? undefined : hasUnsafeDiagnostics || !result.stl
     };
     const trace = createPromptTraceEntry({
       phase: "compile",
@@ -783,7 +826,7 @@ export default function App() {
       userPrompt: tr("compileDraftTrace"),
       response: diagnostics
     });
-    if (!result.ok || !result.stl || !result.views || !hasCompleteViews) {
+    if (!result.ok || !result.stl || !result.views || !hasCompleteViews || hasUnsafeDiagnostics) {
       return {
         ok: false,
         diagnostics,
@@ -843,6 +886,12 @@ export default function App() {
         compilerOutput: diagnostics,
         runEvents: [
           ...current.runEvents,
+          createRunEvent({
+            role: "tool",
+            title: tr("renderDiagnostics"),
+            content: diagnostics,
+            status: "error"
+          }),
           createRunEvent({
             id: codeEventId,
             role: "assistant",
@@ -973,7 +1022,7 @@ export default function App() {
     strictConfidence: boolean;
     autoRunToken?: number;
   }) {
-    if (!allViewsRendered(input.views)) {
+    if (!allViewsRendered(input.views) || !renderEvidenceIsClean(input.renderEvidence)) {
       throw new Error(tr("compileBeforeReview"));
     }
     requireVisionApiKey();
@@ -1511,7 +1560,7 @@ export default function App() {
       if (!project.review) {
         throw new Error(tr("reviewBeforeIterate"));
       }
-      if (!allViewsRendered(project.views)) {
+      if (!hasCleanRenderedViews(project)) {
         throw new Error(tr("compileBeforeReview"));
       }
       const originalRequirement = originalRequirementFor(project);
@@ -1707,7 +1756,7 @@ export default function App() {
       if (!project.currentCode.trim()) {
         throw new Error(tr("missingCode"));
       }
-      if (!allViewsRendered(project.views)) {
+      if (!hasCleanRenderedViews(project)) {
         throw new Error(tr("compileBeforeReview"));
       }
       const finalCode = normalizeOpenScadPrecision(project.currentCode, "final");
@@ -1718,10 +1767,14 @@ export default function App() {
       });
       const viewCount = result.views ? renderedViewCount(result.views) : 0;
       const hasCompleteViews = result.views ? allViewsRendered(result.views) : false;
-      const renderSucceeded = result.ok && Boolean(result.stl) && hasCompleteViews;
       const diagnostics = addFinalExportTimeoutGuidance(
-        addIncompleteViewGuidance(result.diagnostics, result, viewCount)
+        addUnsafeRenderDiagnosticsGuidance(
+          addIncompleteViewGuidance(result.diagnostics, result, viewCount)
+        )
       );
+      const hasUnsafeDiagnostics = hasUnsafeRenderDiagnostics(diagnostics);
+      const renderSucceeded =
+        result.ok && Boolean(result.stl) && hasCompleteViews && !hasUnsafeDiagnostics;
       const evidence: RenderEvidence = {
         compileStatus: renderSucceeded ? "success" : "failure",
         diagnostics,
@@ -1737,7 +1790,7 @@ export default function App() {
         userPrompt: tr("finalExportTrace"),
         response: diagnostics
       });
-      if (!result.ok || !result.stl || !result.views || !hasCompleteViews) {
+      if (!result.ok || !result.stl || !result.views || !hasCompleteViews || hasUnsafeDiagnostics) {
         setProject((current) => ({
           ...current,
           compilerOutput: diagnostics,
@@ -2247,7 +2300,7 @@ export default function App() {
                   </button>
                 ))}
                 <button
-                  disabled={!project.stl}
+                  disabled={!project.stl || !hasRenderedViews}
                   onClick={() =>
                     downloadText("ai-openscad-model.stl", project.stl, "model/stl;charset=utf-8")
                   }

@@ -58,16 +58,20 @@ three columns:
 3. The code model streams OpenSCAD into the center chat stream in real time.
 4. After the complete code arrives, the run stream collapses the code preview
    and the render adapter compiles the generated OpenSCAD in the browser.
-   Compile failure automatically triggers a bounded compiler-repair text
-   generation using the failed code and readable diagnostics.
-5. The app shows the compiled STL in a large interactive preview in the right
+   Compile failure, or a "successful" STL with unsafe OpenSCAD diagnostics that
+   indicate invalid or missing geometry, automatically triggers a bounded
+   compiler-repair text generation using the failed code and readable
+   diagnostics.
+5. After a clean render, or after a successful compiler repair produces a clean
+   render, the app shows the STL in a large interactive preview in the right
    result panel so the user can rotate, zoom, and pan the model directly.
 6. The app captures fourteen PNG views from the STL: six orthographic
    directions (front, back, left, right, top, bottom) and eight isometric
    directions around the model.
-7. If bounded auto-iteration is disabled, user clicks **Review**. If the user
-   preset automatic iterations before clicking **Generate**, the app runs the
-   visual review automatically after each successful render in that bounded run.
+7. If bounded auto-iteration is disabled, user clicks **Review** after a clean
+   render. If the user preset automatic iterations before clicking
+   **Generate**, the app runs the visual review automatically after each clean
+   render in that bounded run.
 8. The vision model checks the multi-angle views against the original
    requirement and returns a summary, issue list, confidence score as a review
    conclusion, and correction prompt.
@@ -93,7 +97,7 @@ three columns:
   LLM or start an image-driven rewrite loop unless the user has explicitly
   started a bounded confidence run by clicking **Generate** or **Iterate Again**
   with automatic iterations set above zero.
-- In a bounded confidence run, each successful render is followed by visual
+- In a bounded confidence run, each clean render is followed by visual
   review. If review confidence meets or exceeds the user preset target
   confidence, the run stops with that review conclusion. If confidence is below
   target and automatic iterations remain, the app may send one follow-up text
@@ -133,9 +137,16 @@ three columns:
 - The interactive preview is for human inspection only. Dragging, zooming, or
   panning the preview must not change the fourteen fixed review images and must
   not affect the provider payload sent for visual review.
-- Browser compile failures may directly trigger a bounded text-to-OpenSCAD
-  compiler-repair loop. Each compile step may make at most two automatic
-  compiler-repair text requests before stopping with diagnostics.
+- Browser compile failures and unsafe render diagnostics must directly trigger a
+  bounded text-to-OpenSCAD compiler-repair loop when a code model key is
+  available. Unsafe diagnostics include
+  ignored unknown variables or modules, undefined operations, failed numeric or
+  vector parameter conversions, missing include/use files, NaN or non-finite
+  geometry, or other OpenSCAD warnings/errors that mean the captured STL is
+  incomplete or not faithful to the source intent. Each compile step may make at
+  most two automatic compiler-repair text requests before stopping with
+  diagnostics. If no code model key is available, the app stops with readable
+  diagnostics and keeps manual retry guidance editable.
 - The compiler-repair loop applies to the compile step being executed, whether
   it follows first generation, manual rerender, accepted revision,
   user-confirmed iteration, or an automatic follow-up revision inside a bounded
@@ -196,10 +207,12 @@ Workbench acceptance criteria:
   review waits for the new rendered views.
 - The composer primary action is disabled while any generation, render, review,
   automatic confidence run, compiler-repair, or export task is running. It shows
-  Generate when no current fourteen-view render exists, Review only when all
-  fourteen current rendered view keys are non-empty and there is no current
-  review, and Iterate Again only after the current fourteen-view render has been
-  reviewed and no pending revision is waiting for acceptance.
+  Generate when no current clean fourteen-view render exists, Review only when
+  all fourteen current rendered view keys are non-empty, render diagnostics are
+  clean, there is no active or failed repair for the current draft, and there is
+  no current review. It shows Iterate Again only after the current clean
+  fourteen-view render has been reviewed and no pending revision is waiting for
+  acceptance.
   Missing inputs, provider-key failures, compile failures, and review failures
   appear in the center stream without changing the right panel contract. While a
   pending revision is waiting for acceptance, the composer shows an acceptance
@@ -212,7 +225,8 @@ Workbench acceptance criteria:
   prevents a stale in-flight response from changing a different project or
   starting a hidden provider call. When the run stops, the controls return to
   normal availability according to the latest project state.
-- If generated or manually edited code fails to compile, the failing draft
+- If generated or manually edited code fails to compile, or compiles with
+  unsafe diagnostics that imply partial/invalid geometry, the failing draft
   cannot advance to visual review or export. Any stale review, stale STL, and
   stale view images from the current cycle are blocked from review/export for
   that failing draft. The center stream shows readable diagnostics and
@@ -223,8 +237,11 @@ Workbench acceptance criteria:
 - During automatic compiler repair, the code generation stage is active, the
   model rendering stage is waiting until repaired code streams, and no visual
   review stage is active. The run stream states the repair attempt number, for
-  example `Compiler repair 1 of 2`, and primary, rerender, review, and export
-  actions stay disabled until that repair attempt finishes.
+  example `Compiler repair 1 of 2`. Generate, Review, Iterate Again, Rerender,
+  Final Export, Accept Revision, Reject Revision, project import, project
+  export, new model, local model navigation, and target-confidence and
+  auto-iteration controls stay disabled or read-only until that repair attempt
+  finishes or stops with diagnostics.
 - The center agent stream remains the place for user request records, streaming
   generated code, collapsed completed code, compiler output, render start,
   render progress, render completion, render errors, review summary, review
@@ -365,13 +382,23 @@ Workbench acceptance criteria:
   internal scrolling is constrained to the result panel/grid, labels do not
   overlap, there is no horizontal overflow, and PNG/SCAD/STL download controls
   remain visible or reachable.
-- Tests must verify that compile failure triggers only the bounded compiler
-  repair text requests, while render completion, visual review completion, and
-  image evidence never trigger an unprompted `/api/llm` request outside an
-  explicit user-started bounded confidence run. Tests must also verify that a
-  bounded confidence run stops when the target confidence is reached or the
-  automatic iteration limit is exhausted, and that revision prompts omit review
-  confidence.
+- Tests must verify that compile failure and unsafe render diagnostics trigger
+  only the bounded compiler-repair text requests, while clean render completion,
+  visual review completion, and image evidence never trigger an unprompted
+  `/api/llm` request outside an explicit user-started bounded confidence run.
+  Tests must also verify that a bounded confidence run stops when the target
+  confidence is reached or the automatic iteration limit is exhausted, and that
+  revision prompts omit review confidence.
+- Tests must verify that unsafe OpenSCAD diagnostics on an otherwise completed
+  render are treated like render failures: they block visual review, trigger the
+  bounded compiler-repair path when a code model key is available, keep the
+  render stage from completing until a clean render exists, keep the review
+  stage inactive/blocked, disable state-changing controls during repair, restore
+  controls after repair stops, leave readable diagnostics visible and announced,
+  block STL/final export downloads, and never fall through to a
+  review-confidence failure. Final export tests must also cover a final-precision
+  render that returns STL plus unsafe diagnostics and verify that no final files
+  are downloaded.
 - Automated E2E coverage must verify that review UI displays the confidence
   percentage in the review conclusion and renders exactly one correction prompt
   block per review event. It must also cover lower-confidence automatic
@@ -511,6 +538,12 @@ Workbench acceptance criteria:
   images in the stable view set and must be `14` for visual review. STL bodies,
   screenshots beyond the requested review images, and prompt traces are not sent
   unless they are explicitly part of the current model request.
+- A render with `compileStatus: success` is valid for review only when all
+  fourteen views exist and diagnostics do not contain unsafe OpenSCAD warnings
+  such as undefined operations, ignored unknown variables/modules, failed
+  parameter conversions, missing include/use files, NaN, or non-finite geometry.
+  Unsafe diagnostics downgrade the render to a repairable failure even if STL
+  text and PNG captures were produced.
 - Expects JSON with:
   - `summary`
   - `issues`
@@ -562,15 +595,17 @@ Workbench acceptance criteria:
   use that fresh review guidance and the restored checkpoint code. The app must
   not iterate from the lower-confidence draft or its correction prompt.
 - If an initial draft, user-clicked iteration, or automatic follow-up revision
-  fails to compile during a bounded confidence run, the existing bounded
-  compiler-repair loop may run for that compile step. Compiler-repair text LLM
-  calls are separate from review-driven automatic iterations and do not consume
-  the automatic iteration count. A follow-up automatic revision consumes one
-  automatic iteration when the review-driven revision request is started, even
-  if its later compile requires repair. If no code-model key is available, the
-  compiler-repair limit is exhausted, or repaired code still cannot compile, the
-  bounded confidence run stops with compile diagnostics and does not proceed to
-  visual review or another review-driven revision.
+  fails to compile or produces unsafe render diagnostics during a bounded
+  confidence run, the existing bounded compiler-repair loop must run for that
+  compile step before visual review when a code model key is available.
+  Compiler-repair text LLM calls are separate
+  from review-driven automatic iterations and do not consume the automatic
+  iteration count. A follow-up automatic revision consumes one automatic
+  iteration when the review-driven revision request is started, even if its
+  later compile requires repair. If no code-model key is available, the
+  compiler-repair limit is exhausted, or repaired code still cannot produce a
+  clean render, the bounded confidence run stops with render diagnostics and
+  does not proceed to visual review or another review-driven revision.
 - Each active bounded confidence run is bound to the current project id, current
   code version, and rendered fourteen-view evidence produced by that run.
   Browser refresh, import, project switch, new model, manual code edit, manual
@@ -579,9 +614,10 @@ Workbench acceptance criteria:
   review responses from a canceled run must be ignored and must not update the
   project, start another render/review/provider request, or overwrite the
   visible run conclusion.
-- Compile failures from generated or manually edited code remain visible in the
-  run stream and are folded into bounded compiler-repair text requests
-  automatically. When the repair limit is exhausted, the same diagnostic-derived
+- Compile failures and unsafe render diagnostics from generated or manually
+  edited code remain visible in the run stream and are folded into bounded
+  compiler-repair text requests automatically when a code model key is
+  available. When the repair limit is exhausted, the same diagnostic-derived
   guidance remains editable for a manual retry. Visual review findings still
   require the user to choose the iteration action before the text model runs,
   except for follow-up revisions inside the bounded confidence run the user has
@@ -738,8 +774,9 @@ The app should preserve these guarantees:
 - The primary workflow fits on desktop without hiding key actions.
 - Draft generation and review make progress visible.
 - Invalid OpenSCAD surfaces an error and leaves the page usable.
-- STL download is available only after a successful compile; source SCAD
-  download is available whenever current code exists.
+- STL download is available only after a clean successful render with required
+  views and no unsafe diagnostics; source SCAD download is available whenever
+  current code exists.
 - Review requests include rendered images.
 - Review does not trigger text generation unless it is part of an explicit
   user-started bounded confidence run with remaining automatic iterations.

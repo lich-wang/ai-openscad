@@ -152,6 +152,7 @@ export const messages = {
     reviewBeforeIterate: "Run vision review before iterating again.",
     diagnosticFixStarted: "Diagnostic fix started",
     diagnosticFixPromptReady: "Diagnostic fix prompt ready",
+    renderDiagnostics: "Render diagnostics",
     compilerRepairStarted: "Compiler repair",
     autoIterationStarted: "Auto iteration",
     targetConfidenceReached:
@@ -332,6 +333,7 @@ export const messages = {
     reviewBeforeIterate: "请先完成视觉评审，再次迭代。",
     diagnosticFixStarted: "开始诊断修复",
     diagnosticFixPromptReady: "诊断修复提示词已准备",
+    renderDiagnostics: "渲染诊断",
     compilerRepairStarted: "编译修复",
     autoIterationStarted: "自动迭代",
     targetConfidenceReached: "已达到目标置信度。不会再自动调用 LLM。",

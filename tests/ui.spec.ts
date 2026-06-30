@@ -91,6 +91,13 @@ const project = {
   },
   stl: validStl,
   views: renderedViews,
+  renderEvidence: {
+    compileStatus: "success",
+    diagnostics: "Compiled draft preview.",
+    renderPrecision: "draft",
+    backend: "web-manifold",
+    viewCount: 14
+  },
   iterations: [
     {
       id: "generated",

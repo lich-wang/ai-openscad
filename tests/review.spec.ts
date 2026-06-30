@@ -73,6 +73,13 @@ const project = {
   views: {
     ...viewDataUrls
   },
+  renderEvidence: {
+    compileStatus: "success",
+    diagnostics: "Compiled draft preview.",
+    renderPrecision: "draft",
+    backend: "web-manifold",
+    viewCount: 14
+  },
   iterations: [],
   runEvents: [],
   updatedAt: "2026-06-26T00:00:00.000Z"
@@ -720,6 +727,7 @@ test("generate bounded confidence run stops after target confidence and omits co
     );
   }, project);
 
+  await page.setViewportSize({ width: 1440, height: 1000 });
   const llmBodies: string[] = [];
   const visionImageBatches: string[][] = [];
   const reviewConfidences = [0.41, 0.91];
@@ -1507,6 +1515,129 @@ test("compile failure automatically repairs code while visual review never loops
   expect(visionRequests).toBe(1);
   await delay(1_000);
   expect(llmRequests).toBe(2);
+});
+
+test("unsafe render diagnostics trigger compiler repair before visual review", async ({
+  page
+}, testInfo) => {
+  test.setTimeout(75_000);
+  await page.addInitScript((storedProject) => {
+    localStorage.setItem("ai-openscad.llm-api-key", "sk-llm");
+    localStorage.setItem("ai-openscad.vision-api-key", "sk-vision");
+    localStorage.setItem(
+      "ai-openscad.project",
+      JSON.stringify({
+        ...storedProject,
+        currentCode: "",
+        originalRequirement: "",
+        views: { front: "", back: "", left: "", right: "", top: "", isometric: "" },
+        review: null,
+        promptTrace: []
+      })
+    );
+  }, project);
+
+  const llmBodies: string[] = [];
+  const visionBodies: string[] = [];
+  let repairRequestSeen = false;
+  let allowRepairResponse = () => {};
+  const repairResponseAllowed = new Promise<void>((resolve) => {
+    allowRepairResponse = resolve;
+  });
+  await page.route("**/api/llm", async (route) => {
+    llmBodies.push(JSON.stringify(route.request().postDataJSON()));
+    const requestIndex = llmBodies.length;
+    expect(requestIndex, "unexpected extra /api/llm request").toBeLessThanOrEqual(2);
+    if (requestIndex === 2) {
+      repairRequestSeen = true;
+      await repairResponseAllowed;
+    }
+    await route.fulfill({
+      status: 200,
+      contentType: "text/event-stream",
+      body: sseChunks(
+        requestIndex === 1
+          ? "cube(10); translate([20, 0, 0]) sphere(r = missing * 2);"
+          : "cube(10);"
+      )
+    });
+  });
+
+  await page.route("**/api/vision", async (route) => {
+    const bodyText = JSON.stringify(route.request().postDataJSON());
+    visionBodies.push(bodyText);
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        content: JSON.stringify(
+          bodyText.includes("missing * 2")
+            ? {
+                summary: "Unsafe render reached vision review.",
+                issues: ["This should have triggered compiler repair first."],
+                correctionPrompt: "Do not review unsafe render diagnostics."
+              }
+            : {
+                summary: "The repaired clean render is reviewable.",
+                issues: [],
+                correctionPrompt: "No further changes.",
+                confidence: 0.95
+              }
+        )
+      })
+    });
+  });
+
+  await page.setViewportSize({ width: 1440, height: 980 });
+  await page.goto("/");
+  await configureBoundedAutoRun(page, { autoIterations: 1, targetConfidence: 90 });
+  await page.getByRole("button", { name: /^Generate$/i }).click();
+
+  await expect.poll(() => repairRequestSeen, { timeout: 45_000 }).toBe(true);
+  try {
+    await expectCompilerRepairInFlight(page);
+    await expectButtonAbsentOrDisabled(page, /^Review$/i);
+    await expectButtonAbsentOrDisabled(page, /Final Export/i);
+    await expectButtonAbsentOrDisabled(page, /^Rerender$/i);
+    await expect(page.locator(".viewTile img")).toHaveCount(0);
+    await delay(500);
+    await expectCompilerRepairInFlight(page);
+    await expectButtonAbsentOrDisabled(page, /^Review$/i);
+    await expectButtonAbsentOrDisabled(page, /Final Export/i);
+    await expectButtonAbsentOrDisabled(page, /^Rerender$/i);
+    await expect(page.locator(".viewTile img")).toHaveCount(0);
+    await expect(page.locator(".agentRun")).toContainText(/Render diagnostics/i);
+    await expect(page.locator(".agentRun")).toContainText(/undefined operation/i);
+    const diagnosticsEvent = page.locator(".agentEvent").filter({
+      has: page.getByRole("heading", { name: "Render diagnostics" })
+    }).first();
+    await expect(diagnosticsEvent).toContainText(/undefined operation/i);
+    await page.locator(".workspace").screenshot({
+      path: testInfo.outputPath("unsafe-diagnostics-repair.png")
+    });
+    await diagnosticsEvent.evaluate((node) =>
+      node.scrollIntoView({ block: "center", inline: "nearest" })
+    );
+    await page.locator(".agentTimeline").screenshot({
+      path: testInfo.outputPath("unsafe-diagnostics-repair-event.png")
+    });
+  } finally {
+    allowRepairResponse();
+  }
+
+  await expect(page.locator(".agentRun")).toContainText(/Target confidence reached/i, {
+    timeout: 45_000
+  });
+  await expect(page.locator(".agentRun")).toContainText("Confidence 95%");
+  await expect(page.locator(".agentRun")).not.toContainText(/Review confidence is missing/i);
+  await expect(page.locator(".codeEditor").first()).toHaveValue(/^cube\(10\);$/);
+
+  expect(repairRequestSeen).toBe(true);
+  expect(llmBodies).toHaveLength(2);
+  expect(llmBodies[1]).toContain("undefined operation");
+  expect(visionBodies).toHaveLength(1);
+  expect(visionBodies[0]).toContain("cube(10);");
+  expect(visionBodies[0]).not.toContain("missing * 2");
 });
 
 test("compiler repair stops after two automatic attempts", async ({ page }) => {
@@ -2471,6 +2602,64 @@ test("final export timeout keeps final guidance separate from draft budget", asy
   expect(reviewPrompt).toContain("viewCount: 14");
   expect(reviewPrompt).not.toContain("high precision final export timed out");
   expect(reviewPrompt).not.toContain("renderPrecision: final");
+});
+
+test("final export blocks unsafe diagnostics even when STL is produced", async ({
+  page
+}, testInfo) => {
+  test.setTimeout(75_000);
+  await page.addInitScript((storedProject) => {
+    localStorage.setItem(
+      "ai-openscad.project",
+      JSON.stringify({
+        ...storedProject,
+        currentCode: "cube(10); translate([20, 0, 0]) sphere(r = missing * 2);",
+        stl: "solid previous\nendsolid previous",
+        views: {
+          ...storedProject.views
+        },
+        review: null,
+        renderEvidence: {
+          compileStatus: "success",
+          diagnostics: "Compiled draft preview.",
+          renderPrecision: "draft",
+          backend: "web-manifold",
+          viewCount: 14
+        },
+        promptTrace: []
+      })
+    );
+    (window as typeof window & { __downloadNames?: string[] }).__downloadNames = [];
+    HTMLAnchorElement.prototype.click = function captureDownloadName() {
+      (window as typeof window & { __downloadNames: string[] }).__downloadNames.push(
+        this.download
+      );
+    };
+  }, project);
+  page.on("dialog", (dialog) => dialog.accept());
+
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.goto("/");
+  await expect(page.getByRole("button", { name: /Final Export/i })).toBeVisible();
+  await page.getByRole("button", { name: /Final Export/i }).click();
+
+  await expect(page.locator(".agentRun").getByRole("alert")).toContainText(
+    /undefined operation|unsafe/i,
+    { timeout: 45_000 }
+  );
+  await expect(page.locator(".agentRun").getByRole("alert")).toContainText(
+    /Top level object is a 3D object|Genus|Facets/i
+  );
+  await expect(page.locator('.workflowStage[data-stage="render"]')).toContainText("Error");
+  await expect(page.getByRole("button", { name: /Final Export/i })).toBeEnabled();
+  await page.locator(".workspace").screenshot({
+    path: testInfo.outputPath("unsafe-final-export-error.png")
+  });
+  const downloadNames = await page.evaluate(
+    () => (window as typeof window & { __downloadNames: string[] }).__downloadNames
+  );
+  expect(downloadNames).not.toContain("ai-openscad-final.scad");
+  expect(downloadNames).not.toContain("ai-openscad-final.stl");
 });
 
 test("rerender remains available after code exists without rendered views", async ({ page }) => {
