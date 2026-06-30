@@ -132,7 +132,8 @@ button:disabled {
   padding: 0 8px;
 }
 
-.projectToolButton:disabled {
+.projectToolButton:disabled,
+.projectToolButton[aria-disabled="true"] {
   background: #f3f6f8;
   color: #98a2b3;
 }
@@ -189,6 +190,45 @@ button:disabled {
 label {
   display: grid;
   gap: 6px;
+}
+
+.autoRunField {
+  border-bottom: 1px solid #eef2f6;
+  gap: 8px;
+  padding-bottom: 8px;
+}
+
+.rangeField,
+.numberField {
+  min-width: 0;
+}
+
+.rangeInputRow {
+  align-items: center;
+  display: grid;
+  gap: 8px;
+  grid-template-columns: minmax(0, 1fr) 42px;
+  min-width: 0;
+}
+
+.rangeInputRow input {
+  display: block;
+  min-height: 24px;
+  min-width: 0;
+  width: 100%;
+}
+
+.rangeInputRow output {
+  color: #344054;
+  font-size: 12px;
+  font-weight: 800;
+  text-align: right;
+}
+
+.numberField input {
+  min-height: 34px;
+  min-width: 0;
+  width: 100%;
 }
 
 label > span,
@@ -329,7 +369,7 @@ label > span,
   box-shadow: 0 22px 54px rgba(16, 24, 40, 0.24);
   box-sizing: border-box;
   color: #3b2a19;
-  display: grid;
+  display: none;
   gap: 10px;
   left: 0;
   max-height: calc(100vh - 96px);
@@ -348,6 +388,7 @@ label > span,
 
 .keyHelp:hover .keyHelpTooltip,
 .keyHelp:focus-within .keyHelpTooltip {
+  display: grid;
   opacity: 1;
   pointer-events: auto;
   transform: translateY(0);

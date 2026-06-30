@@ -1,4 +1,4 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 
 const viewNames = [
   "Front",
@@ -188,6 +188,38 @@ async function dragInteractivePreview(page: Page) {
     steps: 8
   });
   await page.mouse.up();
+}
+
+async function setNumericControl(locator: Locator, value: string) {
+  await locator.evaluate((node, nextValue) => {
+    const input = node as HTMLInputElement;
+    input.value = nextValue as string;
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+  }, value);
+}
+
+async function configureBoundedAutoRun(
+  page: Page,
+  options: { autoIterations: number; targetConfidence?: number }
+) {
+  const targetConfidence = page.getByLabel("Target confidence");
+  const autoIterations = page.getByLabel("Auto iterations");
+  await expect(targetConfidence).toBeVisible();
+  await expect(autoIterations).toBeVisible();
+  if (options.targetConfidence !== undefined) {
+    await setNumericControl(targetConfidence, String(options.targetConfidence));
+    await expect(targetConfidence).toHaveValue(String(options.targetConfidence));
+  }
+  await setNumericControl(autoIterations, String(options.autoIterations));
+  await expect(autoIterations).toHaveValue(String(options.autoIterations));
+}
+
+async function expectButtonAbsentOrDisabled(page: Page, name: RegExp) {
+  const button = page.getByRole("button", { name });
+  if ((await button.count()) > 0) {
+    await expect(button.first()).toBeDisabled();
+  }
 }
 
 async function expectCompilerRepairInFlight(page: Page) {
@@ -581,6 +613,669 @@ test("generation streams code and automatically renders draft views", async ({ p
   expect(reviewImageUrls).toEqual(renderedImageUrlsBeforePreviewDrag);
   expect(storedAfterFirstReview.originalRequirement).toBe("生成一个30ML的杯子模型");
   expect(storedAfterFirstReview.requirement).toContain("增加杯口倒角");
+});
+
+test("bounded confidence run locks controls while a generation is active", async ({
+  page
+}) => {
+  await page.addInitScript((storedProject) => {
+    localStorage.setItem("ai-openscad.llm-api-key", "sk-llm");
+    localStorage.setItem("ai-openscad.vision-api-key", "sk-vision");
+    localStorage.setItem(
+      "ai-openscad.project",
+      JSON.stringify({
+        ...storedProject,
+        currentCode: "",
+        originalRequirement: "",
+        views: { front: "", back: "", left: "", right: "", top: "", isometric: "" },
+        review: null,
+        promptTrace: []
+      })
+    );
+  }, project);
+
+  let releaseGeneration: () => void = () => {};
+  let generationStarted: () => void = () => {};
+  const generationStartedPromise = new Promise<void>((resolve) => {
+    generationStarted = resolve;
+  });
+  const releaseGenerationPromise = new Promise<void>((resolve) => {
+    releaseGeneration = resolve;
+  });
+
+  await page.route("**/api/llm", async (route) => {
+    generationStarted();
+    await releaseGenerationPromise;
+    await route.fulfill({
+      status: 200,
+      contentType: "text/event-stream",
+      body: sseChunks("module locked_run() { cube(10); } locked_run();")
+    });
+  });
+
+  await page.route("**/api/vision", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        content: JSON.stringify({
+          summary: "The locked run finished.",
+          issues: [],
+          correctionPrompt: "No further changes.",
+          confidence: 0.95
+        })
+      })
+    });
+  });
+
+  await page.goto("/");
+  await configureBoundedAutoRun(page, { autoIterations: 1 });
+  await page.getByRole("button", { name: /^Generate$/i }).click();
+  await generationStartedPromise;
+
+  await expect(page.getByRole("button", { name: /^Generate$/i })).toBeDisabled();
+  await expect(page.getByLabel("Target confidence")).toBeDisabled();
+  await expect(page.getByLabel("Auto iterations")).toBeDisabled();
+  await expectButtonAbsentOrDisabled(page, /^Review$/i);
+  await expectButtonAbsentOrDisabled(page, /Iterate Again/i);
+  await expectButtonAbsentOrDisabled(page, /^Rerender$/i);
+  await expectButtonAbsentOrDisabled(page, /Final Export/i);
+  await expect(page.locator(".projectTools input[type='file']")).toBeDisabled();
+  await expect(page.locator(".projectTools").getByRole("button", { name: /Export/i })).toBeDisabled();
+  await expect(page.locator(".controlPanel").getByRole("button", { name: "New model" })).toBeDisabled();
+  await expect(page.locator(".modelHistory button").first()).toBeDisabled();
+
+  releaseGeneration();
+  await expect(page.locator(".agentRun")).toContainText(/Target confidence reached/i, {
+    timeout: 45_000
+  });
+  await expect(page.getByLabel("Target confidence")).toBeEnabled();
+  await expect(page.getByLabel("Auto iterations")).toBeEnabled();
+});
+
+test("generate bounded confidence run stops after target confidence and omits confidence from revision prompts", async ({
+  page
+}) => {
+  await page.addInitScript((storedProject) => {
+    localStorage.setItem("ai-openscad.llm-api-key", "sk-llm");
+    localStorage.setItem("ai-openscad.vision-api-key", "sk-vision");
+    localStorage.setItem(
+      "ai-openscad.project",
+      JSON.stringify({
+        ...storedProject,
+        currentCode: "",
+        originalRequirement: "",
+        views: { front: "", back: "", left: "", right: "", top: "", isometric: "" },
+        review: null,
+        promptTrace: []
+      })
+    );
+  }, project);
+
+  const llmBodies: string[] = [];
+  const visionImageBatches: string[][] = [];
+  const reviewConfidences = [0.41, 0.91];
+  const generatedCodes = [
+    "module draft_a() { cube(10); } draft_a();",
+    "module draft_b() { sphere(10); } draft_b();"
+  ];
+
+  await page.route("**/api/llm", async (route) => {
+    const body = route.request().postDataJSON();
+    llmBodies.push(JSON.stringify(body));
+    expect(llmBodies.length, "unexpected extra /api/llm request").toBeLessThanOrEqual(2);
+    const code = generatedCodes[Math.min(llmBodies.length - 1, generatedCodes.length - 1)];
+    await route.fulfill({
+      status: 200,
+      contentType: "text/event-stream",
+      body: sseChunks(code)
+    });
+  });
+
+  await page.route("**/api/vision", async (route) => {
+    const body = route.request().postDataJSON() as {
+      messages: Array<{ content: unknown }>;
+    };
+    const imageUrls = imageUrlsFromVisionContent(body.messages[1].content);
+    visionImageBatches.push(imageUrls);
+    expect(visionImageBatches.length, "unexpected extra /api/vision request").toBeLessThanOrEqual(2);
+    const confidence = reviewConfidences[visionImageBatches.length - 1];
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        content: JSON.stringify({
+          summary:
+            confidence >= 0.85
+              ? "Draft now matches the requested cup."
+              : "Draft is still missing the handle depth.",
+          issues: confidence >= 0.85 ? [] : ["Handle depth is too shallow."],
+          correctionPrompt: "Keep the cup printable and make the handle deeper.",
+          confidence
+        })
+      })
+    });
+  });
+
+  await page.goto("/");
+  await configureBoundedAutoRun(page, { autoIterations: 2 });
+  await page.getByRole("button", { name: /^Generate$/i }).click();
+
+  await expect(page.locator(".agentRun")).toContainText(/Target confidence reached/i, {
+    timeout: 45_000
+  });
+  await expect(page.locator(".agentRun")).toContainText("Confidence 91%");
+  await expect(page.locator(".codeEditor").first()).toHaveValue(/draft_b/);
+  await expect(page.getByRole("button", { name: /Final Export/i })).toBeVisible();
+  await expect(page.getByRole("button", { name: /Iterate Again/i })).toBeVisible();
+  expect(llmBodies).toHaveLength(2);
+  expect(visionImageBatches).toHaveLength(2);
+  expect(visionImageBatches[0]).toHaveLength(14);
+  expect(visionImageBatches[1]).toHaveLength(14);
+  await expect(page.locator(".agentRun")).toContainText(/Auto iteration 1 of 2/i);
+  expect(llmBodies[1]).toContain("Draft is still missing the handle depth.");
+  expect(llmBodies[1]).not.toMatch(/confidence/i);
+  expect(llmBodies[1]).not.toContain("0.41");
+  expect(llmBodies[1]).not.toContain("41%");
+  expect(llmBodies[1]).not.toContain("85");
+});
+
+test("generate bounded confidence run stops at the automatic iteration limit", async ({
+  page
+}) => {
+  await page.addInitScript((storedProject) => {
+    localStorage.setItem("ai-openscad.llm-api-key", "sk-llm");
+    localStorage.setItem("ai-openscad.vision-api-key", "sk-vision");
+    localStorage.setItem(
+      "ai-openscad.project",
+      JSON.stringify({
+        ...storedProject,
+        currentCode: "",
+        originalRequirement: "",
+        views: { front: "", back: "", left: "", right: "", top: "", isometric: "" },
+        review: null,
+        promptTrace: []
+      })
+    );
+  }, project);
+
+  const llmBodies: string[] = [];
+  let visionRequests = 0;
+  await page.route("**/api/llm", async (route) => {
+    llmBodies.push(JSON.stringify(route.request().postDataJSON()));
+    expect(llmBodies.length, "unexpected extra /api/llm request").toBeLessThanOrEqual(2);
+    await route.fulfill({
+      status: 200,
+      contentType: "text/event-stream",
+      body: sseChunks(
+        llmBodies.length === 1
+          ? "module limit_a() { cube(10); } limit_a();"
+          : "module limit_b() { sphere(10); } limit_b();"
+      )
+    });
+  });
+
+  await page.route("**/api/vision", async (route) => {
+    visionRequests += 1;
+    expect(visionRequests, "unexpected extra /api/vision request").toBeLessThanOrEqual(2);
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        content: JSON.stringify({
+          summary: "The model is still below the requested quality bar.",
+          issues: ["Still missing the requested proportions."],
+          correctionPrompt: "Keep revising the proportions.",
+          confidence: visionRequests === 1 ? 0.42 : 0.5
+        })
+      })
+    });
+  });
+
+  await page.goto("/");
+  await configureBoundedAutoRun(page, { autoIterations: 1 });
+  await page.getByRole("button", { name: /^Generate$/i }).click();
+
+  await expect(page.locator(".agentRun")).toContainText(/Auto iteration limit reached/i, {
+    timeout: 45_000
+  });
+  await expect(page.locator(".agentRun")).toContainText("Confidence 50%");
+  await expect(page.locator(".agentRun")).toContainText(/Auto iteration 1 of 1/i);
+  await expect(page.locator(".codeEditor").first()).toHaveValue(/limit_b/);
+  await expect(page.getByRole("button", { name: /Iterate Again/i })).toBeVisible();
+  expect(llmBodies).toHaveLength(2);
+  expect(visionRequests).toBe(2);
+});
+
+test("auto follow-up compile failure uses compiler repair without consuming more auto iterations", async ({
+  page
+}) => {
+  await page.addInitScript((storedProject) => {
+    localStorage.setItem("ai-openscad.llm-api-key", "sk-llm");
+    localStorage.setItem("ai-openscad.vision-api-key", "sk-vision");
+    localStorage.setItem(
+      "ai-openscad.project",
+      JSON.stringify({
+        ...storedProject,
+        currentCode: "",
+        originalRequirement: "",
+        views: { front: "", back: "", left: "", right: "", top: "", isometric: "" },
+        review: null,
+        promptTrace: []
+      })
+    );
+  }, project);
+
+  const llmBodies: string[] = [];
+  let visionRequests = 0;
+  await page.route("**/api/llm", async (route) => {
+    llmBodies.push(JSON.stringify(route.request().postDataJSON()));
+    expect(llmBodies.length, "unexpected extra /api/llm request").toBeLessThanOrEqual(4);
+    await route.fulfill({
+      status: 200,
+      contentType: "text/event-stream",
+      body: sseChunks(
+        llmBodies.length === 1
+          ? "module repair_seed() { cube(10); } repair_seed();"
+          : "cube("
+      )
+    });
+  });
+
+  await page.route("**/api/vision", async (route) => {
+    visionRequests += 1;
+    expect(visionRequests, "unexpected extra /api/vision request").toBeLessThanOrEqual(1);
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        content: JSON.stringify({
+          summary: "The seed draft needs one automatic revision.",
+          issues: ["The handle is missing."],
+          correctionPrompt: "Add the requested handle.",
+          confidence: 0.2
+        })
+      })
+    });
+  });
+
+  await page.goto("/");
+  await configureBoundedAutoRun(page, { autoIterations: 1 });
+  await page.getByRole("button", { name: /^Generate$/i }).click();
+
+  await expect(page.locator(".agentRun")).toContainText(/Compiler repair 2 of 2/i, {
+    timeout: 45_000
+  });
+  await expect(page.locator(".agentRun")).toContainText(/Auto iteration 1 of 1/i);
+  await expect(page.locator(".agentRun")).toContainText(/OpenSCAD render failed/i);
+  await expect(page.locator('.workflowStage[data-stage="render"]')).toContainText("Error", {
+    timeout: 45_000
+  });
+  await expect(page.getByRole("button", { name: /^Review$/i })).toHaveCount(0);
+  await expect(page.getByLabel("Target confidence")).toBeEnabled();
+  await expect(page.getByLabel("Auto iterations")).toBeEnabled();
+  await expect(page.locator(".codeEditor").first()).toBeEnabled();
+  await expect(page.getByRole("button", { name: /^Rerender$/i })).toBeEnabled();
+  await expect(page.locator(".projectTools input[type='file']")).toBeEnabled();
+  await expect(page.locator(".projectTools").getByRole("button", { name: /Export/i })).toBeEnabled();
+  await expect(page.locator(".controlPanel").getByRole("button", { name: "New model" })).toBeEnabled();
+  expect(llmBodies).toHaveLength(4);
+  expect(visionRequests).toBe(1);
+});
+
+test("auto follow-up compile repair can succeed and continue to review", async ({
+  page
+}) => {
+  await page.addInitScript((storedProject) => {
+    localStorage.setItem("ai-openscad.llm-api-key", "sk-llm");
+    localStorage.setItem("ai-openscad.vision-api-key", "sk-vision");
+    localStorage.setItem(
+      "ai-openscad.project",
+      JSON.stringify({
+        ...storedProject,
+        currentCode: "",
+        originalRequirement: "",
+        views: { front: "", back: "", left: "", right: "", top: "", isometric: "" },
+        review: null,
+        promptTrace: []
+      })
+    );
+  }, project);
+
+  const llmBodies: string[] = [];
+  const providerOrder: string[] = [];
+  let visionRequests = 0;
+  await page.route("**/api/llm", async (route) => {
+    llmBodies.push(JSON.stringify(route.request().postDataJSON()));
+    providerOrder.push(`llm-${llmBodies.length}`);
+    expect(llmBodies.length, "unexpected extra /api/llm request").toBeLessThanOrEqual(3);
+    const code =
+      llmBodies.length === 1
+        ? "module repair_success_seed() { cube(10); } repair_success_seed();"
+        : llmBodies.length === 2
+          ? "cube("
+          : "module repaired_auto() { sphere(10); } repaired_auto();";
+    await route.fulfill({
+      status: 200,
+      contentType: "text/event-stream",
+      body: sseChunks(code)
+    });
+  });
+
+  await page.route("**/api/vision", async (route) => {
+    visionRequests += 1;
+    providerOrder.push(`vision-${visionRequests}`);
+    expect(visionRequests, "unexpected extra /api/vision request").toBeLessThanOrEqual(2);
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        content: JSON.stringify({
+          summary:
+            visionRequests === 1
+              ? "The seed draft needs one automatic revision."
+              : "The repaired auto draft matches the request.",
+          issues: visionRequests === 1 ? ["The handle is missing."] : [],
+          correctionPrompt:
+            visionRequests === 1 ? "Add the requested handle." : "No further changes.",
+          confidence: visionRequests === 1 ? 0.2 : 0.93
+        })
+      })
+    });
+  });
+
+  await page.goto("/");
+  await configureBoundedAutoRun(page, { autoIterations: 1 });
+  await page.getByRole("button", { name: /^Generate$/i }).click();
+
+  await expect(page.locator(".agentRun")).toContainText(/Target confidence reached/i, {
+    timeout: 45_000
+  });
+  await expect(page.locator(".agentRun")).toContainText("Confidence 93%");
+  await expect(page.locator(".agentRun")).toContainText(/Auto iteration 1 of 1/i);
+  await expect(page.locator(".agentRun")).toContainText(/Compiler repair 1 of 2/i);
+  await expect(page.locator(".codeEditor").first()).toHaveValue(/repaired_auto/);
+  expect(llmBodies).toHaveLength(3);
+  expect(visionRequests).toBe(2);
+  expect(providerOrder).toEqual(["llm-1", "vision-1", "llm-2", "llm-3", "vision-2"]);
+});
+
+test("iterate again bounded confidence run can auto-follow until target confidence", async ({
+  page
+}) => {
+  await page.addInitScript((storedProject) => {
+    localStorage.setItem("ai-openscad.llm-api-key", "sk-llm");
+    localStorage.setItem("ai-openscad.vision-api-key", "sk-vision");
+    localStorage.setItem(
+      "ai-openscad.project",
+      JSON.stringify({
+        ...storedProject,
+        review: {
+          summary: "Cup handle is too small.",
+          issues: ["Make the handle larger."],
+          correctionPrompt: "Keep the 30ML cup and enlarge the handle.",
+          confidence: 0.44
+        },
+        promptTrace: []
+      })
+    );
+  }, project);
+
+  const llmBodies: string[] = [];
+  let visionRequests = 0;
+  await page.route("**/api/llm", async (route) => {
+    llmBodies.push(JSON.stringify(route.request().postDataJSON()));
+    expect(llmBodies.length, "unexpected extra /api/llm request").toBeLessThanOrEqual(2);
+    await route.fulfill({
+      status: 200,
+      contentType: "text/event-stream",
+      body: sseChunks(
+        llmBodies.length === 1
+          ? "module iter_a() { cube(10); } iter_a();"
+          : "module iter_b() { sphere(10); } iter_b();"
+      )
+    });
+  });
+
+  await page.route("**/api/vision", async (route) => {
+    visionRequests += 1;
+    expect(visionRequests, "unexpected extra /api/vision request").toBeLessThanOrEqual(2);
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        content: JSON.stringify({
+          summary: visionRequests === 1 ? "Handle is still undersized." : "Handle now fits.",
+          issues: visionRequests === 1 ? ["Enlarge the handle further."] : [],
+          correctionPrompt: "Preserve the cup and enlarge the handle further.",
+          confidence: visionRequests === 1 ? 0.33 : 0.9
+        })
+      })
+    });
+  });
+
+  await page.goto("/");
+  await configureBoundedAutoRun(page, { autoIterations: 1 });
+  await page.locator(".agentInput").fill("Keep the cup printable and use the review guidance.");
+  await page.getByRole("button", { name: /Iterate Again/i }).click();
+
+  await expect(page.locator(".agentRun")).toContainText(/Target confidence reached/i, {
+    timeout: 45_000
+  });
+  await expect(page.locator(".agentRun")).toContainText("Confidence 90%");
+  await expect(page.locator(".codeEditor").first()).toHaveValue(/iter_b/);
+  expect(llmBodies).toHaveLength(2);
+  expect(visionRequests).toBe(2);
+  expect(llmBodies[0]).not.toMatch(/confidence/i);
+  expect(llmBodies[0]).not.toContain("0.44");
+  expect(llmBodies[1]).not.toMatch(/confidence/i);
+  expect(llmBodies[1]).not.toContain("0.33");
+});
+
+test("canceled bounded confidence run ignores a late automatic revision response", async ({
+  page
+}) => {
+  await page.addInitScript((storedProject) => {
+    localStorage.setItem("ai-openscad.llm-api-key", "sk-llm");
+    localStorage.setItem("ai-openscad.vision-api-key", "sk-vision");
+    localStorage.setItem(
+      "ai-openscad.project",
+      JSON.stringify({
+        ...storedProject,
+        currentCode: "",
+        originalRequirement: "",
+        views: { front: "", back: "", left: "", right: "", top: "", isometric: "" },
+        review: null,
+        promptTrace: []
+      })
+    );
+  }, project);
+
+  let releaseRevision: () => void = () => {};
+  let revisionStarted: () => void = () => {};
+  const revisionStartedPromise = new Promise<void>((resolve) => {
+    revisionStarted = resolve;
+  });
+  const releaseRevisionPromise = new Promise<void>((resolve) => {
+    releaseRevision = resolve;
+  });
+  const llmBodies: string[] = [];
+  let visionRequests = 0;
+
+  await page.route("**/api/llm", async (route) => {
+    llmBodies.push(JSON.stringify(route.request().postDataJSON()));
+    expect(llmBodies.length, "unexpected extra /api/llm request").toBeLessThanOrEqual(2);
+    if (llmBodies.length === 2) {
+      revisionStarted();
+      await releaseRevisionPromise;
+      await route.fulfill({
+        status: 200,
+        contentType: "text/event-stream",
+        body: sseChunks("module late_revision() { sphere(10); } late_revision();")
+      });
+      return;
+    }
+    await route.fulfill({
+      status: 200,
+      contentType: "text/event-stream",
+      body: sseChunks("module cancel_seed() { cube(10); } cancel_seed();")
+    });
+  });
+
+  await page.route("**/api/vision", async (route) => {
+    visionRequests += 1;
+    expect(visionRequests, "late response started another vision request").toBeLessThanOrEqual(1);
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        content: JSON.stringify({
+          summary: "Needs an automatic follow-up revision.",
+          issues: ["Add the missing feature."],
+          correctionPrompt: "Add the missing feature.",
+          confidence: 0.25
+        })
+      })
+    });
+  });
+
+  await page.goto("/");
+  await configureBoundedAutoRun(page, { autoIterations: 1 });
+  await page.getByRole("button", { name: /^Generate$/i }).click();
+  await revisionStartedPromise;
+  await expect(page.locator(".agentRun")).toContainText(/Auto iteration 1 of 1/i);
+
+  await page
+    .locator(".codeEditor")
+    .first()
+    .fill("module manual_cancel() { cube(5); } manual_cancel();");
+  releaseRevision();
+  await page.waitForLoadState("networkidle");
+
+  await expect(page.locator(".codeEditor").first()).toHaveValue(/manual_cancel/);
+  await expect(page.locator(".codeEditor").first()).not.toHaveValue(/late_revision/);
+  await expect(page.locator(".agentRun")).not.toContainText(/Target confidence reached/i);
+  expect(llmBodies).toHaveLength(2);
+  expect(visionRequests).toBe(1);
+});
+
+test("bounded confidence run stops without revision when review confidence is missing", async ({
+  page
+}) => {
+  await page.addInitScript((storedProject) => {
+    localStorage.setItem("ai-openscad.llm-api-key", "sk-llm");
+    localStorage.setItem("ai-openscad.vision-api-key", "sk-vision");
+    localStorage.setItem(
+      "ai-openscad.project",
+      JSON.stringify({
+        ...storedProject,
+        currentCode: "",
+        originalRequirement: "",
+        views: { front: "", back: "", left: "", right: "", top: "", isometric: "" },
+        review: null,
+        promptTrace: []
+      })
+    );
+  }, project);
+
+  let llmRequests = 0;
+  let visionRequests = 0;
+  await page.route("**/api/llm", async (route) => {
+    llmRequests += 1;
+    expect(llmRequests, "unexpected extra /api/llm request").toBeLessThanOrEqual(1);
+    await route.fulfill({
+      status: 200,
+      contentType: "text/event-stream",
+      body: sseChunks("module missing_confidence() { cube(10); } missing_confidence();")
+    });
+  });
+  await page.route("**/api/vision", async (route) => {
+    visionRequests += 1;
+    expect(visionRequests, "unexpected extra /api/vision request").toBeLessThanOrEqual(1);
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        content: JSON.stringify({
+          summary: "Review omitted confidence.",
+          issues: ["The review response is incomplete."],
+          correctionPrompt: "Do not auto-revise without confidence."
+        })
+      })
+    });
+  });
+
+  await page.goto("/");
+  await configureBoundedAutoRun(page, { autoIterations: 2 });
+  await page.getByRole("button", { name: /^Generate$/i }).click();
+
+  await expect(page.locator(".agentRun")).toContainText(/review confidence/i, {
+    timeout: 45_000
+  });
+  await expect(page.locator(".codeEditor").first()).toHaveValue(/missing_confidence/);
+  await expect(page.getByRole("button", { name: /Review/i })).toBeVisible();
+  expect(llmRequests).toBe(1);
+  expect(visionRequests).toBe(1);
+});
+
+test("bounded confidence run stops without revision when review confidence is out of range", async ({
+  page
+}) => {
+  await page.addInitScript((storedProject) => {
+    localStorage.setItem("ai-openscad.llm-api-key", "sk-llm");
+    localStorage.setItem("ai-openscad.vision-api-key", "sk-vision");
+    localStorage.setItem(
+      "ai-openscad.project",
+      JSON.stringify({
+        ...storedProject,
+        currentCode: "",
+        originalRequirement: "",
+        views: { front: "", back: "", left: "", right: "", top: "", isometric: "" },
+        review: null,
+        promptTrace: []
+      })
+    );
+  }, project);
+
+  let llmRequests = 0;
+  let visionRequests = 0;
+  await page.route("**/api/llm", async (route) => {
+    llmRequests += 1;
+    expect(llmRequests, "unexpected extra /api/llm request").toBeLessThanOrEqual(1);
+    await route.fulfill({
+      status: 200,
+      contentType: "text/event-stream",
+      body: sseChunks("module out_of_range_confidence() { cube(10); } out_of_range_confidence();")
+    });
+  });
+  await page.route("**/api/vision", async (route) => {
+    visionRequests += 1;
+    expect(visionRequests, "unexpected extra /api/vision request").toBeLessThanOrEqual(1);
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        content: JSON.stringify({
+          summary: "Review confidence is out of range.",
+          issues: ["The confidence value is invalid."],
+          correctionPrompt: "Do not auto-revise with invalid confidence.",
+          confidence: 1.5
+        })
+      })
+    });
+  });
+
+  await page.goto("/");
+  await configureBoundedAutoRun(page, { autoIterations: 2 });
+  await page.getByRole("button", { name: /^Generate$/i }).click();
+
+  await expect(page.locator(".agentRun")).toContainText(/review confidence/i, {
+    timeout: 45_000
+  });
+  await expect(page.locator(".codeEditor").first()).toHaveValue(/out_of_range_confidence/);
+  await expect(page.getByRole("button", { name: /Review/i })).toBeVisible();
+  expect(llmRequests).toBe(1);
+  expect(visionRequests).toBe(1);
 });
 
 test("compile failure automatically repairs code while visual review never loops", async ({

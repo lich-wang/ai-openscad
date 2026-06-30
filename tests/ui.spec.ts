@@ -215,6 +215,36 @@ async function expectLeftPanelOrder(page: Page) {
     page.locator(".controlPanel").getByRole("button", { name: "New model" })
   ).toBeVisible();
   await expect(page.locator(".modelHistory")).toContainText("Models");
+  await expectAutoIterationControls(page);
+}
+
+async function expectAutoIterationControls(
+  page: Page,
+  expectedTarget = "85",
+  expectedIterations = "0"
+) {
+  const targetConfidence = page.getByLabel("Target confidence");
+  const autoIterations = page.getByLabel("Auto iterations");
+  await expect(targetConfidence).toBeVisible();
+  await expect(autoIterations).toBeVisible();
+  await expect(targetConfidence).toHaveValue(expectedTarget);
+  await expect(autoIterations).toHaveValue(expectedIterations);
+  await expect(targetConfidence).toHaveAttribute("min", "1");
+  await expect(targetConfidence).toHaveAttribute("max", "100");
+  await expect(targetConfidence).toHaveAttribute("step", "1");
+  await expect(autoIterations).toHaveAttribute("min", "0");
+  await expect(autoIterations).toHaveAttribute("max", "5");
+  await expect(autoIterations).toHaveAttribute("step", "1");
+  await targetConfidence.focus();
+  await expect(targetConfidence).toBeFocused();
+  await autoIterations.focus();
+  await expect(autoIterations).toBeFocused();
+
+  const metrics = await page.locator(".sidebarSettings").evaluate((settings) => ({
+    clientWidth: settings.clientWidth,
+    scrollWidth: settings.scrollWidth
+  }));
+  expect(metrics.scrollWidth).toBeLessThanOrEqual(metrics.clientWidth + 1);
 }
 
 async function expectLeftPanelVisualStack(page: Page) {
@@ -816,6 +846,56 @@ test("model history scrolls internally below setup controls", async ({ page }) =
   await expectLeftPanelOrder(page);
   await expectLeftPanelVisualStack(page);
   expect(listMetrics.scrollHeight).toBeGreaterThan(listMetrics.clientHeight);
+});
+
+test("auto iteration settings clamp persisted high out-of-range values", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.addInitScript((storedProject) => {
+    localStorage.setItem("ai-openscad.project", JSON.stringify(storedProject));
+    localStorage.setItem("ai-openscad.target-confidence-percent", "250");
+    localStorage.setItem("ai-openscad.auto-iteration-limit", "99");
+  }, emptyProject);
+
+  await page.goto("/");
+
+  await expectAutoIterationControls(page, "100", "5");
+});
+
+test("auto iteration settings clamp persisted low and invalid values", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.addInitScript((storedProject) => {
+    localStorage.setItem("ai-openscad.project", JSON.stringify(storedProject));
+    localStorage.setItem("ai-openscad.target-confidence-percent", "-20");
+    localStorage.setItem("ai-openscad.auto-iteration-limit", "not-a-number");
+  }, emptyProject);
+
+  await page.goto("/");
+
+  await expectAutoIterationControls(page, "1", "0");
+});
+
+test("auto iteration settings update from keyboard input", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.addInitScript((storedProject) => {
+    localStorage.setItem("ai-openscad.project", JSON.stringify(storedProject));
+  }, emptyProject);
+
+  await page.goto("/");
+
+  const targetConfidence = page.getByLabel("Target confidence");
+  const autoIterations = page.getByLabel("Auto iterations");
+  await expectAutoIterationControls(page);
+  await targetConfidence.focus();
+  await page.keyboard.press("ArrowRight");
+  await expect(targetConfidence).toHaveValue("86");
+  await page.keyboard.press("ArrowLeft");
+  await expect(targetConfidence).toHaveValue("85");
+
+  await autoIterations.focus();
+  await page.keyboard.press("ArrowUp");
+  await expect(autoIterations).toHaveValue("1");
+  await page.keyboard.press("ArrowDown");
+  await expect(autoIterations).toHaveValue("0");
 });
 
 test("stacked layout keeps setup controls before model actions", async ({ page }) => {

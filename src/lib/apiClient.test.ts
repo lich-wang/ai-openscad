@@ -98,6 +98,33 @@ describe("apiClient prompt assembly", () => {
     expect(userPrompt).toContain("把把手再大一点");
   });
 
+  it("omits review confidence and target thresholds from revision prompts", () => {
+    const request = buildRevisionRequest({
+      apiKey: "sk-user",
+      modelId: "mimo-v2.5",
+      requirement: "Make a desk hook",
+      code: "cube(10);",
+      review: {
+        summary: "Hook silhouette is too shallow.",
+        issues: ["Increase the hook depth."],
+        correctionPrompt: "Keep the clamp gap and make the hook deeper.",
+        confidence: 0.41
+      },
+      userNotes: "Keep it printable.",
+      precision: "draft"
+    });
+
+    const userPrompt = String(request.body.messages[1].content);
+    expect(userPrompt).toContain("Hook silhouette is too shallow.");
+    expect(userPrompt).toContain("Increase the hook depth.");
+    expect(userPrompt).not.toMatch(/confidence/i);
+    expect(userPrompt).not.toContain("0.41");
+    expect(userPrompt).not.toContain("41%");
+    expect(userPrompt).not.toContain("85");
+    expect(userPrompt).not.toMatch(/target/i);
+    expect(userPrompt).not.toMatch(/threshold/i);
+  });
+
   it("adds the draft render complexity budget to revision prompts", () => {
     const request = buildRevisionRequest({
       apiKey: "sk-user",

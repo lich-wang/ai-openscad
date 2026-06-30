@@ -44,8 +44,8 @@ document.
 The first screen is the working app, not a landing page. It is organized into
 three columns:
 
-- Left control panel: basic settings and project import/export first, then the
-  new model action and local model list.
+- Left control panel: basic settings, bounded auto-iteration controls, and
+  project import/export first, then the new model action and local model list.
 - Center agent panel: pipeline stage arrows, Codex-style chat run stream,
   requirement composer, workflow actions, and advanced OpenSCAD code editing.
 - Right result panel: a large interactive STL preview, fixed multi-angle review
@@ -65,39 +65,76 @@ three columns:
 6. The app captures fourteen PNG views from the STL: six orthographic
    directions (front, back, left, right, top, bottom) and eight isometric
    directions around the model.
-7. User clicks **Review**.
+7. If bounded auto-iteration is disabled, user clicks **Review**. If the user
+   preset automatic iterations before clicking **Generate**, the app runs the
+   visual review automatically after each successful render in that bounded run.
 8. The vision model checks the multi-angle views against the original
-   requirement and returns a summary, issue list, confidence score, and
-   correction prompt.
-9. The correction prompt becomes editable in the composer and gives concrete
-   instructions about which OpenSCAD areas or geometry relationships should be
-   changed.
+   requirement and returns a summary, issue list, confidence score as a review
+   conclusion, and correction prompt.
+9. The correction prompt becomes editable in the composer for manual iteration
+   and gives concrete instructions about which OpenSCAD areas or geometry
+   relationships should be changed. Review confidence is displayed as part of
+   the review conclusion, but is not copied into the correction prompt and is
+   not sent to the text LLM.
 10. User clicks **Iterate Again** to send the latest accepted/rendered
    OpenSCAD, the original requirement, review findings, and editable iteration
-   guidance to the LLM, then generate and render the next draft.
+   guidance to the LLM, then generate and render the next draft. If the user
+   preset automatic iterations before clicking **Iterate Again**, the app can
+   continue with bounded follow-up review and revision cycles until the target
+   confidence is reached or the iteration limit is exhausted.
 11. User clicks **Final Export** when satisfied.
 12. The app normalizes the model to final precision and downloads `.scad` and
     `.stl` files.
 
 ### User Control Rules
 
-- Visual review only reviews. It must not automatically call the text LLM or
-  start an image-driven rewrite loop.
+- Visual review only reviews by default. It must not automatically call the text
+  LLM or start an image-driven rewrite loop unless the user has explicitly
+  started a bounded confidence run by clicking **Generate** or **Iterate Again**
+  with automatic iterations set above zero.
+- In a bounded confidence run, each successful render is followed by visual
+  review. If review confidence meets or exceeds the user preset target
+  confidence, the run stops with that review conclusion. If confidence is below
+  target and automatic iterations remain, the app may send one follow-up text
+  revision using the latest rendered OpenSCAD, original requirement, review
+  summary, issue list, and correction prompt, then render and review again.
+  The run stops when the target confidence is reached, the automatic iteration
+  limit is exhausted, or a provider/compile/review error occurs.
+- Review confidence is a displayed/stored conclusion, not prompt input. It must
+  never be inserted into the editable correction prompt and must never be
+  included in generation or revision text LLM prompts. Text prompts may include
+  the review summary, issue list, and correction prompt, but not the numeric
+  confidence value or a confidence-threshold instruction.
+- The user can preset target confidence as a percentage and automatic iteration
+  count as a bounded integer. The default automatic iteration count is zero so
+  the current manual review-and-iterate workflow remains unchanged. The count
+  means automatic follow-up text revision attempts after the user-started
+  action begins: **Generate**'s initial draft does not count, **Iterate Again**'s
+  user-clicked revision does not count, and each automatic follow-up revision
+  after a review counts once.
+- The target confidence control is a percent slider with accessible name
+  `Target confidence` in English and the localized equivalent in Chinese, range
+  1-100, step 1, and default 85. The automatic iteration control is an integer
+  stepper/input with accessible name `Auto iterations` in English and the
+  localized equivalent in Chinese, range 0-5, step 1, and default 0. Persisted
+  out-of-range values are clamped to those ranges before use. The stored target
+  is a percent value and is compared to normalized review confidence as
+  `confidence >= target / 100`.
 - The interactive preview is for human inspection only. Dragging, zooming, or
   panning the preview must not change the fourteen fixed review images and must
   not affect the provider payload sent for visual review.
 - Browser compile failures may directly trigger a bounded text-to-OpenSCAD
-  compiler-repair loop. Each user-initiated generation, rerender, accepted
-  revision, or iteration may make at most two automatic compiler-repair text
-  requests before stopping with diagnostics.
-- The compiler-repair loop applies to the compile step owned by that user
-  action, whether it follows first generation, manual rerender, accepted
-  revision, or user-confirmed iteration. The two-attempt limit is counted per
-  user action and resets only when the user starts another generation, rerender,
-  accepted revision, or iteration.
+  compiler-repair loop. Each compile step may make at most two automatic
+  compiler-repair text requests before stopping with diagnostics.
+- The compiler-repair loop applies to the compile step being executed, whether
+  it follows first generation, manual rerender, accepted revision,
+  user-confirmed iteration, or an automatic follow-up revision inside a bounded
+  confidence run. The two-attempt compiler-repair counter is counted per compile
+  step and is separate from the review-driven automatic iteration count.
 - This borrows the useful part of verified text-to-OpenSCAD workflows:
   compiler evidence can repair invalid code automatically, while rendered image
-  evidence remains user-controlled review context.
+  evidence remains user-controlled review context unless the user has opted into
+  a bounded confidence run with a visible target and attempt limit.
 - The user can edit the correction prompt before another generation.
 - A pending revision must be accepted and rendered before project export.
 - Accepting a revision clears the old review, forcing a fresh review for the new
@@ -115,6 +152,10 @@ three columns:
   events are visible as separate records.
 - The primary composer action follows project state: generate before rendering,
   review after rendering, and iterate again after review.
+- The left settings surface lets the user set a target review confidence and
+  automatic iteration count before starting **Generate** or **Iterate Again**.
+  These controls affect only future user-started runs; changing them while idle
+  does not mutate existing review conclusions or prompt traces.
 - Token estimates and duplicate ready status badges are hidden from the normal
   workbench surface to keep more room for the model list and the multi-angle
   views.
@@ -123,9 +164,10 @@ three columns:
 Workbench acceptance criteria:
 
 - Left panel order is stable on desktop and in narrower stacked layouts: basic
-  settings, project import/export, new model button, then the local model list
-  for navigation. The local model list scrolls internally when it grows and is
-  distinct from run history.
+  settings with target confidence and auto-iteration controls, project
+  import/export, new model button, then the local model list for navigation.
+  The local model list scrolls internally when it grows and is distinct from
+  run history.
 - The No key invitation hint shows the invite image at 50% of its source size,
   preserving the source aspect ratio and constrained by the available viewport.
   It must not crop the invite image into a square or upscale it in a way that
@@ -143,16 +185,23 @@ Workbench acceptance criteria:
   generation becomes active again, rendering waits until code completion, and
   review waits for the new rendered views.
 - The composer primary action is disabled while any generation, render, review,
-  compiler-repair, or export task is running. It shows Generate when no current
-  fourteen-view render exists, Review only when all fourteen current rendered
-  view keys are non-empty and there is no current review, and Iterate Again only
-  after the current fourteen-view render has been reviewed and no pending
-  revision is waiting for acceptance.
+  automatic confidence run, compiler-repair, or export task is running. It shows
+  Generate when no current fourteen-view render exists, Review only when all
+  fourteen current rendered view keys are non-empty and there is no current
+  review, and Iterate Again only after the current fourteen-view render has been
+  reviewed and no pending revision is waiting for acceptance.
   Missing inputs, provider-key failures, compile failures, and review failures
   appear in the center stream without changing the right panel contract. While a
   pending revision is waiting for acceptance, the composer shows an acceptance
   hint instead of Generate, Review, or Iterate Again; the user must accept or
   reject the revision before continuing the main workflow.
+- During an active bounded confidence run, Generate, Review, Iterate Again,
+  Rerender, Final Export, Accept Revision, Reject Revision, project import,
+  project export, new model, local model navigation, and the target-confidence
+  and auto-iteration controls are disabled or read-only for the active run. This
+  prevents a stale in-flight response from changing a different project or
+  starting a hidden provider call. When the run stops, the controls return to
+  normal availability according to the latest project state.
 - If generated or manually edited code fails to compile, the failing draft
   cannot advance to visual review or export. Any stale review, stale STL, and
   stale view images from the current cycle are blocked from review/export for
@@ -172,6 +221,18 @@ Workbench acceptance criteria:
   issues, confidence, correction prompt, and iteration events. Completed code is
   collapsed by default so it does not dominate the center panel, while the
   advanced OpenSCAD editor remains available below the composer.
+- During a bounded confidence run, the center agent stream shows automatic
+  review/revision progress, the latest confidence conclusion, automatic
+  iteration count consumed, and the stop reason: target confidence reached,
+  automatic iteration limit reached, compile failure, review failure, provider
+  failure, or user-visible error.
+- After any bounded confidence run stops, the app exits the disabled auto-run
+  state, shows the stop reason, preserves the latest code, STL, fourteen views,
+  review conclusion, confidence, and correction prompt, and states that no
+  further automatic LLM call will occur. Normal manual actions become available
+  again as appropriate: Final Export when the review is current, Iterate Again
+  or prompt editing when more work is needed, and code editing or Rerender after
+  errors.
 - For a new or empty task, the center agent stream still keeps the same Agent
   Run header text at the top of the panel and uses the same stream container,
   spacing, and basic structure as populated chat runs without showing a separate
@@ -280,6 +341,11 @@ Workbench acceptance criteria:
   accessible names on desktop and narrow layouts.
   Playwright pixel screenshot checks run only in local visual-regression checks
   and must be skipped in CI.
+- Automated E2E coverage must include the new target confidence and auto
+  iteration controls with stable accessible names, visible labels, readable
+  current values, keyboard operation, clamping/default behavior, and no
+  horizontal overflow on desktop or narrow stacked layouts. Local screenshot
+  coverage must include the left settings area with these controls visible.
 - Local visual-regression screenshots must explicitly cover the right result
   panel: the interactive preview is the largest top visual area after render,
   all fourteen fixed view tiles use equal visual size in stable order, any
@@ -288,7 +354,11 @@ Workbench acceptance criteria:
   remain visible or reachable.
 - Tests must verify that compile failure triggers only the bounded compiler
   repair text requests, while render completion, visual review completion, and
-  image evidence never trigger an unprompted `/api/llm` request.
+  image evidence never trigger an unprompted `/api/llm` request outside an
+  explicit user-started bounded confidence run. Tests must also verify that a
+  bounded confidence run stops when the target confidence is reached or the
+  automatic iteration limit is exhausted, and that revision prompts omit review
+  confidence.
 - Local E2E render coverage must include the full user-reported 20 cm wavy cup
   OpenSCAD file with layered `linear_extrude()` wave rings, verify that the
   browser renderer completes, and confirm the multi-angle rendered views contain
@@ -305,8 +375,8 @@ Workbench acceptance criteria:
 - Treats generated OpenSCAD as a complete artifact that must compile before it
   can advance through the workflow. Compile diagnostics can trigger bounded
   automatic compiler-repair generation; rendered views become evidence for
-  review and later user-confirmed iteration, not a trigger for automatic image
-  rewrite loops.
+  review and later user-confirmed or user-enabled bounded confidence iteration,
+  not a trigger for unbounded automatic image rewrite loops.
 - Bundles the practical `lich-3D/SCAD` printable-modeling skill into text LLM
   prompts. The web app does not read local Codex skill folders at runtime;
   instead, the product prompt includes the source-derived modeling patterns,
@@ -408,8 +478,9 @@ Workbench acceptance criteria:
   fourteen views.
 - Review requests include the latest compile/render evidence so the vision model
   can check both visual fit and obvious artifact quality issues. This feedback
-  produces a user-editable correction prompt only; it does not directly call the
-  text model.
+  produces a user-editable correction prompt and a displayed confidence
+  conclusion. It does not directly call the text model outside a user-started
+  bounded confidence run.
 - Render evidence is a bounded provider contract, not localized UI copy. It
   includes compile status, readable diagnostics, render precision, backend, and
   rendered view count. `viewCount` equals the number of non-empty rendered view
@@ -421,6 +492,14 @@ Workbench acceptance criteria:
   - `issues`
   - `correctionPrompt`
   - `confidence`
+- `confidence` is normalized to a 0-1 score for storage and displayed to the
+  user as a percentage. It is part of the review conclusion and stop-decision
+  state only. It must not be appended to the editable correction prompt, prompt
+  trace shown to the user, or any text LLM generation/revision prompt.
+- If `confidence` is missing, non-numeric, or cannot be normalized into the 0-1
+  range, the review is treated as a review failure for bounded confidence runs.
+  The run stops with a readable reason and must not send a follow-up text LLM
+  revision based on that review.
 - Falls back gracefully when the model returns malformed or non-JSON review text.
 - The `correctionPrompt` should be specific enough for the text LLM to act on:
   it should reference the original requirement, the visible view or affected
@@ -431,12 +510,46 @@ Workbench acceptance criteria:
 - Iteration requests send the latest accepted/rendered OpenSCAD code, original
   requirement, review summary, issue list, and editable review guidance to the
   text LLM so the next draft is a targeted modification rather than a fresh
-  unrelated generation.
+  unrelated generation. The revision request must intentionally omit review
+  confidence, target confidence, and stop-threshold instructions.
+- Bounded confidence runs are always started by a user action. With automatic
+  iteration count set to zero, **Generate** and **Iterate Again** keep the
+  current manual behavior and stop after rendering until the user reviews or
+  iterates. With automatic iteration count above zero, **Generate** renders the
+  initial draft and then automatically reviews it; **Iterate Again** renders the
+  user-clicked revision and then automatically reviews it. If the latest review
+  confidence is below target, each follow-up automatic revision consumes one
+  automatic iteration. The run stops at target confidence, at the configured
+  automatic iteration limit, or on any compile/review/provider error.
+- Follow-up revisions inside a bounded confidence run are automatically applied
+  as the current draft, then compiled, rendered, and reviewed. They do not pause
+  as pending revisions requiring Accept Revision or Reject Revision. Manual
+  pending-revision accept/reject behavior remains for non-auto revision flows.
+- If an initial draft, user-clicked iteration, or automatic follow-up revision
+  fails to compile during a bounded confidence run, the existing bounded
+  compiler-repair loop may run for that compile step. Compiler-repair text LLM
+  calls are separate from review-driven automatic iterations and do not consume
+  the automatic iteration count. A follow-up automatic revision consumes one
+  automatic iteration when the review-driven revision request is started, even
+  if its later compile requires repair. If no code-model key is available, the
+  compiler-repair limit is exhausted, or repaired code still cannot compile, the
+  bounded confidence run stops with compile diagnostics and does not proceed to
+  visual review or another review-driven revision.
+- Each active bounded confidence run is bound to the current project id, current
+  code version, and rendered fourteen-view evidence produced by that run.
+  Browser refresh, import, project switch, new model, manual code edit, manual
+  rerender, accepting/rejecting a pending revision, or any project state reset
+  cancels the run. Late generation, revision, compiler-repair, render, or
+  review responses from a canceled run must be ignored and must not update the
+  project, start another render/review/provider request, or overwrite the
+  visible run conclusion.
 - Compile failures from generated or manually edited code remain visible in the
   run stream and are folded into bounded compiler-repair text requests
   automatically. When the repair limit is exhausted, the same diagnostic-derived
   guidance remains editable for a manual retry. Visual review findings still
-  require the user to choose the iteration action before the text model runs.
+  require the user to choose the iteration action before the text model runs,
+  except for follow-up revisions inside the bounded confidence run the user has
+  already started.
 - Stores prompt traces for generation, compilation, review, revision, and final
   export in local project data for export/debugging, but normal users do not see
   a prompt trace panel in the workbench.
@@ -514,6 +627,17 @@ The core project state contains:
 - Runtime output: `compilerOutput`, `renderEvidence`, `review`, `runEvents`
 - Audit trail: `iterations`, `promptTrace`
 
+Workbench preference state in browser `localStorage` also includes:
+
+- `targetConfidencePercent`: integer percent, default `85`, clamped to `1-100`
+- `autoIterationLimit`: integer, default `0`, clamped to `0-5`
+
+These preferences are local UI presets, not project artifacts. Project JSON
+export/import includes review confidence and run events, but does not resume or
+export an active bounded confidence run. Active run state is in memory only; a
+page reload, project import, project switch, or new model cancels it and never
+continues automatic provider calls after restore.
+
 `views` is a keyed object with the stable `ViewKey` order:
 
 - `front`
@@ -581,7 +705,8 @@ The app should preserve these guarantees:
 - STL download is available only after a successful compile; source SCAD
   download is available whenever current code exists.
 - Review requests include rendered images.
-- Review does not trigger text generation.
+- Review does not trigger text generation unless it is part of an explicit
+  user-started bounded confidence run with remaining automatic iterations.
 - New iterations clear stale review state.
 - Text LLM requests include the built-in printable-modeling skill context used
   by the app, so prompt traces can show why generated code favors practical
@@ -637,7 +762,8 @@ The current test suite covers:
 - Browser-locale UI switching between Chinese and English.
 - Streaming code generation and automatic draft rendering.
 - Vision review requests with rendered images.
-- Review-driven iteration without automatic LLM calls during review.
+- Review-driven iteration with manual control by default and optional bounded
+  confidence-target auto-iteration after **Generate** or **Iterate Again**.
 - Revision accept/reject behavior.
 - Invalid OpenSCAD error handling.
 - Desktop workbench layout and narrow stacked left-panel order coverage.

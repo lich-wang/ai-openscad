@@ -54,6 +54,7 @@ export async function reviewViews(input: {
   code: string;
   images: string[];
   renderEvidence?: RenderEvidence | null;
+  strictConfidence?: boolean;
 }): Promise<{ review: VisionReview; trace: PromptTraceEntry }> {
   const systemPrompt = buildVisionSystemPrompt(input.requirement);
   const userPrompt = buildVisionUserPrompt(
@@ -72,7 +73,7 @@ export async function reviewViews(input: {
   });
   assertVisionPayloadWithinBudget(request);
   const content = await sendGatewayRequest(request);
-  const review = parseReview(content, input.requirement);
+  const review = parseReview(content, input.requirement, Boolean(input.strictConfidence));
   return {
     review,
     trace: createPromptTraceEntry({
@@ -250,13 +251,14 @@ function stripCodeFence(content: string): string {
   return (match?.[1] ?? content).trim();
 }
 
-function parseReview(content: string, requirement = ""): VisionReview {
+function parseReview(content: string, requirement = "", strictConfidence = false): VisionReview {
   try {
     const parsed = JSON.parse(content) as Partial<VisionReview>;
     const summary = String(parsed.summary ?? "Review completed.");
     const issues = Array.isArray(parsed.issues)
       ? parsed.issues.map(String)
       : ["The model returned review text without an issues array."];
+    const confidence = normalizeReviewConfidence(parsed.confidence, strictConfidence);
     return {
       summary,
       issues,
@@ -266,12 +268,12 @@ function parseReview(content: string, requirement = ""): VisionReview {
         parsed.correctionPrompt,
         requirement
       ),
-      confidence:
-        typeof parsed.confidence === "number"
-          ? Math.min(1, Math.max(0, parsed.confidence))
-          : 0.5
+      confidence
     };
   } catch {
+    if (strictConfidence) {
+      throw new Error("Review confidence is missing or invalid.");
+    }
     return {
       summary: content,
       issues: ["The model returned non-JSON review text."],
@@ -281,6 +283,22 @@ function parseReview(content: string, requirement = ""): VisionReview {
       confidence: 0.5
     };
   }
+}
+
+function normalizeReviewConfidence(value: unknown, strict: boolean): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    if (strict) {
+      throw new Error("Review confidence is missing or invalid.");
+    }
+    return 0.5;
+  }
+  if (value < 0 || value > 1) {
+    if (strict) {
+      throw new Error("Review confidence is missing or invalid.");
+    }
+    return Math.min(1, Math.max(0, value));
+  }
+  return value;
 }
 
 function buildFallbackCorrectionPrompt(

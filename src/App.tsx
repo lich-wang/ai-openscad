@@ -85,6 +85,14 @@ type DraftCompileFailure = {
 type DraftCompileResult = DraftCompileSuccess | DraftCompileFailure;
 
 const MAX_COMPILER_REPAIR_ATTEMPTS = 2;
+const TARGET_CONFIDENCE_STORAGE_KEY = "ai-openscad.target-confidence-percent";
+const AUTO_ITERATION_STORAGE_KEY = "ai-openscad.auto-iteration-limit";
+const DEFAULT_TARGET_CONFIDENCE_PERCENT = 85;
+const MIN_TARGET_CONFIDENCE_PERCENT = 1;
+const MAX_TARGET_CONFIDENCE_PERCENT = 100;
+const DEFAULT_AUTO_ITERATION_LIMIT = 0;
+const MIN_AUTO_ITERATION_LIMIT = 0;
+const MAX_AUTO_ITERATION_LIMIT = 5;
 const VIEW_LABEL_KEYS: Record<ViewKey, MessageKey> = {
   front: "front",
   back: "back",
@@ -135,6 +143,41 @@ function canUseCodeModel(modelId: string, apiKey: string): boolean {
   return provider === "mimo" || Boolean(apiKey.trim());
 }
 
+class AutoRunCanceledError extends Error {
+  constructor() {
+    super("Automatic confidence run was canceled.");
+  }
+}
+
+function clampInteger(value: number, min: number, max: number): number {
+  if (!Number.isFinite(value)) {
+    return min;
+  }
+  return Math.min(max, Math.max(min, Math.round(value)));
+}
+
+function readStoredInteger(key: string, fallback: number, min: number, max: number): number {
+  if (typeof localStorage === "undefined") {
+    return fallback;
+  }
+  const raw = localStorage.getItem(key);
+  if (raw === null) {
+    return clampInteger(fallback, min, max);
+  }
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed)) {
+    return clampInteger(fallback, min, max);
+  }
+  return clampInteger(parsed, min, max);
+}
+
+function writeStoredInteger(key: string, value: number): void {
+  if (typeof localStorage === "undefined") {
+    return;
+  }
+  localStorage.setItem(key, String(value));
+}
+
 export default function App() {
   const [initialWorkspace] = useState(() => loadProjectWorkspace());
   const [project, setProject] = useState<ProjectState>(() => initialWorkspace.activeProject);
@@ -143,16 +186,38 @@ export default function App() {
   );
   const [llmApiKey, setLlmApiKey] = useState(() => loadLlmApiKey());
   const [visionApiKey, setVisionApiKey] = useState(() => loadVisionApiKey());
+  const [targetConfidencePercent, setTargetConfidencePercent] = useState(() =>
+    readStoredInteger(
+      TARGET_CONFIDENCE_STORAGE_KEY,
+      DEFAULT_TARGET_CONFIDENCE_PERCENT,
+      MIN_TARGET_CONFIDENCE_PERCENT,
+      MAX_TARGET_CONFIDENCE_PERCENT
+    )
+  );
+  const [autoIterationLimit, setAutoIterationLimit] = useState(() =>
+    readStoredInteger(
+      AUTO_ITERATION_STORAGE_KEY,
+      DEFAULT_AUTO_ITERATION_LIMIT,
+      MIN_AUTO_ITERATION_LIMIT,
+      MAX_AUTO_ITERATION_LIMIT
+    )
+  );
   const [busy, setBusy] = useState<BusyState>("idle");
   const [error, setError] = useState("");
   const [errorStage, setErrorStage] = useState<WorkflowStage | "">("");
   const [renderStatus, setRenderStatus] = useState("");
+  const [autoRunActive, setAutoRunActive] = useState(false);
   const busyRef = useRef<BusyState>("idle");
+  const operationTokenRef = useRef(0);
+  const autoRunTokenRef = useRef(0);
+  const targetConfidencePercentRef = useRef(targetConfidencePercent);
+  const autoIterationLimitRef = useRef(autoIterationLimit);
 
   const locale = getBrowserLocale();
   const tr = (key: MessageKey) => t(locale, key);
   const adapter = useMemo(() => createRenderMcp("web"), []);
   const isBusy = busy !== "idle";
+  const controlsLocked = autoRunActive;
   const hasRenderedViews = allViewsRendered(project.views);
   const hasCurrentReview = Boolean(project.review && hasRenderedViews);
   const hasPendingRevision = Boolean(project.proposedCode.trim());
@@ -228,6 +293,55 @@ export default function App() {
   function updateBusy(nextBusy: BusyState) {
     busyRef.current = nextBusy;
     setBusy(nextBusy);
+  }
+
+  function updateTargetConfidence(value: number) {
+    const next = clampInteger(
+      value,
+      MIN_TARGET_CONFIDENCE_PERCENT,
+      MAX_TARGET_CONFIDENCE_PERCENT
+    );
+    targetConfidencePercentRef.current = next;
+    setTargetConfidencePercent(next);
+    writeStoredInteger(TARGET_CONFIDENCE_STORAGE_KEY, next);
+  }
+
+  function updateAutoIterationLimit(value: number) {
+    const next = clampInteger(value, MIN_AUTO_ITERATION_LIMIT, MAX_AUTO_ITERATION_LIMIT);
+    autoIterationLimitRef.current = next;
+    setAutoIterationLimit(next);
+    writeStoredInteger(AUTO_ITERATION_STORAGE_KEY, next);
+  }
+
+  function beginAutoRun(): number {
+    const token = autoRunTokenRef.current + 1;
+    autoRunTokenRef.current = token;
+    setAutoRunActive(true);
+    return token;
+  }
+
+  function cancelActiveAutoRun() {
+    if (!autoRunActive) {
+      return;
+    }
+    autoRunTokenRef.current += 1;
+    setAutoRunActive(false);
+    updateBusy("idle");
+  }
+
+  function ensureAutoRunCurrent(token: number) {
+    if (autoRunTokenRef.current !== token) {
+      throw new AutoRunCanceledError();
+    }
+  }
+
+  function autoRunStopEvent(message: string): RunEvent {
+    return createRunEvent({
+      role: "tool",
+      title: message,
+      content: message,
+      status: "complete"
+    });
   }
 
   function createRunEvent(input: {
@@ -317,12 +431,17 @@ export default function App() {
   }
 
   async function runSafely(action: BusyState, task: () => Promise<void>) {
+    const operationToken = operationTokenRef.current + 1;
+    operationTokenRef.current = operationToken;
     updateBusy(action);
     setError("");
     setErrorStage("");
     try {
       await task();
     } catch (caught) {
+      if (caught instanceof AutoRunCanceledError) {
+        return;
+      }
       const message = caught instanceof Error ? caught.message : String(caught);
       setError(message);
       setErrorStage(workflowStageForBusy(busyRef.current === "idle" ? action : busyRef.current));
@@ -333,8 +452,11 @@ export default function App() {
         status: "error"
       }));
     } finally {
-      setRenderStatus("");
-      updateBusy("idle");
+      if (operationTokenRef.current === operationToken) {
+        setRenderStatus("");
+        setAutoRunActive(false);
+        updateBusy("idle");
+      }
     }
   }
 
@@ -353,6 +475,8 @@ export default function App() {
   }
 
   async function handleGenerate() {
+    const shouldAutoRun = autoIterationLimitRef.current > 0;
+    const autoRunToken = shouldAutoRun ? beginAutoRun() : 0;
     await runSafely("generating", async () => {
       requireLlmApiKey();
       if (!project.requirement.trim()) {
@@ -384,22 +508,37 @@ export default function App() {
         compilerOutput: tr("streamingCode"),
         runEvents: [userEvent, codeEvent]
       }));
-      const { code, trace } = await generateOpenScad({
-        apiKey: llmApiKey,
-        modelId: project.codeModelId,
-        requirement: originalRequirement,
-        precision: "draft",
-        onToken: (streamedCode) => {
-          setProject((current) => ({
-            ...current,
-            currentCode: streamedCode,
-            compilerOutput: tr("streamingCode"),
-            runEvents: current.runEvents.map((event) =>
-              event.id === codeEventId ? { ...event, code: streamedCode } : event
-            )
-          }));
+      let generated: Awaited<ReturnType<typeof generateOpenScad>>;
+      try {
+        generated = await generateOpenScad({
+          apiKey: llmApiKey,
+          modelId: project.codeModelId,
+          requirement: originalRequirement,
+          precision: "draft",
+          onToken: (streamedCode) => {
+            if (shouldAutoRun && autoRunTokenRef.current !== autoRunToken) {
+              return;
+            }
+            setProject((current) => ({
+              ...current,
+              currentCode: streamedCode,
+              compilerOutput: tr("streamingCode"),
+              runEvents: current.runEvents.map((event) =>
+                event.id === codeEventId ? { ...event, code: streamedCode } : event
+              )
+            }));
+          }
+        });
+      } catch (caught) {
+        if (shouldAutoRun) {
+          ensureAutoRunCurrent(autoRunToken);
         }
-      });
+        throw caught;
+      }
+      const { code, trace } = generated;
+      if (shouldAutoRun) {
+        ensureAutoRunCurrent(autoRunToken);
+      }
       setProject((current) => ({
         ...current,
         currentCode: code,
@@ -435,25 +574,41 @@ export default function App() {
         content: tr("renderStarted")
       }));
       let finalCode = code;
-      let rendered = await compileDraftCode(code);
+      let rendered = await compileDraftCode(code, shouldAutoRun ? autoRunToken : undefined);
+      if (shouldAutoRun) {
+        ensureAutoRunCurrent(autoRunToken);
+      }
       if (!rendered.ok || !rendered.views || !rendered.stl) {
         const repaired = await repairDraftCompileIfPossible({
           code,
           rendered,
           originalRequirement,
-          sourceCodeEventId: codeEventId
+          sourceCodeEventId: codeEventId,
+          autoRunToken: shouldAutoRun ? autoRunToken : undefined
         });
         finalCode = repaired.code;
         rendered = repaired.rendered;
+        if (shouldAutoRun) {
+          ensureAutoRunCurrent(autoRunToken);
+        }
       }
       if (!rendered.ok || !rendered.views || !rendered.stl) {
+        if (shouldAutoRun) {
+          ensureAutoRunCurrent(autoRunToken);
+        }
         setProject((current) => ({
           ...current,
           ...diagnosticFixPatch(current, rendered.diagnostics, rendered.evidence),
           promptTrace: [...current.promptTrace, rendered.trace],
           updatedAt: new Date().toISOString()
         }));
+        if (shouldAutoRun) {
+          appendRunEvent(autoRunStopEvent(tr("autoRunCompileStopped")));
+        }
         throw new Error(rendered.diagnostics);
+      }
+      if (shouldAutoRun) {
+        ensureAutoRunCurrent(autoRunToken);
       }
       appendRunEvent(createRunEvent({
         role: "tool",
@@ -483,6 +638,16 @@ export default function App() {
           }
         ]
       }));
+      if (shouldAutoRun) {
+        ensureAutoRunCurrent(autoRunToken);
+        await runBoundedConfidenceLoop({
+          autoRunToken,
+          originalRequirement,
+          code: finalCode,
+          views: rendered.views,
+          renderEvidence: rendered.evidence
+        });
+      }
     });
   }
 
@@ -548,13 +713,24 @@ export default function App() {
     });
   }
 
-  async function compileDraftCode(code: string): Promise<DraftCompileResult> {
-    await updateRenderStatus("renderPreparing");
+  async function compileDraftCode(
+    code: string,
+    autoRunToken?: number
+  ): Promise<DraftCompileResult> {
+    await updateRenderStatus("renderPreparing", autoRunToken);
     const draftCode = normalizeOpenScadPrecision(code, "draft");
-    const result = await adapter.render({
-      source: draftCode,
-      onProgress: (stage) => updateRenderStatus(renderMcpStageMessageKey(stage))
-    });
+    let result: Awaited<ReturnType<typeof adapter.render>>;
+    try {
+      result = await adapter.render({
+        source: draftCode,
+        onProgress: (stage) => updateRenderStatus(renderMcpStageMessageKey(stage), autoRunToken)
+      });
+    } catch (caught) {
+      if (autoRunToken !== undefined) {
+        ensureAutoRunCurrent(autoRunToken);
+      }
+      throw caught;
+    }
     const viewCount = result.views ? renderedViewCount(result.views) : 0;
     const hasCompleteViews = result.views ? allViewsRendered(result.views) : false;
     const renderSucceeded = result.ok && Boolean(result.stl) && hasCompleteViews;
@@ -602,7 +778,11 @@ export default function App() {
     rendered: DraftCompileResult;
     originalRequirement: string;
     sourceCodeEventId?: string;
+    autoRunToken?: number;
   }): Promise<{ code: string; rendered: DraftCompileResult }> {
+    if (input.autoRunToken !== undefined) {
+      ensureAutoRunCurrent(input.autoRunToken);
+    }
     let code = input.code;
     let rendered = input.rendered;
     if (
@@ -661,6 +841,12 @@ export default function App() {
           renderEvidence,
           precision: "draft",
           onToken: (streamedCode) => {
+            if (
+              input.autoRunToken !== undefined &&
+              autoRunTokenRef.current !== input.autoRunToken
+            ) {
+              return;
+            }
             setProject((current) => ({
               ...current,
               currentCode: streamedCode,
@@ -668,9 +854,18 @@ export default function App() {
             }));
           }
         });
+        if (input.autoRunToken !== undefined) {
+          ensureAutoRunCurrent(input.autoRunToken);
+        }
         repairedCode = proposed.code;
         trace = proposed.trace;
       } catch (caught) {
+        if (caught instanceof AutoRunCanceledError) {
+          throw caught;
+        }
+        if (input.autoRunToken !== undefined) {
+          ensureAutoRunCurrent(input.autoRunToken);
+        }
         const message = caught instanceof Error ? caught.message : String(caught);
         setProject((current) => ({
           ...current,
@@ -724,7 +919,10 @@ export default function App() {
         title: tr("renderStarted"),
         content: tr("renderStarted")
       }));
-      rendered = await compileDraftCode(code);
+      rendered = await compileDraftCode(code, input.autoRunToken);
+      if (input.autoRunToken !== undefined) {
+        ensureAutoRunCurrent(input.autoRunToken);
+      }
       if (rendered.ok) {
         return { code, rendered };
       }
@@ -736,7 +934,298 @@ export default function App() {
     return { code, rendered };
   }
 
-  async function updateRenderStatus(key: MessageKey) {
+  async function reviewRenderedDraft(input: {
+    originalRequirement: string;
+    code: string;
+    views: ProjectState["views"];
+    renderEvidence: RenderEvidence | null;
+    strictConfidence: boolean;
+    autoRunToken?: number;
+  }) {
+    if (!allViewsRendered(input.views)) {
+      throw new Error(tr("compileBeforeReview"));
+    }
+    requireVisionApiKey();
+    appendRunEvent(createRunEvent({
+      role: "review",
+      title: tr("reviewStarted"),
+      content: tr("reviewStarted"),
+      status: "active"
+    }));
+    let reviewed: Awaited<ReturnType<typeof reviewViews>>;
+    try {
+      reviewed = await reviewViews({
+        apiKey: visionApiKey,
+        modelId: project.visionModelId,
+        requirement: input.originalRequirement,
+        code: input.code,
+        images: viewImagesInOrder(input.views),
+        renderEvidence: input.renderEvidence,
+        strictConfidence: input.strictConfidence
+      });
+    } catch (caught) {
+      if (input.autoRunToken !== undefined) {
+        ensureAutoRunCurrent(input.autoRunToken);
+      }
+      throw caught;
+    }
+    const { review, trace: reviewTrace } = reviewed;
+    if (input.autoRunToken !== undefined) {
+      ensureAutoRunCurrent(input.autoRunToken);
+    }
+    setProject((current) => ({
+      ...current,
+      originalRequirement: current.originalRequirement.trim()
+        ? current.originalRequirement
+        : input.originalRequirement,
+      review,
+      requirement: review.correctionPrompt || current.requirement,
+      promptTrace: [...current.promptTrace, reviewTrace],
+      compilerOutput: tr("visionComplete"),
+      runEvents: [
+        ...current.runEvents.filter((event) => event.title !== tr("reviewStarted")),
+        createRunEvent({
+          role: "review",
+          title: tr("visionComplete"),
+          content: tr("visionComplete"),
+          status: "complete"
+        }),
+        createRunEvent({
+          role: "review",
+          title: tr("visualReview"),
+          content: review.summary,
+          status: "complete"
+        }),
+        createRunEvent({
+          role: "review",
+          title: tr("correctionPrompt"),
+          content: review.correctionPrompt,
+          status: "complete"
+        })
+      ],
+      updatedAt: new Date().toISOString(),
+      iterations: [
+        ...current.iterations,
+        {
+          id: crypto.randomUUID(),
+          createdAt: new Date().toISOString(),
+          requirement: current.requirement,
+          code: input.code,
+          modelId: current.visionModelId,
+          status: "reviewed",
+          reviewSummary: review.summary
+        }
+      ]
+    }));
+    return review;
+  }
+
+  async function runBoundedConfidenceLoop(input: {
+    autoRunToken: number;
+    originalRequirement: string;
+    code: string;
+    views: ProjectState["views"];
+    renderEvidence: RenderEvidence;
+  }) {
+    let code = input.code;
+    let views = input.views;
+    let renderEvidence: RenderEvidence | null = input.renderEvidence;
+    let usedAutoIterations = 0;
+    const targetConfidence = targetConfidencePercentRef.current / 100;
+    const iterationLimit = autoIterationLimitRef.current;
+
+    while (true) {
+      ensureAutoRunCurrent(input.autoRunToken);
+      updateBusy("reviewing");
+      let review;
+      try {
+        review = await reviewRenderedDraft({
+          originalRequirement: input.originalRequirement,
+          code,
+          views,
+          renderEvidence,
+          strictConfidence: true,
+          autoRunToken: input.autoRunToken
+        });
+      } catch (caught) {
+        if (caught instanceof AutoRunCanceledError) {
+          throw caught;
+        }
+        const message = caught instanceof Error ? caught.message : String(caught);
+        appendRunEvent(autoRunStopEvent(message));
+        throw caught;
+      }
+      ensureAutoRunCurrent(input.autoRunToken);
+
+      if (review.confidence >= targetConfidence) {
+        appendRunEvent(autoRunStopEvent(tr("targetConfidenceReached")));
+        return;
+      }
+      if (usedAutoIterations >= iterationLimit) {
+        appendRunEvent(autoRunStopEvent(tr("autoIterationLimitReached")));
+        return;
+      }
+
+      usedAutoIterations += 1;
+      const autoIterationTitle = `${tr("autoIterationStarted")} ${usedAutoIterations} of ${iterationLimit}`;
+      appendRunEvent(createRunEvent({
+        role: "assistant",
+        title: autoIterationTitle,
+        content: autoIterationTitle,
+        status: "complete"
+      }));
+      updateBusy("generating");
+      const codeEventId = crypto.randomUUID();
+      setProject((current) => ({
+        ...current,
+        currentCode: "",
+        proposedCode: "",
+        review: null,
+        views: emptyViews(),
+        stl: "",
+        renderEvidence: null,
+        compilerOutput: tr("streamingIteration"),
+        runEvents: [
+          ...current.runEvents,
+          createRunEvent({
+            id: codeEventId,
+            role: "assistant",
+            title: tr("generatedCode"),
+            content: tr("streamingIteration"),
+            status: "active"
+          })
+        ],
+        updatedAt: new Date().toISOString()
+      }));
+
+      let proposed: Awaited<ReturnType<typeof proposeRevision>>;
+      try {
+        proposed = await proposeRevision({
+          apiKey: llmApiKey,
+          modelId: project.codeModelId,
+          requirement: input.originalRequirement,
+          code,
+          review,
+          userNotes: review.correctionPrompt,
+          renderEvidence,
+          precision: "draft",
+          onToken: (streamedCode) => {
+            if (autoRunTokenRef.current !== input.autoRunToken) {
+              return;
+            }
+            setProject((current) => ({
+              ...current,
+              currentCode: streamedCode,
+              compilerOutput: tr("streamingIteration"),
+              runEvents: current.runEvents.map((event) =>
+                event.id === codeEventId ? { ...event, code: streamedCode } : event
+              )
+            }));
+          }
+        });
+      } catch (caught) {
+        ensureAutoRunCurrent(input.autoRunToken);
+        throw caught;
+      }
+      ensureAutoRunCurrent(input.autoRunToken);
+
+      code = proposed.code;
+      setProject((current) => ({
+        ...current,
+        currentCode: code,
+        proposedCode: "",
+        review: null,
+        stl: "",
+        views: emptyViews(),
+        renderEvidence: null,
+        compilerOutput: tr("renderingDraft"),
+        runEvents: current.runEvents.map((event) =>
+          event.id === codeEventId
+            ? { ...event, content: "", code, status: "complete" }
+            : event
+        ),
+        promptTrace: [...current.promptTrace, proposed.trace],
+        updatedAt: new Date().toISOString(),
+        iterations: [
+          ...current.iterations,
+          {
+            id: crypto.randomUUID(),
+            createdAt: new Date().toISOString(),
+            requirement: review.correctionPrompt,
+            code,
+            modelId: current.codeModelId,
+            status: "generated"
+          }
+        ]
+      }));
+
+      updateBusy("compiling");
+      appendRunEvent(createRunEvent({
+        role: "tool",
+        title: tr("renderStarted"),
+        content: tr("renderStarted")
+      }));
+      let rendered = await compileDraftCode(code, input.autoRunToken);
+      ensureAutoRunCurrent(input.autoRunToken);
+      if (!rendered.ok || !rendered.views || !rendered.stl) {
+        const repaired = await repairDraftCompileIfPossible({
+          code,
+          rendered,
+          originalRequirement: input.originalRequirement,
+          sourceCodeEventId: codeEventId,
+          autoRunToken: input.autoRunToken
+        });
+        code = repaired.code;
+        rendered = repaired.rendered;
+      }
+      ensureAutoRunCurrent(input.autoRunToken);
+      if (!rendered.ok || !rendered.views || !rendered.stl) {
+        setProject((current) => ({
+          ...current,
+          ...diagnosticFixPatch(current, rendered.diagnostics, rendered.evidence),
+          promptTrace: [...current.promptTrace, rendered.trace],
+          updatedAt: new Date().toISOString()
+        }));
+        appendRunEvent(autoRunStopEvent(tr("autoRunCompileStopped")));
+        throw new Error(rendered.diagnostics);
+      }
+      appendRunEvent(createRunEvent({
+        role: "tool",
+        title: tr("renderFinished"),
+        content: `${rendered.diagnostics}\n${tr("compiledDraft")}`
+      }));
+      setProject((current) => ({
+        ...current,
+        currentCode: code,
+        proposedCode: "",
+        review: null,
+        views: rendered.views,
+        stl: rendered.stl,
+        compilerOutput: `${rendered.diagnostics}\n${tr("compiledDraft")}`,
+        renderEvidence: rendered.evidence,
+        promptTrace: [...current.promptTrace, rendered.trace],
+        updatedAt: new Date().toISOString(),
+        iterations: [
+          ...current.iterations,
+          {
+            id: crypto.randomUUID(),
+            createdAt: new Date().toISOString(),
+            requirement: review.correctionPrompt,
+            code,
+            modelId: current.codeModelId,
+            status: "compiled"
+          }
+        ]
+      }));
+      views = rendered.views;
+      renderEvidence = rendered.evidence;
+    }
+  }
+
+  async function updateRenderStatus(key: MessageKey, autoRunToken?: number) {
+    if (autoRunToken !== undefined) {
+      ensureAutoRunCurrent(autoRunToken);
+    }
     const message = tr(key);
     setRenderStatus(message);
     setProject((current) => ({
@@ -749,69 +1238,14 @@ export default function App() {
 
   async function handleReview() {
     await runSafely("reviewing", async () => {
-      if (!allViewsRendered(project.views)) {
-        throw new Error(tr("compileBeforeReview"));
-      }
-      requireVisionApiKey();
       const originalRequirement = originalRequirementFor(project);
-      appendRunEvent(createRunEvent({
-        role: "review",
-        title: tr("reviewStarted"),
-        content: tr("reviewStarted"),
-        status: "active"
-      }));
-      const { review, trace: reviewTrace } = await reviewViews({
-        apiKey: visionApiKey,
-        modelId: project.visionModelId,
-        requirement: originalRequirement,
+      await reviewRenderedDraft({
+        originalRequirement,
         code: project.currentCode,
-        images: viewImagesInOrder(project.views),
-        renderEvidence: project.renderEvidence
+        views: project.views,
+        renderEvidence: project.renderEvidence,
+        strictConfidence: false
       });
-      setProject((current) => ({
-        ...current,
-        originalRequirement: current.originalRequirement.trim()
-          ? current.originalRequirement
-          : originalRequirement,
-        review,
-        requirement: review.correctionPrompt || current.requirement,
-        promptTrace: [...current.promptTrace, reviewTrace],
-        compilerOutput: tr("visionComplete"),
-        runEvents: [
-          ...current.runEvents.filter((event) => event.title !== tr("reviewStarted")),
-          createRunEvent({
-            role: "review",
-            title: tr("visionComplete"),
-            content: tr("visionComplete"),
-            status: "complete"
-          }),
-          createRunEvent({
-            role: "review",
-            title: tr("visualReview"),
-            content: review.summary,
-            status: "complete"
-          }),
-          createRunEvent({
-            role: "review",
-            title: tr("correctionPrompt"),
-            content: review.correctionPrompt,
-            status: "complete"
-          })
-        ],
-        updatedAt: new Date().toISOString(),
-        iterations: [
-          ...current.iterations,
-          {
-            id: crypto.randomUUID(),
-            createdAt: new Date().toISOString(),
-            requirement: current.requirement,
-            code: current.currentCode,
-            modelId: current.visionModelId,
-            status: "reviewed",
-            reviewSummary: review.summary
-          }
-        ]
-      }));
     });
   }
 
@@ -972,6 +1406,8 @@ export default function App() {
   }
 
   async function handleIterateAgain() {
+    const shouldAutoRun = autoIterationLimitRef.current > 0;
+    const autoRunToken = shouldAutoRun ? beginAutoRun() : 0;
     await runSafely("generating", async () => {
       requireLlmApiKey();
       if (!project.review) {
@@ -1016,26 +1452,41 @@ export default function App() {
           })
         ]
       }));
-      const { code, trace } = await proposeRevision({
-        apiKey: llmApiKey,
-        modelId: project.codeModelId,
-        requirement: originalRequirement,
-        code: project.currentCode,
-        review: project.review,
-        userNotes: iterationPrompt,
-        renderEvidence: project.renderEvidence,
-        precision: "draft",
-        onToken: (streamedCode) => {
-          setProject((current) => ({
-            ...current,
-            currentCode: streamedCode,
-            compilerOutput: tr("streamingIteration"),
-            runEvents: current.runEvents.map((event) =>
-              event.id === codeEventId ? { ...event, code: streamedCode } : event
-            )
-          }));
+      let revision: Awaited<ReturnType<typeof proposeRevision>>;
+      try {
+        revision = await proposeRevision({
+          apiKey: llmApiKey,
+          modelId: project.codeModelId,
+          requirement: originalRequirement,
+          code: project.currentCode,
+          review: project.review,
+          userNotes: iterationPrompt,
+          renderEvidence: project.renderEvidence,
+          precision: "draft",
+          onToken: (streamedCode) => {
+            if (shouldAutoRun && autoRunTokenRef.current !== autoRunToken) {
+              return;
+            }
+            setProject((current) => ({
+              ...current,
+              currentCode: streamedCode,
+              compilerOutput: tr("streamingIteration"),
+              runEvents: current.runEvents.map((event) =>
+                event.id === codeEventId ? { ...event, code: streamedCode } : event
+              )
+            }));
+          }
+        });
+      } catch (caught) {
+        if (shouldAutoRun) {
+          ensureAutoRunCurrent(autoRunToken);
         }
-      });
+        throw caught;
+      }
+      const { code, trace } = revision;
+      if (shouldAutoRun) {
+        ensureAutoRunCurrent(autoRunToken);
+      }
       setProject((current) => ({
         ...current,
         currentCode: code,
@@ -1071,25 +1522,41 @@ export default function App() {
         content: tr("renderStarted")
       }));
       let finalCode = code;
-      let rendered = await compileDraftCode(code);
+      let rendered = await compileDraftCode(code, shouldAutoRun ? autoRunToken : undefined);
+      if (shouldAutoRun) {
+        ensureAutoRunCurrent(autoRunToken);
+      }
       if (!rendered.ok || !rendered.views || !rendered.stl) {
         const repaired = await repairDraftCompileIfPossible({
           code,
           rendered,
           originalRequirement,
-          sourceCodeEventId: codeEventId
+          sourceCodeEventId: codeEventId,
+          autoRunToken: shouldAutoRun ? autoRunToken : undefined
         });
         finalCode = repaired.code;
         rendered = repaired.rendered;
+        if (shouldAutoRun) {
+          ensureAutoRunCurrent(autoRunToken);
+        }
       }
       if (!rendered.ok || !rendered.views || !rendered.stl) {
+        if (shouldAutoRun) {
+          ensureAutoRunCurrent(autoRunToken);
+        }
         setProject((current) => ({
           ...current,
           ...diagnosticFixPatch(current, rendered.diagnostics, rendered.evidence),
           promptTrace: [...current.promptTrace, rendered.trace],
           updatedAt: new Date().toISOString()
         }));
+        if (shouldAutoRun) {
+          appendRunEvent(autoRunStopEvent(tr("autoRunCompileStopped")));
+        }
         throw new Error(rendered.diagnostics);
+      }
+      if (shouldAutoRun) {
+        ensureAutoRunCurrent(autoRunToken);
       }
       appendRunEvent(createRunEvent({
         role: "tool",
@@ -1119,6 +1586,16 @@ export default function App() {
           }
         ]
       }));
+      if (shouldAutoRun) {
+        ensureAutoRunCurrent(autoRunToken);
+        await runBoundedConfidenceLoop({
+          autoRunToken,
+          originalRequirement,
+          code: finalCode,
+          views: rendered.views,
+          renderEvidence: rendered.evidence
+        });
+      }
     });
   }
 
@@ -1241,6 +1718,7 @@ export default function App() {
   }
 
   function handleNewModel() {
+    cancelActiveAutoRun();
     const next = createEmptyProject();
     setProjectList((current) => upsertProjectList(current, next));
     setProject(next);
@@ -1249,6 +1727,7 @@ export default function App() {
   }
 
   function handleSelectProject(projectId: string) {
+    cancelActiveAutoRun();
     const selected = projectList.find((item) => item.id === projectId);
     if (!selected) {
       return;
@@ -1267,6 +1746,7 @@ export default function App() {
   }
 
   function handleCodeEdit(code: string) {
+    cancelActiveAutoRun();
     setProject((current) => ({
       ...current,
       currentCode: code,
@@ -1280,6 +1760,7 @@ export default function App() {
   }
 
   function handleImport(event: ChangeEvent<HTMLInputElement>) {
+    cancelActiveAutoRun();
     const file = event.target.files?.[0];
     if (!file) {
       return;
@@ -1314,6 +1795,41 @@ export default function App() {
               <small>{tr("basicSettingsSummary")}</small>
             </summary>
             <div className="sidebarSettingsBody">
+              <div className="fieldGroup autoRunField">
+                <span>{tr("autoRunSettings")}</span>
+                <label className="rangeField">
+                  <span>{tr("targetConfidence")}</span>
+                  <div className="rangeInputRow">
+                    <input
+                      aria-label={tr("targetConfidence")}
+                      disabled={controlsLocked}
+                      max={MAX_TARGET_CONFIDENCE_PERCENT}
+                      min={MIN_TARGET_CONFIDENCE_PERCENT}
+                      onChange={(event) => updateTargetConfidence(Number(event.target.value))}
+                      onInput={(event) => updateTargetConfidence(Number(event.currentTarget.value))}
+                      step={1}
+                      type="range"
+                      value={targetConfidencePercent}
+                    />
+                    <output>{targetConfidencePercent}%</output>
+                  </div>
+                </label>
+                <label className="numberField">
+                  <span>{tr("autoIterations")}</span>
+                  <input
+                    aria-label={tr("autoIterations")}
+                    disabled={controlsLocked}
+                    max={MAX_AUTO_ITERATION_LIMIT}
+                    min={MIN_AUTO_ITERATION_LIMIT}
+                    onChange={(event) => updateAutoIterationLimit(Number(event.target.value))}
+                    onInput={(event) => updateAutoIterationLimit(Number(event.currentTarget.value))}
+                    step={1}
+                    type="number"
+                    value={autoIterationLimit}
+                  />
+                </label>
+              </div>
+
               <label>
                 <div className="fieldHeader">
                   <span>{tr("llmApiKey")}</span>
@@ -1322,6 +1838,7 @@ export default function App() {
                 <div className="keyInput">
                   <KeyRound size={16} />
                   <input
+                    disabled={controlsLocked}
                     value={llmApiKey}
                     onChange={(event) => setLlmApiKey(event.target.value)}
                     placeholder="sk-..."
@@ -1335,6 +1852,7 @@ export default function App() {
                 models={CODE_MODEL_PRESETS}
                 value={project.codeModelId}
                 onChange={(codeModelId) => updateProject({ codeModelId })}
+                disabled={controlsLocked}
               />
 
               <label>
@@ -1345,6 +1863,7 @@ export default function App() {
                 <div className="keyInput">
                   <KeyRound size={16} />
                   <input
+                    disabled={controlsLocked}
                     value={visionApiKey}
                     onChange={(event) => setVisionApiKey(event.target.value)}
                     placeholder="sk-..."
@@ -1358,6 +1877,7 @@ export default function App() {
                 models={VISION_MODEL_PRESETS}
                 value={project.visionModelId}
                 onChange={(visionModelId) => updateProject({ visionModelId })}
+                disabled={controlsLocked}
               />
             </div>
           </details>
@@ -1365,14 +1885,23 @@ export default function App() {
           <section className="projectTools">
             <span>{tr("projectFiles")}</span>
             <div className="projectToolActions">
-              <label className="projectToolButton fileButton" title={tr("importProject")}>
+              <label
+                aria-disabled={controlsLocked}
+                className="projectToolButton fileButton"
+                title={tr("importProject")}
+              >
                 <FileUp size={15} />
                 <span>{tr("importProject")}</span>
-                <input accept="application/json" type="file" onChange={handleImport} />
+                <input
+                  accept="application/json"
+                  disabled={controlsLocked}
+                  type="file"
+                  onChange={handleImport}
+                />
               </label>
               <button
                 className="projectToolButton"
-                disabled={hasPendingRevision}
+                disabled={hasPendingRevision || controlsLocked}
                 title={hasPendingRevision ? tr("exportProjectPending") : tr("exportProject")}
                 onClick={() =>
                   downloadText("ai-openscad-project.json", exportProject(project))
@@ -1386,6 +1915,7 @@ export default function App() {
 
           <button
             className="newModelButton"
+            disabled={controlsLocked}
             title={tr("newModelHint")}
             onClick={handleNewModel}
           >
@@ -1399,6 +1929,7 @@ export default function App() {
               {projectList.map((item) => (
                 <button
                   aria-pressed={item.id === project.id}
+                  disabled={controlsLocked}
                   key={item.id}
                   onClick={() => handleSelectProject(item.id)}
                   type="button"
@@ -1497,7 +2028,7 @@ export default function App() {
             </div>
           </section>
 
-          <details className="codeDisclosure">
+          <details className="codeDisclosure" open={autoRunActive ? true : undefined}>
             <summary>
               <span>
                 <Code2 size={17} />
@@ -1520,7 +2051,7 @@ export default function App() {
                 <div className="inlineActions">
                   <button
                     className="smallButton success"
-                    disabled={isBusy}
+                    disabled={isBusy || controlsLocked}
                     onClick={handleAcceptRevision}
                   >
                     <Check size={15} />
@@ -1528,6 +2059,7 @@ export default function App() {
                   </button>
                   <button
                     className="smallButton"
+                    disabled={isBusy || controlsLocked}
                     onClick={() => setProject((current) => rejectRevision(current))}
                   >
                     <X size={15} />
@@ -1666,6 +2198,7 @@ function ModelPicker(props: {
   models: ModelPreset[];
   value: string;
   onChange: (modelId: string) => void;
+  disabled?: boolean;
 }) {
   return (
     <div className="fieldGroup">
@@ -1674,6 +2207,7 @@ function ModelPicker(props: {
         {props.models.map((model) => (
           <button
             aria-pressed={model.id === props.value}
+            disabled={props.disabled}
             key={model.id}
             onClick={() => props.onChange(model.id)}
             type="button"
