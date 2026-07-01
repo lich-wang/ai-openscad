@@ -1,6 +1,8 @@
 import { createModelRequest } from "./models";
 import {
   buildCodeSystemPrompt,
+  buildReferenceImageSystemPrompt,
+  buildReferenceImageUserPrompt,
   buildRevisionPrompt,
   buildVisionSystemPrompt,
   buildVisionUserPrompt
@@ -82,6 +84,38 @@ export async function reviewViews(input: {
       systemPrompt,
       userPrompt,
       response: content,
+      apiKey: input.apiKey
+    })
+  };
+}
+
+export async function describeReferenceImages(input: {
+  apiKey: string;
+  modelId: string;
+  images: string[];
+}): Promise<{ prompt: string; trace: PromptTraceEntry }> {
+  const systemPrompt = buildReferenceImageSystemPrompt();
+  const userPrompt = buildReferenceImageUserPrompt(input.images.length);
+  const request = createModelRequest({
+    apiKey: input.apiKey,
+    modelId: input.modelId,
+    mode: "vision",
+    systemPrompt,
+    userPrompt,
+    images: input.images,
+    responseFormat: "json"
+  });
+  assertVisionPayloadWithinBudget(request);
+  const content = await sendGatewayRequest(request);
+  const prompt = parseReferenceImagePrompt(content);
+  return {
+    prompt,
+    trace: createPromptTraceEntry({
+      phase: "reference-image-draft",
+      modelId: input.modelId,
+      systemPrompt,
+      userPrompt,
+      response: prompt,
       apiKey: input.apiKey
     })
   };
@@ -247,8 +281,26 @@ async function sendGatewayStream(
 }
 
 function stripCodeFence(content: string): string {
-  const match = content.match(/```(?:openscad|scad)?\s*([\s\S]*?)```/i);
+  const match = content.match(/```(?:[a-z0-9_-]+)?\s*([\s\S]*?)```/i);
   return (match?.[1] ?? content).trim();
+}
+
+function parseReferenceImagePrompt(content: string): string {
+  const trimmed = stripCodeFence(content);
+  try {
+    const parsed = JSON.parse(trimmed) as { prompt?: unknown };
+    if (typeof parsed.prompt === "string" && parsed.prompt.trim()) {
+      return parsed.prompt.trim();
+    }
+  } catch {
+    if (trimmed) {
+      return trimmed;
+    }
+  }
+  if (!trimmed) {
+    throw new Error("Reference image prompt is empty.");
+  }
+  return trimmed;
 }
 
 function parseReview(content: string, requirement = "", strictConfidence = false): VisionReview {

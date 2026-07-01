@@ -53,42 +53,47 @@ three columns:
 
 ### Main Workflow
 
-1. User writes a requirement, for example a six-slot organizer or a 30 ml cup.
-2. User clicks **Generate**.
-3. The code model streams OpenSCAD into the center chat stream in real time.
-4. After the complete code arrives, the run stream collapses the code preview
+1. User writes a requirement, for example a six-slot organizer or a 30 ml cup,
+   or uploads one or more reference images and asks the vision model to draft
+   that requirement as an editable target-model prompt.
+2. The reference-image prompt draft, when used, replaces the composer text but
+   does not submit the model request. The user can edit the generated prompt
+   before continuing.
+3. User clicks **Generate**.
+4. The code model streams OpenSCAD into the center chat stream in real time.
+5. After the complete code arrives, the run stream collapses the code preview
    and the render adapter compiles the generated OpenSCAD in the browser.
    Compile failure, or a "successful" STL with unsafe OpenSCAD diagnostics that
    indicate invalid or missing geometry, automatically triggers a bounded
    compiler-repair text generation using the failed code and readable
    diagnostics.
-5. After a clean render, or after a successful compiler repair produces a clean
+6. After a clean render, or after a successful compiler repair produces a clean
    render, the app shows the STL in a large interactive preview in the right
    result panel so the user can rotate, zoom, and pan the model directly.
-6. The app captures fourteen PNG views from the STL: six orthographic
+7. The app captures fourteen PNG views from the STL: six orthographic
    directions (front, back, left, right, top, bottom) and eight isometric
    directions around the model.
-7. If bounded auto-iteration is disabled, user clicks **Review** after a clean
+8. If bounded auto-iteration is disabled, user clicks **Review** after a clean
    render. If the user preset automatic iterations before clicking
    **Generate**, the app runs the visual review automatically after each clean
    render in that bounded run.
-8. The vision model checks the multi-angle views against the original
+9. The vision model checks the multi-angle views against the original
    requirement and returns a summary, issue list, confidence score as a review
    conclusion, and correction prompt.
-9. The review event displays the confidence percentage together with the
+10. The review event displays the confidence percentage together with the
    summary. The correction prompt is shown once for that review, then becomes
    editable in the composer for manual iteration and gives concrete
    instructions about which OpenSCAD areas or geometry relationships should be
    changed. Review confidence is displayed as part of the review conclusion,
    but is not copied into the correction prompt and is not sent to the text LLM.
-10. User clicks **Iterate Again** to send the latest accepted/rendered
+11. User clicks **Iterate Again** to send the latest accepted/rendered
    OpenSCAD, the original requirement, review findings, and editable iteration
    guidance to the LLM, then generate and render the next draft. If the user
    preset automatic iterations before clicking **Iterate Again**, the app can
    continue with bounded follow-up review and revision cycles until the target
    confidence is reached or the iteration limit is exhausted.
-11. User clicks **Final Export** when satisfied.
-12. The app normalizes the model to final precision and downloads `.scad` and
+12. User clicks **Final Export** when satisfied.
+13. The app normalizes the model to final precision and downloads `.scad` and
     `.stl` files.
 
 ### User Control Rules
@@ -97,6 +102,21 @@ three columns:
   LLM or start an image-driven rewrite loop unless the user has explicitly
   started a bounded confidence run by clicking **Generate** or **Iterate Again**
   with automatic iterations set above zero.
+- Reference-image input is a separate, user-triggered prompt-drafting action
+  before code generation. The user may upload one or more local image files,
+  call the configured vision model to describe the intended target model, and
+  receive a concise editable prompt in the same composer used for text
+  requirements. This action must never call the code model, render OpenSCAD,
+  start visual review, or start a bounded confidence loop by itself.
+- Reference images are transient browser inputs for the current prompt-drafting
+  request. They are sent only to `/api/vision` for the explicit drafting action,
+  are not stored in exported project JSON, are not included in later code or
+  review provider requests, and may be cleared by the user before generation.
+- The generated reference-image prompt replaces the composer requirement text
+  and clears stale render/review output exactly like a manual requirement edit.
+  The generated prompt is shown as editable text before **Generate** becomes the
+  next user action, so the user can correct hallucinated dimensions, missing
+  printability constraints, or ambiguous object details.
 - In a bounded confidence run, each clean render is followed by visual
   review. If review confidence meets or exceeds the user preset target
   confidence, the run stops with that review conclusion. If confidence is below
@@ -173,6 +193,13 @@ three columns:
   events are visible as separate records.
 - The primary composer action follows project state: generate before rendering,
   review after rendering, and iterate again after review.
+- The composer also provides a reference-image input before generation. It
+  accepts multiple image files, shows compact thumbnails or filenames with clear
+  remove/clear affordances, and exposes a secondary action named
+  `Describe reference images` in English and the localized equivalent in
+  Chinese. The action is enabled only when at least one image is selected, a
+  vision model can be called, the workbench is idle, and no pending revision is
+  waiting for acceptance.
 - The left settings surface lets the user set a target review confidence and
   automatic iteration count before starting **Generate** or **Iterate Again**.
   These controls affect only future user-started runs; changing them while idle
@@ -218,6 +245,15 @@ Workbench acceptance criteria:
   pending revision is waiting for acceptance, the composer shows an acceptance
   hint instead of Generate, Review, or Iterate Again; the user must accept or
   reject the revision before continuing the main workflow.
+- While a reference-image prompt draft is running, model settings, project
+  import/export, new model, local project navigation, the composer textarea,
+  reference-image controls, and all workflow actions are disabled or read-only.
+  The in-flight request is bound to the current project id, selected image
+  fingerprints, and composer baseline text. A late response must be ignored if
+  the project changed, the selected image set changed, the composer text changed
+  outside the drafting request, or a newer drafting request started. If the
+  provider call fails, the selected images and the composer text captured when
+  the request started remain available for retry or manual editing.
 - During an active bounded confidence run, Generate, Review, Iterate Again,
   Rerender, Final Export, Accept Revision, Reject Revision, project import,
   project export, new model, local model navigation, and the target-confidence
@@ -399,6 +435,29 @@ Workbench acceptance criteria:
   review-confidence failure. Final export tests must also cover a final-precision
   render that returns STL plus unsafe diagnostics and verify that no final files
   are downloaded.
+- Automated E2E coverage must verify the reference-image drafting flow: multiple
+  uploaded images are sent to `/api/vision`, the response fills the editable
+  requirement composer without calling `/api/llm`, the user can edit that prompt
+  before **Generate**, stale render/review state is cleared, and the subsequent
+  generation request uses the edited text rather than the raw image payload.
+- Unit and E2E coverage must verify reference-image request boundaries and stale
+  response protection: the `/api/vision` drafting payload includes only the
+  selected images and prompt-drafting instruction, not OpenSCAD code,
+  renderEvidence, rendered review images, review history, prompt traces, or STL
+  data; the prompt trace uses a reference-image drafting phase distinct from
+  visual review; no `/api/llm`, render, visual review, or bounded auto-loop
+  starts from the drafting response alone; project export excludes reference
+  images; provider failure preserves selected images and the composer text
+  captured when the request started; success
+  clears `currentCode`, `proposedCode`, `review`, `stl`, `views`, and
+  `renderEvidence`; and stale/late vision responses after a project switch,
+  image-set change, composer edit, or newer draft request are ignored.
+- E2E and local visual-regression coverage must also cover the reference-image
+  composer UI: empty state, multiple-image selected state, single-image removal,
+  clear-all, draft button enabled/disabled states, disabled/read-only state
+  while drafting, provider failure preserving visible images and the composer
+  text captured when the request started, and narrow layout where thumbnails or
+  filenames, remove controls, and clear controls do not overflow or overlap.
 - Automated E2E coverage must verify that review UI displays the confidence
   percentage in the review conclusion and renders exactly one correction prompt
   block per review event. It must also cover lower-confidence automatic
@@ -511,6 +570,36 @@ Workbench acceptance criteria:
   if the combined provider request would exceed the browser/gateway payload
   budget, the app stops before calling the vision endpoint, shows a readable
   error in the center stream, and keeps rerender/retry available.
+
+### Reference Image Prompt Drafting
+
+- Sends only the user-selected reference images and a short instruction to the
+  vision endpoint. It does not send OpenSCAD code, STL data, rendered review
+  images, render evidence, prior reviews, prompt traces, API keys, or hidden
+  project history.
+- Accepts JSON with `prompt`, or plain text when a provider does not follow the
+  JSON contract. The final prompt is trimmed, must be non-empty, and should
+  describe the physical target model in printable OpenSCAD-friendly terms:
+  object category, visible parts, approximate proportions, key dimensions when
+  inferable, symmetry, openings, handles, holes, text, decorative surfaces, and
+  constraints that should be preserved. It should not return OpenSCAD code.
+- A successful draft appends a vision prompt trace, records an Agent Run event,
+  fills the editable requirement composer, clears stale current code, pending
+  revision, review, STL, rendered views, and render evidence, and leaves the
+  workflow at the pre-generation state. The trace stores the text instruction,
+  model id, and returned prompt only; it must not store uploaded image data
+  URLs, binary image payloads, or thumbnail object URLs.
+- A failed draft keeps the uploaded images and the composer text captured when
+  the request started visible, shows a readable workflow error, and leaves
+  **Generate** unavailable until the user has a non-empty requirement or retries
+  the reference-image draft.
+  Reference-image drafting is not part of review confidence and never consumes
+  automatic iteration budget.
+- The drafting response may update the project only when it still matches the
+  active project id, selected-image fingerprints, composer baseline text, and
+  latest drafting request token captured when the request started. Otherwise
+  the response is discarded without changing the composer, project state, or run
+  events.
 
 ### Review And Iteration
 
@@ -699,6 +788,10 @@ The core project state contains:
 - Runtime output: `compilerOutput`, `renderEvidence`, `review`, `runEvents`
 - Audit trail: `iterations`, `promptTrace`
 
+Reference-image file selections, preview object URLs, and in-flight prompt
+draft state are local UI state only. They are not part of project export/import
+and are cleared by page reload, project import, project switch, or new model.
+
 Workbench preference state in browser `localStorage` also includes:
 
 - `targetConfidencePercent`: integer percent, default `85`, clamped to `1-100`
@@ -740,7 +833,10 @@ file or calls an external model provider through the gateway.
 The frontend calls:
 
 - `POST /api/llm` for code generation and revision.
-- `POST /api/vision` for visual review.
+- `POST /api/vision` for visual review and user-triggered reference-image
+  prompt drafting. The two request types use different system/user prompts and
+  trace phases; reference-image drafting never sends rendered model review
+  evidence.
 
 Both endpoints are Cloudflare Pages Functions that proxy OpenAI-compatible chat
 completion requests to configured providers.
@@ -778,6 +874,9 @@ The app should preserve these guarantees:
   views and no unsafe diagnostics; source SCAD download is available whenever
   current code exists.
 - Review requests include rendered images.
+- Reference-image prompt drafting requests include only user-selected reference
+  images, fill an editable requirement prompt, and do not call the code model
+  until the user clicks **Generate**.
 - Review does not trigger text generation unless it is part of an explicit
   user-started bounded confidence run with remaining automatic iterations.
 - New iterations clear stale review state.

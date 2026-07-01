@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  describeReferenceImages,
   buildGenerationRequest,
   buildRevisionRequest,
   estimateTokenUsage,
@@ -23,6 +24,8 @@ const reviewImages = [
   "data:image/png;base64,iso-back-right-bottom",
   "data:image/png;base64,iso-back-left-bottom"
 ];
+const uploadedReferenceImagePayload =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADElEQVR42mP8z8AARQAFAAH/AnH9zAAAAABJRU5ErkJggg==";
 
 describe("apiClient prompt assembly", () => {
   it("adds Chinese output instruction for Chinese requirements", () => {
@@ -253,6 +256,93 @@ describe("apiClient prompt assembly", () => {
     ).rejects.toThrow(/vision payload/i);
 
     expect(fetchMock).not.toHaveBeenCalled();
+    vi.unstubAllGlobals();
+  });
+
+  it("drafts a target prompt from reference images without saving image payloads in trace", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        content: JSON.stringify({
+          prompt:
+            "A printable wall-mounted cup holder with a rounded cradle, screw holes, and 80mm height."
+        })
+      })
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { prompt, trace } = await describeReferenceImages({
+      apiKey: "sk-user",
+      modelId: "mimo-v2.5",
+      images: [
+        `data:image/png;base64,${uploadedReferenceImagePayload}`,
+        `data:image/jpeg;base64,${uploadedReferenceImagePayload}`
+      ]
+    });
+
+    expect(prompt).toContain("wall-mounted cup holder");
+    expect(trace).toMatchObject({
+      phase: "reference-image-draft",
+      modelId: "mimo-v2.5",
+      response: expect.stringContaining("wall-mounted cup holder")
+    });
+    expect(trace.userPrompt).toContain("2 reference images");
+    const serializedTrace = JSON.stringify(trace);
+    expect(serializedTrace).not.toContain("data:image");
+    expect(serializedTrace).not.toContain("blob:");
+    expect(serializedTrace).not.toContain(uploadedReferenceImagePayload);
+    expect(serializedTrace).not.toContain("referenceImages");
+
+    const body = JSON.parse(String(fetchMock.mock.calls[0][1]?.body)) as {
+      messages: Array<{ content: unknown }>;
+    };
+    const userContent = JSON.stringify(body.messages[1].content);
+    expect(fetchMock.mock.calls[0][0]).toBe("/api/vision");
+    expect(
+      Array.isArray(body.messages[1].content)
+        ? body.messages[1].content.filter(
+            (part): part is { type: "image_url"; image_url: { url: string } } =>
+              Boolean(
+                part &&
+                  typeof part === "object" &&
+                  "type" in part &&
+                  part.type === "image_url" &&
+                  "image_url" in part
+              )
+          )
+        : []
+    ).toHaveLength(2);
+    expect(userContent).toContain(uploadedReferenceImagePayload);
+    expect(userContent).toContain("target model prompt");
+    expect(userContent).not.toContain("cube(10)");
+    expect(userContent).not.toContain("Render evidence");
+    expect(userContent).not.toContain("promptTrace");
+    expect(userContent).not.toContain("solid ");
+
+    vi.unstubAllGlobals();
+  });
+
+  it("accepts plain text reference-image prompt drafts when the vision model skips JSON", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          content:
+            "Create a printable desk stand with two rounded support fins and a shallow front lip."
+        })
+      })
+    );
+
+    const { prompt } = await describeReferenceImages({
+      apiKey: "sk-user",
+      modelId: "mimo-v2.5",
+      images: ["data:image/png;base64,reference"]
+    });
+
+    expect(prompt).toBe(
+      "Create a printable desk stand with two rounded support fins and a shallow front lip."
+    );
     vi.unstubAllGlobals();
   });
 

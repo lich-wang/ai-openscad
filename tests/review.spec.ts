@@ -57,6 +57,7 @@ const emptyViews = Object.fromEntries(viewKeys.map((key) => [key, ""])) as Recor
 >;
 const pixel =
   "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADElEQVR42mP8z8AARQAFAAH/AnH9zAAAAABJRU5ErkJggg==";
+const referenceImagePayload = pixel.split(",")[1];
 
 const project = {
   id: "project-review-test",
@@ -96,6 +97,14 @@ function sseChunks(text: string): string {
     "data: [DONE]",
     ""
   ].join("\n");
+}
+
+function referenceImageFile(name: string) {
+  return {
+    name,
+    mimeType: "image/png",
+    buffer: Buffer.from(pixel.split(",")[1], "base64")
+  };
 }
 
 async function expectTimelineOrder(page: Page, labels: string[]) {
@@ -375,7 +384,7 @@ test("oversized fourteen-view payload fails before vision and keeps retry contro
   });
 
   await page.goto("/");
-  await page.locator('input[type="file"]').setInputFiles({
+  await page.locator(".projectTools input[type='file']").setInputFiles({
     name: "oversized-fourteen-view-project.json",
     mimeType: "application/json",
     buffer: Buffer.from(JSON.stringify(oversizedProject))
@@ -393,6 +402,557 @@ test("oversized fourteen-view payload fails before vision and keeps retry contro
   await expect(reviewButton).toBeEnabled();
   await expect(page.getByRole("button", { name: /^Rerender$/i })).toBeEnabled();
   expect(visionRequests).toBe(0);
+});
+
+test("reference images draft an editable requirement before generation", async ({
+  page
+}, testInfo) => {
+  test.setTimeout(75_000);
+  await page.addInitScript((storedProject) => {
+    localStorage.setItem("ai-openscad.llm-api-key", "sk-llm");
+    localStorage.setItem("ai-openscad.vision-api-key", "sk-vision");
+    localStorage.setItem(
+      "ai-openscad.project",
+      JSON.stringify({
+        ...storedProject,
+        requirement: "旧的杯子需求",
+        originalRequirement: "旧的杯子需求",
+        currentCode: "cube(10);",
+        proposedCode: "",
+        stl: "solid stale\nendsolid stale",
+        renderEvidence: {
+          compileStatus: "success",
+          diagnostics: "Compiled stale draft.",
+          renderPrecision: "draft",
+          backend: "web-manifold",
+          viewCount: 14
+        },
+        review: {
+          summary: "旧评审",
+          issues: ["旧问题"],
+          correctionPrompt: "旧修正提示词",
+          confidence: 0.7
+        },
+        promptTrace: [
+          {
+            id: "stale-trace",
+            createdAt: "2026-06-25T00:00:00.000Z",
+            phase: "code-generation",
+            modelId: "mimo-v2.5",
+            systemPrompt: "OLD_TRACE_SYSTEM_SECRET",
+            userPrompt: "OLD_TRACE_USER_SECRET",
+            response: "OLD_TRACE_RESPONSE_SECRET"
+          }
+        ]
+      })
+    );
+  }, project);
+
+  let visionRequests = 0;
+  let llmRequests = 0;
+  let visionPayload = "";
+  let generationPayload = "";
+  await page.route("**/api/vision", async (route) => {
+    visionRequests += 1;
+    const body = route.request().postDataJSON() as {
+      messages: Array<{ content: unknown }>;
+    };
+    visionPayload = JSON.stringify(body.messages[1].content);
+    expect(imageUrlsFromVisionContent(body.messages[1].content)).toHaveLength(2);
+    expect(visionPayload).toContain(referenceImagePayload);
+    expect(visionPayload).toContain("target model prompt");
+    expect(visionPayload).not.toContain("reference-front.png");
+    expect(visionPayload).not.toContain("reference-side.png");
+    expect(visionPayload).not.toContain("cube(10)");
+    expect(visionPayload).not.toContain("Compiled stale draft");
+    expect(visionPayload).not.toContain("旧评审");
+    expect(visionPayload).not.toContain("OLD_TRACE");
+    expect(visionPayload).not.toContain("promptTrace");
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        content: JSON.stringify({
+          prompt:
+            "生成一个可3D打印的壁挂杯架，包含圆弧托杯槽、两个沉头螺丝孔和加强筋。"
+        })
+      })
+    });
+  });
+  await page.route("**/api/llm", async (route) => {
+    llmRequests += 1;
+    generationPayload = JSON.stringify(route.request().postDataJSON());
+    await route.fulfill({
+      status: 200,
+      contentType: "text/event-stream",
+      body: sseChunks("cube(10);")
+    });
+  });
+
+  await page.setViewportSize({ width: 1440, height: 980 });
+  await page.goto("/");
+  const referenceInput = page.getByLabel("Reference images");
+  const describeButton = page.getByRole("button", { name: "Describe reference images" });
+  await expect(describeButton).toBeDisabled();
+  await referenceInput.setInputFiles([
+    referenceImageFile("reference-front.png"),
+    referenceImageFile("reference-side.png")
+  ]);
+  await expect(page.getByText("reference-front.png")).toBeVisible();
+  await expect(page.getByText("reference-side.png")).toBeVisible();
+  await expect(describeButton).toBeEnabled();
+
+  await describeButton.click();
+  await expect(page.locator(".agentInput")).toHaveValue(/壁挂杯架/, { timeout: 30_000 });
+  await expect(page.locator(".agentInput")).toBeEnabled();
+  expect(visionRequests).toBe(1);
+  expect(llmRequests).toBe(0);
+  await expect(page.locator(".agentRun")).toContainText(/Reference prompt drafted/i);
+  await page.locator(".workspace").screenshot({
+    path: testInfo.outputPath("reference-image-draft-filled.png")
+  });
+
+  const storedAfterDraft = await page.evaluate(() =>
+    JSON.parse(localStorage.getItem("ai-openscad.project") ?? "{}")
+  );
+  expect(storedAfterDraft.requirement).toContain("壁挂杯架");
+  expect(storedAfterDraft.originalRequirement).toBe("");
+  expect(storedAfterDraft.currentCode).toBe("");
+  expect(storedAfterDraft.proposedCode).toBe("");
+  expect(storedAfterDraft.review).toBeNull();
+  expect(storedAfterDraft.stl).toBe("");
+  expect(storedAfterDraft.renderEvidence).toBeNull();
+  expect(Object.values(storedAfterDraft.views).every((value) => value === "")).toBe(true);
+  const serializedStoredAfterDraft = JSON.stringify(storedAfterDraft);
+  expect(serializedStoredAfterDraft).not.toContain("reference-front");
+  expect(serializedStoredAfterDraft).not.toContain("data:image/png;base64");
+  expect(serializedStoredAfterDraft).not.toContain(referenceImagePayload);
+  expect(serializedStoredAfterDraft).not.toContain("blob:");
+  expect(serializedStoredAfterDraft).not.toContain("referenceImages");
+  expect(storedAfterDraft.promptTrace.at(-1)).toMatchObject({
+    phase: "reference-image-draft",
+    response: expect.stringContaining("壁挂杯架")
+  });
+  const latestTrace = JSON.stringify(storedAfterDraft.promptTrace.at(-1));
+  expect(latestTrace).not.toContain("data:image");
+  expect(latestTrace).not.toContain(referenceImagePayload);
+  expect(latestTrace).not.toContain("blob:");
+  expect(latestTrace).not.toContain("referenceImages");
+  await page.evaluate(() => {
+    (window as typeof window & {
+      __exportedProject?: { filename: string; content: string };
+    }).__exportedProject = undefined;
+    const originalCreateObjectUrl = URL.createObjectURL.bind(URL);
+    const blobTextByUrl: Record<string, Promise<string>> = {};
+    URL.createObjectURL = ((blob: Blob | MediaSource) => {
+      const url = originalCreateObjectUrl(blob);
+      if (blob instanceof Blob) {
+        blobTextByUrl[url] = blob.text();
+      }
+      return url;
+    }) as typeof URL.createObjectURL;
+    HTMLAnchorElement.prototype.click = function captureProjectExport() {
+      const blobText = blobTextByUrl[this.href];
+      if (!blobText) {
+        return;
+      }
+      void blobText.then((content) => {
+        (
+          window as typeof window & {
+            __exportedProject?: { filename: string; content: string };
+          }
+        ).__exportedProject = { filename: this.download, content };
+      });
+    };
+  });
+  await page.locator(".projectTools").getByRole("button", { name: /Export/i }).click();
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          Boolean(
+            (window as typeof window & {
+              __exportedProject?: { filename: string; content: string };
+            }).__exportedProject
+          )
+      )
+    )
+    .toBe(true);
+  const exportedProject = await page.evaluate(
+    () =>
+      (window as typeof window & {
+        __exportedProject: { filename: string; content: string };
+      }).__exportedProject
+  );
+  expect(exportedProject.filename).toBe("ai-openscad-project.json");
+  expect(exportedProject.content).toContain("壁挂杯架");
+  expect(exportedProject.content).not.toContain("reference-front");
+  expect(exportedProject.content).not.toContain("reference-side");
+  expect(exportedProject.content).not.toContain("data:image");
+  expect(exportedProject.content).not.toContain(referenceImagePayload);
+  expect(exportedProject.content).not.toContain("blob:");
+  expect(exportedProject.content).not.toContain("referenceImages");
+  expect(exportedProject.content).not.toContain("solid stale");
+  expect(JSON.parse(exportedProject.content)).toMatchObject({
+    currentCode: "",
+    proposedCode: "",
+    review: null,
+    stl: "",
+    renderEvidence: null
+  });
+
+  await page.locator(".agentInput").fill(
+    "生成一个可3D打印的壁挂杯架，包含圆弧托杯槽、两个沉头螺丝孔和加强筋，高度80mm。"
+  );
+  await page.getByRole("button", { name: /^Generate$/i }).click();
+  await expect.poll(() => llmRequests, { timeout: 30_000 }).toBe(1);
+  expect(generationPayload).toContain("高度80mm");
+  expect(generationPayload).toContain("壁挂杯架");
+  expect(generationPayload).not.toContain("reference-front");
+  expect(generationPayload).not.toContain("data:image");
+  expect(generationPayload).not.toContain(referenceImagePayload);
+  expect(generationPayload).not.toContain("OLD_TRACE");
+});
+
+test("pending revision blocks reference image prompt drafting", async ({ page }) => {
+  await page.addInitScript((storedProject) => {
+    localStorage.setItem("ai-openscad.vision-api-key", "sk-vision");
+    localStorage.setItem(
+      "ai-openscad.project",
+      JSON.stringify({
+        ...storedProject,
+        proposedCode: "sphere(5); // PENDING_PROPOSED_SECRET",
+        review: {
+          summary: "已有待确认修订",
+          issues: ["先确认修订"],
+          correctionPrompt: "先接受或拒绝当前修订。",
+          confidence: 0.6
+        },
+        promptTrace: [
+          {
+            id: "pending-old-trace",
+            createdAt: "2026-06-25T00:00:00.000Z",
+            phase: "code-generation",
+            modelId: "mimo-v2.5",
+            systemPrompt: "PENDING_OLD_TRACE_SECRET",
+            userPrompt: "pending old trace",
+            response: "pending old trace"
+          }
+        ]
+      })
+    );
+  }, project);
+
+  let visionRequests = 0;
+  await page.route("**/api/vision", async (route) => {
+    visionRequests += 1;
+    await route.fulfill({
+      status: 500,
+      contentType: "application/json",
+      body: JSON.stringify({ error: "Vision should not run with a pending revision" })
+    });
+  });
+
+  await page.goto("/");
+  await page.getByLabel("Reference images").setInputFiles([
+    referenceImageFile("pending-reference.png")
+  ]);
+  await expect(page.getByText("pending-reference.png")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Describe reference images" })).toBeDisabled();
+  await expect(page.locator(".pendingActionHint")).toBeVisible();
+  await delay(500);
+  expect(visionRequests).toBe(0);
+  const stored = await page.evaluate(() =>
+    JSON.parse(localStorage.getItem("ai-openscad.project") ?? "{}")
+  );
+  expect(stored.proposedCode).toContain("PENDING_PROPOSED_SECRET");
+});
+
+test("late reference image draft responses do not overwrite newer composer state", async ({
+  page
+}) => {
+  await page.addInitScript((storedProject) => {
+    localStorage.setItem("ai-openscad.vision-api-key", "sk-vision");
+    localStorage.setItem(
+      "ai-openscad.project",
+      JSON.stringify({
+        ...storedProject,
+        requirement: "初始手写需求",
+        currentCode: "",
+        views: {
+          front: "",
+          back: "",
+          left: "",
+          right: "",
+          top: "",
+          bottom: "",
+          isoFrontRightTop: "",
+          isoFrontLeftTop: "",
+          isoBackRightTop: "",
+          isoBackLeftTop: "",
+          isoFrontRightBottom: "",
+          isoFrontLeftBottom: "",
+          isoBackRightBottom: "",
+          isoBackLeftBottom: ""
+        },
+        review: null,
+        promptTrace: []
+      })
+    );
+  }, project);
+
+  let releaseFirst = () => {};
+  let firstStarted = () => {};
+  const firstStartedPromise = new Promise<void>((resolve) => {
+    firstStarted = resolve;
+  });
+  const releaseFirstPromise = new Promise<void>((resolve) => {
+    releaseFirst = resolve;
+  });
+  let visionRequests = 0;
+  await page.route("**/api/vision", async (route) => {
+    visionRequests += 1;
+    if (visionRequests === 1) {
+      firstStarted();
+      await releaseFirstPromise;
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          content: JSON.stringify({
+            prompt: "过期响应不应该覆盖用户后续输入。"
+          })
+        })
+      });
+      return;
+    }
+    await route.fulfill({
+      status: 500,
+      contentType: "application/json",
+      body: JSON.stringify({ error: "Unexpected extra reference draft request" })
+    });
+  });
+
+  await page.goto("/");
+  await page.getByLabel("Reference images").setInputFiles([
+    referenceImageFile("late-reference.png")
+  ]);
+  await page.getByRole("button", { name: "Describe reference images" }).click();
+  await firstStartedPromise;
+  await page.locator(".agentInput").evaluate((node) => {
+    const textarea = node as HTMLTextAreaElement;
+    textarea.disabled = false;
+    textarea.value = "用户在旧请求返回前写的新需求";
+    textarea.dispatchEvent(new Event("input", { bubbles: true }));
+    textarea.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+  releaseFirst();
+
+  await delay(500);
+  await expect(page.locator(".agentInput")).toHaveValue("用户在旧请求返回前写的新需求");
+  await expect(page.locator(".agentRun")).not.toContainText("过期响应不应该覆盖");
+  const stored = await page.evaluate(() =>
+    JSON.parse(localStorage.getItem("ai-openscad.project") ?? "{}")
+  );
+  expect(stored.requirement).toBe("用户在旧请求返回前写的新需求");
+  expect(JSON.stringify(stored.promptTrace ?? [])).not.toContain("过期响应不应该覆盖");
+});
+
+test("changed reference image set invalidates late draft responses", async ({ page }) => {
+  await page.addInitScript((storedProject) => {
+    localStorage.setItem("ai-openscad.vision-api-key", "sk-vision");
+    localStorage.setItem(
+      "ai-openscad.project",
+      JSON.stringify({
+        ...storedProject,
+        requirement: "初始手写需求",
+        currentCode: "",
+        views: {
+          front: "",
+          back: "",
+          left: "",
+          right: "",
+          top: "",
+          bottom: "",
+          isoFrontRightTop: "",
+          isoFrontLeftTop: "",
+          isoBackRightTop: "",
+          isoBackLeftTop: "",
+          isoFrontRightBottom: "",
+          isoFrontLeftBottom: "",
+          isoBackRightBottom: "",
+          isoBackLeftBottom: ""
+        },
+        review: null,
+        promptTrace: []
+      })
+    );
+  }, project);
+
+  let releaseFirst = () => {};
+  let firstStarted = () => {};
+  const firstStartedPromise = new Promise<void>((resolve) => {
+    firstStarted = resolve;
+  });
+  const releaseFirstPromise = new Promise<void>((resolve) => {
+    releaseFirst = resolve;
+  });
+  await page.route("**/api/vision", async (route) => {
+    firstStarted();
+    await releaseFirstPromise;
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        content: JSON.stringify({
+          prompt: "第一张图片的过期响应不应该覆盖换图后的输入。"
+        })
+      })
+    });
+  });
+
+  await page.goto("/");
+  const referenceInput = page.getByLabel("Reference images");
+  await referenceInput.setInputFiles([referenceImageFile("first-reference.png")]);
+  await page.getByRole("button", { name: "Describe reference images" }).click();
+  await firstStartedPromise;
+  await referenceInput.evaluate((node, payload) => {
+    const input = node as HTMLInputElement;
+    const bytes = Uint8Array.from(atob(payload as string), (char) => char.charCodeAt(0));
+    const transfer = new DataTransfer();
+    transfer.items.add(
+      new File([bytes], "replacement-reference.png", { type: "image/png" })
+    );
+    input.disabled = false;
+    Object.defineProperty(input, "files", {
+      configurable: true,
+      value: transfer.files
+    });
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+  }, referenceImagePayload);
+  await expect(page.getByText("replacement-reference.png")).toBeVisible();
+  releaseFirst();
+
+  await delay(500);
+  await expect(page.locator(".agentInput")).toHaveValue("初始手写需求");
+  await expect(page.locator(".agentRun")).not.toContainText("第一张图片的过期响应");
+  const stored = await page.evaluate(() =>
+    JSON.parse(localStorage.getItem("ai-openscad.project") ?? "{}")
+  );
+  expect(stored.requirement).toBe("初始手写需求");
+  expect(JSON.stringify(stored.promptTrace ?? [])).not.toContain("第一张图片的过期响应");
+});
+
+test("reference image draft failure preserves selected images and request-start text", async ({
+  page
+}, testInfo) => {
+  test.setTimeout(45_000);
+  await page.addInitScript((storedProject) => {
+    localStorage.setItem("ai-openscad.vision-api-key", "sk-vision");
+    const activeProject = {
+      ...storedProject,
+      requirement: "手写的备用需求",
+      review: null,
+      promptTrace: []
+    };
+    const olderProject = {
+      ...storedProject,
+      id: "project-reference-older",
+      title: "Older reference source",
+      requirement: "旧历史模型",
+      updatedAt: "2026-06-25T00:00:00.000Z"
+    };
+    localStorage.setItem(
+      "ai-openscad.project",
+      JSON.stringify(activeProject)
+    );
+    localStorage.setItem("ai-openscad.projects", JSON.stringify([activeProject, olderProject]));
+    localStorage.setItem("ai-openscad.active-project-id", activeProject.id);
+  }, project);
+
+  let releaseVision = () => {};
+  let visionStarted = () => {};
+  const visionStartedPromise = new Promise<void>((resolve) => {
+    visionStarted = resolve;
+  });
+  const releaseVisionPromise = new Promise<void>((resolve) => {
+    releaseVision = resolve;
+  });
+  let llmRequests = 0;
+  await page.route("**/api/vision", async (route) => {
+    visionStarted();
+    await releaseVisionPromise;
+    await route.fulfill({
+      status: 500,
+      contentType: "application/json",
+      body: JSON.stringify({ error: "Reference image provider unavailable" })
+    });
+  });
+  await page.route("**/api/llm", async (route) => {
+    llmRequests += 1;
+    await route.fulfill({
+      status: 500,
+      contentType: "application/json",
+      body: JSON.stringify({ error: "LLM should not run while drafting from images" })
+    });
+  });
+
+  await page.goto("/");
+  await page.getByLabel("Reference images").setInputFiles([
+    referenceImageFile("failed-front.png"),
+    referenceImageFile("failed-side.png")
+  ]);
+  await page.getByRole("button", { name: "Describe reference images" }).click();
+  await visionStartedPromise;
+
+  await expect(page.locator(".agentInput")).toBeDisabled();
+  await expect(page.getByLabel("Reference images")).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Describe reference images" })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Remove failed-front.png" })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Remove failed-side.png" })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Clear reference images" })).toBeDisabled();
+  await expectButtonAbsentOrDisabled(page, /^Generate$/i);
+  await expect(page.getByRole("button", { name: /^Review$/i })).toBeDisabled();
+  await expect(page.getByRole("button", { name: /^Rerender$/i })).toBeDisabled();
+  await expect(page.getByRole("button", { name: /Final Export/i })).toBeDisabled();
+  await expect(page.locator(".controlPanel").getByRole("button", { name: "New model" })).toBeDisabled();
+  await expect(page.locator(".projectTools input[type='file']")).toBeDisabled();
+  await expect(page.locator(".projectTools").getByRole("button", { name: /Export/i })).toBeDisabled();
+  const historyButtons = page.locator(".modelHistory button");
+  await expect(historyButtons).toHaveCount(2);
+  for (let index = 0; index < await historyButtons.count(); index += 1) {
+    await expect(historyButtons.nth(index)).toBeDisabled();
+  }
+  await page.locator(".workspace").screenshot({
+    path: testInfo.outputPath("reference-image-draft-running.png")
+  });
+
+  releaseVision();
+  await expect(page.locator(".agentRun").getByRole("alert")).toContainText(
+    "Reference image provider unavailable",
+    { timeout: 30_000 }
+  );
+  await expect(page.locator(".agentInput")).toHaveValue("手写的备用需求");
+  await expect(page.locator(".agentInput")).toBeEnabled();
+  await expect(page.getByText("failed-front.png")).toBeVisible();
+  await expect(page.getByText("failed-side.png")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Describe reference images" })).toBeEnabled();
+  await expect(page.getByRole("button", { name: "Remove failed-front.png" })).toBeEnabled();
+  await expect(page.getByRole("button", { name: "Remove failed-side.png" })).toBeEnabled();
+  await expect(page.getByRole("button", { name: "Clear reference images" })).toBeEnabled();
+  await expect(page.getByRole("button", { name: /^Review$/i })).toBeEnabled();
+  await expect(page.getByRole("button", { name: /^Rerender$/i })).toBeEnabled();
+  await expect(page.getByRole("button", { name: /Final Export/i })).toBeEnabled();
+  await expect(page.locator(".controlPanel").getByRole("button", { name: "New model" })).toBeEnabled();
+  await expect(page.locator(".projectTools input[type='file']")).toBeEnabled();
+  await expect(page.locator(".projectTools").getByRole("button", { name: /Export/i })).toBeEnabled();
+  for (let index = 0; index < await historyButtons.count(); index += 1) {
+    await expect(historyButtons.nth(index)).toBeEnabled();
+  }
+  expect(llmRequests).toBe(0);
+  await page.locator(".workspace").screenshot({
+    path: testInfo.outputPath("reference-image-draft-failure.png")
+  });
 });
 
 test("generation streams code and automatically renders draft views", async ({ page }) => {

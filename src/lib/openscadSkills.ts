@@ -96,6 +96,23 @@ ${formatRenderEvidence(renderEvidence)}
 Review whether the rendered views satisfy the requirement. Focus on geometry, missing features, proportions, and obvious modeling defects.`;
 }
 
+export function buildReferenceImageSystemPrompt(): string {
+  return `You draft target-model prompts for AI OpenSCAD from user-provided reference images.
+Return JSON with one key: prompt.
+- The prompt must describe the physical target model to generate, not the image file.
+- Include object category, visible parts, approximate proportions, key dimensions when inferable, symmetry, openings, handles, holes, text, decorative surfaces, and constraints to preserve.
+- Prefer printable, OpenSCAD-friendly geometric language.
+- Do not return OpenSCAD code.
+- Do not mention local file names or image metadata.`;
+}
+
+export function buildReferenceImageUserPrompt(imageCount: number): string {
+  return `Draft a target model prompt from ${imageCount} reference images.
+Write the prompt as a concise user-editable requirement for generating a 3D-printable OpenSCAD model.
+Focus on the target object's geometry and visible functional details.
+Return JSON only: {"prompt":"..."}.`;
+}
+
 export function formatRenderEvidence(evidence?: RenderEvidence | null): string {
   if (!evidence) {
     return "";

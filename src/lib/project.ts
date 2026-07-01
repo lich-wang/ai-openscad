@@ -47,6 +47,7 @@ export interface RunEvent {
 export type PromptTracePhase =
   | "code-generation"
   | "compile"
+  | "reference-image-draft"
   | "vision-review"
   | "revision"
   | "final-export";

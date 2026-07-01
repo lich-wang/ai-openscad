@@ -41,6 +41,14 @@ const viewKeys = [
 ] as const;
 const renderedViews = Object.fromEntries(viewKeys.map((key) => [key, pixel]));
 const emptyViews = Object.fromEntries(viewKeys.map((key) => [key, ""]));
+
+function referenceImageFile(name: string) {
+  return {
+    name,
+    mimeType: "image/png",
+    buffer: Buffer.from(pixel.split(",")[1], "base64")
+  };
+}
 const validStl = `solid ui-test
 facet normal 0 0 1
   outer loop
@@ -816,6 +824,55 @@ test("empty task keeps the Agent Run surface without a thinking placeholder", as
       maxDiffPixelRatio: WORKBENCH_SCREENSHOT_DIFF_RATIO
     });
   }
+});
+
+test("reference image controls support multi-image and narrow composer states", async ({
+  page
+}, testInfo) => {
+  await page.setViewportSize({ width: 390, height: 920 });
+  await page.addInitScript((storedProject) => {
+    localStorage.setItem("ai-openscad.vision-api-key", "sk-vision");
+    localStorage.setItem("ai-openscad.project", JSON.stringify(storedProject));
+  }, emptyProject);
+
+  await page.goto("/");
+
+  const referenceInput = page.getByLabel("Reference images");
+  const describeButton = page.getByRole("button", { name: "Describe reference images" });
+  await expect(referenceInput).toBeVisible();
+  await expect(describeButton).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Clear reference images" })).toHaveCount(0);
+
+  await referenceInput.setInputFiles([
+    referenceImageFile("front-reference.png"),
+    referenceImageFile("side-reference.png")
+  ]);
+  await expect(page.getByText("front-reference.png")).toBeVisible();
+  await expect(page.getByText("side-reference.png")).toBeVisible();
+  await expect(describeButton).toBeEnabled();
+  await expect(
+    page.getByRole("button", { name: "Remove front-reference.png" })
+  ).toBeVisible();
+  await expect(page.getByRole("button", { name: "Clear reference images" })).toBeVisible();
+
+  const pageWidthWithImages = await page.evaluate(() => ({
+    clientWidth: document.documentElement.clientWidth,
+    scrollWidth: document.documentElement.scrollWidth
+  }));
+  expect(pageWidthWithImages.scrollWidth).toBeLessThanOrEqual(pageWidthWithImages.clientWidth);
+  await page.locator(".agentComposer").screenshot({
+    path: testInfo.outputPath("reference-image-composer-narrow.png")
+  });
+
+  await page.getByRole("button", { name: "Remove front-reference.png" }).click();
+  await expect(page.getByText("front-reference.png")).toHaveCount(0);
+  await expect(page.getByText("side-reference.png")).toBeVisible();
+  await expect(describeButton).toBeEnabled();
+
+  await page.getByRole("button", { name: "Clear reference images" }).click();
+  await expect(page.getByText("side-reference.png")).toHaveCount(0);
+  await expect(describeButton).toBeDisabled();
+  await expect(referenceInput).toBeVisible();
 });
 
 test("invalid STL keeps a labelled preview and leaves the workbench usable", async ({

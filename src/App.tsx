@@ -13,6 +13,7 @@ import {
 import { ChangeEvent, useEffect, useMemo, useRef, useState } from "react";
 import { InteractiveStlPreview } from "./InteractiveStlPreview";
 import {
+  describeReferenceImages,
   generateOpenScad,
   proposeRevision,
   reviewViews
@@ -62,9 +63,24 @@ import {
 } from "./lib/viewSpecs";
 import { acceptRevision, rejectRevision } from "./lib/workflow";
 
-type BusyState = "idle" | "generating" | "compiling" | "reviewing" | "exporting";
+type BusyState =
+  | "idle"
+  | "draftingReference"
+  | "generating"
+  | "compiling"
+  | "reviewing"
+  | "exporting";
 type WorkflowStage = "code" | "render" | "review";
 type WorkflowStageState = "waiting" | "active" | "complete" | "error";
+type ReferenceImageSelection = {
+  id: string;
+  name: string;
+  type: string;
+  size: number;
+  lastModified: number;
+  dataUrl: string;
+  fingerprint: string;
+};
 type DraftCompileSuccess = {
   ok: true;
   diagnostics: string;
@@ -143,6 +159,19 @@ function renderedViewCount(views: ProjectState["views"]): number {
 
 function allViewsRendered(views: ProjectState["views"]): boolean {
   return hasCompleteViewSet(views);
+}
+
+function referenceImageFingerprint(images: ReferenceImageSelection[]): string {
+  return images.map((image) => image.fingerprint).join("|");
+}
+
+function readFileAsDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result ?? ""));
+    reader.onerror = () => reject(reader.error ?? new Error("Failed to read image file."));
+    reader.readAsDataURL(file);
+  });
 }
 
 function canUseCodeModel(modelId: string, apiKey: string): boolean {
@@ -256,9 +285,14 @@ export default function App() {
   const [error, setError] = useState("");
   const [errorStage, setErrorStage] = useState<WorkflowStage | "">("");
   const [renderStatus, setRenderStatus] = useState("");
+  const [referenceImages, setReferenceImages] = useState<ReferenceImageSelection[]>([]);
   const [autoRunActive, setAutoRunActive] = useState(false);
   const busyRef = useRef<BusyState>("idle");
   const operationTokenRef = useRef(0);
+  const referenceDraftTokenRef = useRef(0);
+  const projectRef = useRef(project);
+  const requirementInputRef = useRef<HTMLTextAreaElement | null>(null);
+  const referenceImagesRef = useRef<ReferenceImageSelection[]>([]);
   const autoRunTokenRef = useRef(0);
   const targetConfidencePercentRef = useRef(targetConfidencePercent);
   const autoIterationLimitRef = useRef(autoIterationLimit);
@@ -297,6 +331,9 @@ export default function App() {
       renderedViewCount(project.views) > 0 ||
       project.review
   );
+  const referenceControlsDisabled = controlsLocked;
+  const describeReferenceDisabled =
+    referenceControlsDisabled || hasPendingRevision || referenceImages.length === 0;
 
   function addDraftRenderTimeoutGuidance(diagnostics: string): string {
     if (!diagnostics.includes("OpenSCAD render timed out")) {
@@ -324,6 +361,14 @@ export default function App() {
   }
 
   useEffect(() => {
+    projectRef.current = project;
+  }, [project]);
+
+  useEffect(() => {
+    referenceImagesRef.current = referenceImages;
+  }, [referenceImages]);
+
+  useEffect(() => {
     saveProject(project);
     setProjectList((current) => upsertProjectList(current, project));
   }, [project]);
@@ -343,6 +388,20 @@ export default function App() {
   function updateBusy(nextBusy: BusyState) {
     busyRef.current = nextBusy;
     setBusy(nextBusy);
+  }
+
+  function replaceReferenceImages(nextImages: ReferenceImageSelection[]) {
+    referenceImagesRef.current = nextImages;
+    setReferenceImages(nextImages);
+  }
+
+  function invalidateReferenceDrafts() {
+    referenceDraftTokenRef.current += 1;
+  }
+
+  function clearReferenceImages() {
+    replaceReferenceImages([]);
+    invalidateReferenceDrafts();
   }
 
   function updateTargetConfidence(value: number) {
@@ -541,6 +600,109 @@ export default function App() {
     if (provider !== "mimo" && !visionApiKey.trim()) {
       throw new Error(tr("missingVisionKey"));
     }
+  }
+
+  async function handleReferenceImageChange(event: ChangeEvent<HTMLInputElement>) {
+    invalidateReferenceDrafts();
+    const selectionToken = referenceDraftTokenRef.current;
+    const files = Array.from(event.currentTarget.files ?? []).filter((file) =>
+      file.type.startsWith("image/")
+    );
+    if (!files.length) {
+      replaceReferenceImages([]);
+      return;
+    }
+    const images = await Promise.all(
+      files.map(async (file) => ({
+        id: crypto.randomUUID(),
+        name: file.name,
+        type: file.type,
+        size: file.size,
+        lastModified: file.lastModified,
+        dataUrl: await readFileAsDataUrl(file),
+        fingerprint: `${file.name}:${file.type}:${file.size}:${file.lastModified}`
+      }))
+    );
+    if (referenceDraftTokenRef.current !== selectionToken) {
+      return;
+    }
+    replaceReferenceImages(images);
+    event.currentTarget.value = "";
+  }
+
+  function handleRemoveReferenceImage(id: string) {
+    invalidateReferenceDrafts();
+    replaceReferenceImages(referenceImagesRef.current.filter((image) => image.id !== id));
+  }
+
+  async function handleDescribeReferenceImages() {
+    await runSafely("draftingReference", async () => {
+      requireVisionApiKey();
+      const imagesAtStart = referenceImagesRef.current;
+      if (!imagesAtStart.length) {
+        throw new Error(tr("missingReferenceImages"));
+      }
+      const activeProject = projectRef.current;
+      if (activeProject.proposedCode.trim()) {
+        throw new Error(tr("pendingRevisionActionHint"));
+      }
+      const baselineRequirement = activeProject.requirement;
+      const activeProjectId = activeProject.id;
+      const imageSetFingerprint = referenceImageFingerprint(imagesAtStart);
+      const requestToken = referenceDraftTokenRef.current + 1;
+      referenceDraftTokenRef.current = requestToken;
+      const { prompt, trace } = await describeReferenceImages({
+        apiKey: visionApiKey,
+        modelId: activeProject.visionModelId,
+        images: imagesAtStart.map((image) => image.dataUrl)
+      });
+      const stillCurrent =
+        projectRef.current.id === activeProjectId &&
+        projectRef.current.requirement === baselineRequirement &&
+        (requirementInputRef.current?.value ?? projectRef.current.requirement) ===
+          baselineRequirement &&
+        referenceImageFingerprint(referenceImagesRef.current) === imageSetFingerprint &&
+        referenceDraftTokenRef.current === requestToken;
+      if (!stillCurrent) {
+        return;
+      }
+      setProject((current) => {
+        if (
+          current.id !== activeProjectId ||
+          current.requirement !== baselineRequirement ||
+          (requirementInputRef.current?.value ?? current.requirement) !== baselineRequirement ||
+          referenceImageFingerprint(referenceImagesRef.current) !== imageSetFingerprint ||
+          referenceDraftTokenRef.current !== requestToken
+        ) {
+          return current;
+        }
+        const next = {
+          ...current,
+          requirement: prompt,
+          originalRequirement: "",
+          currentCode: "",
+          proposedCode: "",
+          compilerOutput: "",
+          renderEvidence: null,
+          review: null,
+          stl: "",
+          views: emptyViews(),
+          runEvents: [
+            ...current.runEvents,
+            createRunEvent({
+              role: "assistant",
+              title: tr("referencePromptDrafted"),
+              content: prompt,
+              status: "complete"
+            })
+          ],
+          promptTrace: [...current.promptTrace, trace],
+          updatedAt: new Date().toISOString()
+        };
+        projectRef.current = next;
+        return next;
+      });
+    });
   }
 
   async function handleGenerate() {
@@ -1871,8 +2033,10 @@ export default function App() {
 
   function handleNewModel() {
     cancelActiveAutoRun();
+    clearReferenceImages();
     const next = createEmptyProject();
     setProjectList((current) => upsertProjectList(current, next));
+    projectRef.current = next;
     setProject(next);
     setError("");
     setErrorStage("");
@@ -1880,21 +2044,27 @@ export default function App() {
 
   function handleSelectProject(projectId: string) {
     cancelActiveAutoRun();
+    clearReferenceImages();
     const selected = projectList.find((item) => item.id === projectId);
     if (!selected) {
       return;
     }
+    projectRef.current = selected;
     setProject(selected);
     setError("");
     setErrorStage("");
   }
 
   function updateProject(patch: Partial<ProjectState>) {
-    setProject((current) => ({
-      ...current,
-      ...patch,
-      updatedAt: new Date().toISOString()
-    }));
+    setProject((current) => {
+      const next = {
+        ...current,
+        ...patch,
+        updatedAt: new Date().toISOString()
+      };
+      projectRef.current = next;
+      return next;
+    });
   }
 
   function handleCodeEdit(code: string) {
@@ -1913,6 +2083,7 @@ export default function App() {
 
   function handleImport(event: ChangeEvent<HTMLInputElement>) {
     cancelActiveAutoRun();
+    clearReferenceImages();
     const file = event.target.files?.[0];
     if (!file) {
       return;
@@ -1921,6 +2092,7 @@ export default function App() {
       .then((content) => {
         const imported = importProject(content);
         setProjectList((current) => upsertProjectList(current, imported));
+        projectRef.current = imported;
         setProject(imported);
         setError("");
         setErrorStage("");
@@ -2111,10 +2283,65 @@ export default function App() {
             </div>
             <textarea
               className="agentInput requirementInput"
+              disabled={busy === "draftingReference"}
+              ref={requirementInputRef}
               value={project.requirement}
               onChange={(event) => updateProject({ requirement: event.target.value })}
+              onInput={(event) => updateProject({ requirement: event.currentTarget.value })}
               placeholder={tr("requirementPlaceholder")}
             />
+            <div className="referenceImagePanel">
+              <label className="referenceImagePicker">
+                <span>{tr("referenceImages")}</span>
+                <input
+                  accept="image/*"
+                  aria-label={tr("referenceImages")}
+                  disabled={referenceControlsDisabled}
+                  multiple
+                  onChange={handleReferenceImageChange}
+                  type="file"
+                />
+              </label>
+              {referenceImages.length ? (
+                <ul className="referenceImageList">
+                  {referenceImages.map((image) => (
+                    <li key={image.id}>
+                      <span>{image.name}</span>
+                      <button
+                        aria-label={`${tr("removeReferenceImage")} ${image.name}`}
+                        disabled={referenceControlsDisabled}
+                        onClick={() => handleRemoveReferenceImage(image.id)}
+                        type="button"
+                      >
+                        <X size={14} />
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
+              <div className="referenceImageActions">
+                {referenceImages.length ? (
+                  <button
+                    className="referenceClearButton"
+                    disabled={referenceControlsDisabled}
+                    onClick={clearReferenceImages}
+                    type="button"
+                  >
+                    <X size={14} />
+                    <span>{tr("clearReferenceImages")}</span>
+                  </button>
+                ) : null}
+                <button
+                  className="referenceDescribeButton"
+                  disabled={describeReferenceDisabled}
+                  onClick={handleDescribeReferenceImages}
+                  type="button"
+                >
+                  <Eye size={15} />
+                  <span>{tr("describeReferenceImages")}</span>
+                </button>
+              </div>
+            </div>
             <div className="buttonGrid agentActions">
               {hasPendingRevision ? (
                 <p className="pendingActionHint">{tr("pendingRevisionActionHint")}</p>
@@ -2190,6 +2417,7 @@ export default function App() {
             </summary>
             <textarea
               className="codeEditor"
+              disabled={busy === "draftingReference"}
               spellCheck={false}
               value={project.currentCode}
               onChange={(event) => handleCodeEdit(event.target.value)}
@@ -2242,6 +2470,7 @@ export default function App() {
                 </summary>
                 <textarea
                   className="codeEditor proposed"
+                  disabled={busy === "draftingReference"}
                   spellCheck={false}
                   value={project.proposedCode}
                   onChange={(event) => updateProject({ proposedCode: event.target.value })}
@@ -2505,6 +2734,7 @@ function AgentRunPanel(props: {
 
 function busyStatusLabel(locale: Locale, busy: Exclude<BusyState, "idle">): string {
   const keys: Record<Exclude<BusyState, "idle">, MessageKey> = {
+    draftingReference: "busyDraftingReference",
     generating: "busyGenerating",
     compiling: "busyCompiling",
     reviewing: "busyReviewing",
@@ -2514,7 +2744,7 @@ function busyStatusLabel(locale: Locale, busy: Exclude<BusyState, "idle">): stri
 }
 
 function workflowStageForBusy(busy: BusyState): WorkflowStage {
-  if (busy === "generating") {
+  if (busy === "generating" || busy === "draftingReference") {
     return "code";
   }
   if (busy === "reviewing") {
