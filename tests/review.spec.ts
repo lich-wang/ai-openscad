@@ -112,7 +112,7 @@ async function chooseReferenceImages(
   files: ReturnType<typeof referenceImageFile>[]
 ) {
   const chooserPromise = page.waitForEvent("filechooser");
-  await page.getByRole("button", { name: "Describe reference images" }).click();
+  await page.getByRole("button", { name: /^Reference images$/ }).click();
   const chooser = await chooserPromise;
   expect(chooser.isMultiple()).toBe(true);
   await chooser.setFiles(files);
@@ -120,7 +120,7 @@ async function chooseReferenceImages(
 
 async function cancelReferenceImageSelection(page: Page) {
   const chooserPromise = page.waitForEvent("filechooser");
-  await page.getByRole("button", { name: "Describe reference images" }).click();
+  await page.getByRole("button", { name: /^Reference images$/ }).click();
   const chooser = await chooserPromise;
   expect(chooser.isMultiple()).toBe(true);
   await chooser.setFiles([]);
@@ -510,8 +510,9 @@ test("reference images draft an editable requirement before generation", async (
 
   await page.setViewportSize({ width: 1440, height: 980 });
   await page.goto("/");
-  const describeButton = page.getByRole("button", { name: "Describe reference images" });
+  const describeButton = page.getByRole("button", { name: /^Reference images$/ });
   await expect(describeButton).toBeEnabled();
+  await expect(page.locator(".referenceImagePanel")).toHaveCount(0);
   await chooseReferenceImages(page, [
     referenceImageFile("reference-front.png"),
     referenceImageFile("reference-side.png")
@@ -673,7 +674,7 @@ test("pending revision blocks reference image prompt drafting", async ({ page })
   });
 
   await page.goto("/");
-  await expect(page.getByRole("button", { name: "Describe reference images" })).toBeDisabled();
+  await expect(page.getByRole("button", { name: /^Reference images$/ })).toBeDisabled();
   await expect(page.getByText("pending-reference.png")).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Clear reference images" })).toHaveCount(0);
   await expect(page.locator(".pendingActionHint")).toBeVisible();
@@ -817,7 +818,7 @@ test("canceling the reference image picker sends no vision request", async ({ pa
   });
 
   await page.goto("/");
-  await expect(page.getByRole("button", { name: "Describe reference images" })).toBeEnabled();
+  await expect(page.getByRole("button", { name: /^Reference images$/ })).toBeEnabled();
   await cancelReferenceImageSelection(page);
 
   await delay(500);
@@ -897,7 +898,7 @@ test("reference image draft failure preserves request-start text without selecte
   await expect(page.locator(".agentInput")).toBeDisabled();
   await expect(page.getByText("failed-front.png")).toHaveCount(0);
   await expect(page.getByText("failed-side.png")).toHaveCount(0);
-  await expect(page.getByRole("button", { name: "Describe reference images" })).toBeDisabled();
+  await expect(page.getByRole("button", { name: /^Reference images$/ })).toBeDisabled();
   await expect(page.getByRole("button", { name: "Remove failed-front.png" })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Remove failed-side.png" })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Clear reference images" })).toHaveCount(0);
@@ -935,7 +936,7 @@ test("reference image draft failure preserves request-start text without selecte
   expect(storedAfterFailure).not.toContain(referenceImagePayload);
   expect(storedAfterFailure).not.toContain("blob:");
   expect(storedAfterFailure).not.toContain("referenceImages");
-  await expect(page.getByRole("button", { name: "Describe reference images" })).toBeEnabled();
+  await expect(page.getByRole("button", { name: /^Reference images$/ })).toBeEnabled();
   await expect(page.getByRole("button", { name: "Remove failed-front.png" })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Remove failed-side.png" })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Clear reference images" })).toHaveCount(0);

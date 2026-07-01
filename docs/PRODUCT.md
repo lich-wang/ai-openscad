@@ -103,12 +103,12 @@ three columns:
   started a bounded confidence run by clicking **Generate** or **Iterate Again**
   with automatic iterations set above zero.
 - Reference-image input is a separate, user-triggered prompt-drafting action
-  before code generation. The user clicks `Describe reference images`, selects
-  one or more local image files in the picker, and the app immediately calls the
-  configured vision model to describe the intended target model. The user then
-  receives a concise editable prompt in the same composer used for text
-  requirements. This action must never call the code model, render OpenSCAD,
-  start visual review, or start a bounded confidence loop by itself.
+  before code generation. The user clicks the inline `Reference images` button,
+  selects one or more local image files in the picker, and the app immediately
+  calls the configured vision model to describe the intended target model. The
+  user then receives a concise editable prompt in the same composer used for
+  text requirements. This action must never call the code model, render
+  OpenSCAD, start visual review, or start a bounded confidence loop by itself.
 - Reference images are transient browser inputs for the current prompt-drafting
   request. They are sent only to `/api/vision` for the explicit drafting action,
   are not stored in exported project JSON, are not included in later code or
@@ -197,15 +197,17 @@ three columns:
 - The primary composer action follows project state: generate before rendering,
   review after rendering, and iterate again after review.
 - The composer also provides a compact reference-image action before
-  generation. The secondary action is named `Describe reference images` in
-  English and uses the localized equivalent in Chinese. Clicking it opens the
-  local image picker with multi-select enabled; after the user chooses one or
-  more images, the workbench immediately sends those images to the vision model
-  to draft the target-model prompt. The composer does not show a persistent
-  vertical list of filenames, thumbnails, remove controls, or clear controls.
-  If the picker is canceled, no request is sent. The action is enabled only when
-  a vision model can be called, the workbench is idle, and no pending revision
-  is waiting for acceptance.
+  generation. The secondary action is an inline button named `Reference images`
+  in English and `参考图片` in Chinese. It sits in the same action row as the
+  primary workflow button, such as **Generate**, instead of a separate
+  reference-image panel or text label. Clicking it opens the local image picker
+  with multi-select enabled; after the user chooses one or more images, the
+  workbench immediately sends those images to the vision model to draft the
+  target-model prompt. The composer does not show a persistent vertical list of
+  filenames, thumbnails, remove controls, clear controls, or a separate
+  `Reference images` label. If the picker is canceled, no request is sent. The
+  action is enabled only when a vision model can be called, the workbench is
+  idle, and no pending revision is waiting for acceptance.
 - The left settings surface lets the user set a target review confidence and
   automatic iteration count before starting **Generate** or **Iterate Again**.
   These controls affect only future user-started runs; changing them while idle
@@ -260,7 +262,7 @@ Workbench acceptance criteria:
   outside the drafting request, or a newer drafting request started. If the
   provider call fails, the composer text captured when the request started is
   restored and the error is shown, but no selected images are retained in the UI
-  or project. Retrying means clicking `Describe reference images` again and
+  or project. Retrying means clicking `Reference images` again and
   selecting images again, or manually editing the composer text.
 - During an active bounded confidence run, Generate, Review, Iterate Again,
   Rerender, Final Export, Accept Revision, Reject Revision, project import,
@@ -449,7 +451,7 @@ Workbench acceptance criteria:
   before **Generate**, stale render/review state is cleared, and the subsequent
   generation request uses the edited text rather than the raw image payload.
 - Unit and E2E coverage must verify reference-image request boundaries and stale
-  response protection: clicking `Describe reference images` opens a multi-image
+  response protection: clicking `Reference images` opens a multi-image
   local picker, a canceled picker sends no request, and a completed selection
   sends a `/api/vision` drafting payload containing only the selected images and
   prompt-drafting instruction, not OpenSCAD code, renderEvidence, rendered
@@ -463,11 +465,12 @@ Workbench acceptance criteria:
   `renderEvidence`; and stale/late vision responses after a project switch,
   image-set change, composer edit, or newer draft request are ignored.
 - E2E and local visual-regression coverage must also cover the compact
-  reference-image composer UI: the single action is visible, no persistent
-  filename/thumbnail list appears after selection, the action disabled/read-only
-  state while drafting is clear, provider failure keeps the composer text
-  captured when the request started, and narrow layout keeps the action and
-  primary workflow button visible without overflow or overlap.
+  reference-image composer UI: the inline `Reference images` action is visible
+  in the same row as the primary workflow action, no separate reference-image
+  text label or persistent filename/thumbnail list appears after selection, the
+  action disabled/read-only state while drafting is clear, provider failure
+  keeps the composer text captured when the request started, and narrow layout
+  keeps both action buttons visible without overflow or overlap.
 - Automated E2E coverage must verify that review UI displays the confidence
   percentage in the review conclusion and renders exactly one correction prompt
   block per review event. It must also cover lower-confidence automatic
@@ -587,9 +590,9 @@ Workbench acceptance criteria:
   vision endpoint. It does not send OpenSCAD code, STL data, rendered review
   images, render evidence, prior reviews, prompt traces, API keys, or hidden
   project history.
-- The `Describe reference images` action owns the file-selection step. It opens
-  a multi-image local file picker and starts drafting immediately after the
-  user selects files. The selected images are request-scoped only; there is no
+- The inline `Reference images` action owns the file-selection step. It opens a
+  multi-image local file picker and starts drafting immediately after the user
+  selects files. The selected images are request-scoped only; there is no
   separate selected-file list to manage in the composer.
 - Accepts JSON with `prompt`, or plain text when a provider does not follow the
   JSON contract. The final prompt is trimmed, must be non-empty, and should
@@ -605,7 +608,7 @@ Workbench acceptance criteria:
   URLs, binary image payloads, or thumbnail object URLs.
 - A failed draft keeps the composer text captured when the request started
   visible, shows a readable workflow error, and lets the user retry by clicking
-  `Describe reference images` and choosing images again. The failed request does
+  `Reference images` and choosing images again. The failed request does
   not leave a persistent uploaded-image list in the composer.
   Reference-image drafting is not part of review confidence and never consumes
   automatic iteration budget.

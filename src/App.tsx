@@ -2293,31 +2293,27 @@ export default function App() {
               onInput={(event) => updateProject({ requirement: event.currentTarget.value })}
               placeholder={tr("requirementPlaceholder")}
             />
-            <div className="referenceImagePanel">
-              <input
-                accept="image/*"
-                aria-label={tr("referenceImages")}
-                className="referenceImageInput"
-                disabled={referenceControlsDisabled}
-                multiple
-                onChange={handleReferenceImageChange}
-                ref={referenceFileInputRef}
-                type="file"
-              />
-              <div className="referenceImageActions">
-                <span className="referenceImageLabel">{tr("referenceImages")}</span>
-                <button
-                  className="referenceDescribeButton"
-                  disabled={describeReferenceDisabled}
-                  onClick={handleDescribeReferenceImages}
-                  type="button"
-                >
-                  <Eye size={15} />
-                  <span>{tr("describeReferenceImages")}</span>
-                </button>
-              </div>
-            </div>
+            <input
+              accept="image/*"
+              aria-hidden="true"
+              className="referenceImageInput"
+              disabled={referenceControlsDisabled}
+              multiple
+              onChange={handleReferenceImageChange}
+              ref={referenceFileInputRef}
+              tabIndex={-1}
+              type="file"
+            />
             <div className="buttonGrid agentActions">
+              <button
+                className="referenceDescribeButton"
+                disabled={describeReferenceDisabled}
+                onClick={handleDescribeReferenceImages}
+                type="button"
+              >
+                <Eye size={15} />
+                <span>{tr("referenceImages")}</span>
+              </button>
               {hasPendingRevision ? (
                 <p className="pendingActionHint">{tr("pendingRevisionActionHint")}</p>
               ) : null}

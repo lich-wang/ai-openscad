@@ -871,11 +871,25 @@ test("reference image action opens a compact multi-image picker", async ({
 
   await page.goto("/");
 
-  const describeButton = page.getByRole("button", { name: "Describe reference images" });
+  const describeButton = page.getByRole("button", { name: /^Reference images$/ });
+  const generateButton = page.getByRole("button", { name: /^Generate$/i });
   await expect(describeButton).toBeVisible();
   await expect(describeButton).toBeEnabled();
+  await expect(generateButton).toBeVisible();
+  await expect(
+    page.locator(".agentComposer").getByText("Reference images", { exact: true })
+  ).toHaveCount(1);
+  await expect(page.getByRole("button", { name: /^Describe reference images$/ })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Clear reference images" })).toHaveCount(0);
+  await expect(page.locator(".referenceImagePanel")).toHaveCount(0);
+  await expect(page.locator(".referenceImageLabel")).toHaveCount(0);
   await expect(page.getByText("front-reference.png")).toHaveCount(0);
+
+  const initialReferenceBox = await describeButton.boundingBox();
+  const initialGenerateBox = await generateButton.boundingBox();
+  expect(initialReferenceBox).not.toBeNull();
+  expect(initialGenerateBox).not.toBeNull();
+  expect(Math.abs(initialReferenceBox!.y - initialGenerateBox!.y)).toBeLessThanOrEqual(2);
 
   const canceledChooserPromise = page.waitForEvent("filechooser");
   await describeButton.click();
@@ -900,6 +914,7 @@ test("reference image action opens a compact multi-image picker", async ({
   await expect(page.getByRole("button", { name: /Remove front-reference\.png/i })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Clear reference images" })).toHaveCount(0);
   await expect(describeButton).toBeDisabled();
+  await expect(generateButton).toBeDisabled();
 
   const pageWidthWithImages = await page.evaluate(() => ({
     clientWidth: document.documentElement.clientWidth,

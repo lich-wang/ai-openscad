@@ -70,7 +70,16 @@ test.describe("browser locale", () => {
       await expect(page.getByRole("heading", { name: "Agent 运行" })).toBeVisible();
       await expect(page.getByText("告诉 Agent 要做什么")).toBeVisible();
       await expect(page.getByText("图像识别模型")).toBeVisible();
-      await expect(page.getByRole("button", { name: /^生成$/ })).toBeVisible();
+      const referenceButton = page.getByRole("button", { name: /^参考图片$/ });
+      const generateButton = page.getByRole("button", { name: /^生成$/ });
+      await expect(generateButton).toBeVisible();
+      await expect(referenceButton).toBeVisible();
+      await expect(page.locator(".agentComposer").getByText("参考图片", { exact: true })).toHaveCount(1);
+      const referenceBox = await referenceButton.boundingBox();
+      const generateBox = await generateButton.boundingBox();
+      expect(referenceBox).not.toBeNull();
+      expect(generateBox).not.toBeNull();
+      expect(Math.abs(referenceBox!.y - generateBox!.y)).toBeLessThanOrEqual(2);
       await expect(page.getByRole("heading", { name: "AI 思考" })).toHaveCount(0);
       await expect(page.getByText("生成、编译或评审后会在这里显示提示词。")).toHaveCount(0);
       await expect(page.getByRole("button", { name: "没有 Key？" }).first()).toBeVisible();
