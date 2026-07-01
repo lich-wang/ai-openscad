@@ -47,6 +47,7 @@ export interface RunEvent {
 export type PromptTracePhase =
   | "code-generation"
   | "compile"
+  | "prompt-optimization"
   | "reference-image-draft"
   | "vision-review"
   | "revision"
@@ -76,6 +77,7 @@ export interface ProjectState {
   review: VisionReview | null;
   stl: string;
   views: ViewSet;
+  referenceImages: string[];
   runEvents: RunEvent[];
   iterations: ProjectIteration[];
   promptTrace: PromptTraceEntry[];
@@ -109,6 +111,7 @@ export function createEmptyProject(): ProjectState {
     review: null,
     stl: "",
     views: createEmptyViewSet(),
+    referenceImages: [],
     runEvents: [],
     iterations: [],
     promptTrace: [],
@@ -147,14 +150,53 @@ export function saveProject(project: ProjectState): void {
     return;
   }
 
-  const compactProject = compactProjectForStorage(project, true);
-  const compactProjects = upsertProjectList(storedProjects, compactProject);
+  const referenceCompactProject = compactProjectForStorage(project, {
+    keepReferenceImages: false,
+    keepStl: true,
+    keepViews: true
+  });
+  const referenceCompactProjects = upsertProjectList(
+    compactProjectListForStorage(storedProjects, {
+      keepReferenceImages: false,
+      keepStl: true,
+      keepViews: true
+    }),
+    referenceCompactProject
+  );
+  if (trySaveProjectWorkspace(referenceCompactProject, referenceCompactProjects)) {
+    return;
+  }
+
+  const compactProject = compactProjectForStorage(project, {
+    keepReferenceImages: false,
+    keepStl: false,
+    keepViews: true
+  });
+  const compactProjects = upsertProjectList(
+    compactProjectListForStorage(storedProjects, {
+      keepReferenceImages: false,
+      keepStl: false,
+      keepViews: true
+    }),
+    compactProject
+  );
   if (trySaveProjectWorkspace(compactProject, compactProjects)) {
     return;
   }
 
-  const minimalProject = compactProjectForStorage(project, false);
-  const minimalProjects = upsertProjectList(storedProjects, minimalProject);
+  const minimalProject = compactProjectForStorage(project, {
+    keepReferenceImages: false,
+    keepStl: false,
+    keepViews: false
+  });
+  const minimalProjects = upsertProjectList(
+    compactProjectListForStorage(storedProjects, {
+      keepReferenceImages: false,
+      keepStl: false,
+      keepViews: false
+    }),
+    minimalProject
+  );
   void trySaveProjectWorkspace(minimalProject, minimalProjects);
 }
 
@@ -194,15 +236,16 @@ export function upsertProjectList(
   projects: ProjectState[],
   project: ProjectState
 ): ProjectState[] {
-  const imported = importProject(JSON.stringify(project));
+  const imported = hydrateProject(project);
   const next = projects.filter((item) => item.id !== imported.id);
   return sortProjects([imported, ...next]);
 }
 
 export function exportProject(project: ProjectState): string {
+  const { referenceImages: _referenceImages, ...exportableProject } = project;
   return JSON.stringify(
     {
-      ...project,
+      ...exportableProject,
       updatedAt: new Date().toISOString()
     },
     null,
@@ -212,7 +255,18 @@ export function exportProject(project: ProjectState): string {
 
 export function importProject(serialized: string): ProjectState {
   const parsed = JSON.parse(serialized) as Partial<ProjectState>;
+  return hydrateProject(parsed, { keepReferenceImages: false });
+}
+
+function hydrateProject(
+  parsed: Partial<ProjectState>,
+  options: { keepReferenceImages?: boolean } = { keepReferenceImages: true }
+): ProjectState {
   const requirement = parsed.requirement ?? "";
+  const referenceImages =
+    options.keepReferenceImages === false
+      ? []
+      : normalizeReferenceImages(parsed.referenceImages);
   return {
     ...createEmptyProject(),
     ...parsed,
@@ -221,10 +275,18 @@ export function importProject(serialized: string): ProjectState {
     renderEvidence: parsed.renderEvidence ?? null,
     views: normalizeViewSet(parsed.views as Parameters<typeof normalizeViewSet>[0]),
     stl: parsed.stl ?? "",
+    referenceImages,
     runEvents: parsed.runEvents ?? [],
     iterations: parsed.iterations ?? [],
     promptTrace: parsed.promptTrace ?? []
   };
+}
+
+function normalizeReferenceImages(images: unknown): string[] {
+  if (!Array.isArray(images)) {
+    return [];
+  }
+  return images.filter((image): image is string => typeof image === "string");
 }
 
 function loadStoredProjects(): ProjectState[] {
@@ -234,7 +296,7 @@ function loadStoredProjects(): ProjectState[] {
       const parsed = JSON.parse(storedProjects) as unknown[];
       if (Array.isArray(parsed)) {
         return sortProjects(
-          parsed.map((item) => importProject(JSON.stringify(item)))
+          parsed.map((item) => hydrateProject(item as Partial<ProjectState>))
         );
       }
     } catch {
@@ -252,7 +314,7 @@ function loadLegacyProject(): ProjectState | null {
     return null;
   }
   try {
-    return importProject(stored);
+    return hydrateProject(JSON.parse(stored) as Partial<ProjectState>);
   } catch {
     return null;
   }
@@ -283,15 +345,33 @@ function trySaveProjectWorkspace(
 
 function compactProjectForStorage(
   project: ProjectState,
-  keepViews: boolean
+  options: {
+    keepReferenceImages: boolean;
+    keepStl: boolean;
+    keepViews: boolean;
+  }
 ): ProjectState {
   return {
     ...project,
-    stl: "",
-    views: keepViews
+    referenceImages: options.keepReferenceImages
+      ? [...project.referenceImages]
+      : [],
+    stl: options.keepStl ? project.stl : "",
+    views: options.keepViews
       ? { ...project.views }
       : createEmptyViewSet()
   };
+}
+
+function compactProjectListForStorage(
+  projects: ProjectState[],
+  options: {
+    keepReferenceImages: boolean;
+    keepStl: boolean;
+    keepViews: boolean;
+  }
+): ProjectState[] {
+  return projects.map((project) => compactProjectForStorage(project, options));
 }
 
 function isStorageQuotaError(error: unknown): boolean {

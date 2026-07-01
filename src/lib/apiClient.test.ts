@@ -4,6 +4,7 @@ import {
   buildGenerationRequest,
   buildRevisionRequest,
   estimateTokenUsage,
+  optimizePrompt,
   reviewViews
 } from "./apiClient";
 import { buildVisionSystemPrompt } from "./openscadSkills";
@@ -71,6 +72,98 @@ describe("apiClient prompt assembly", () => {
     expect(systemPrompt).toContain("per-layer boolean operations");
     expect(systemPrompt).toContain("wavy surfaces");
     expect(systemPrompt).toContain("coarse, inspectable approximations");
+  });
+
+  it("optimizes composer text into a structured CAD-ready prompt without extra project context", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        content: JSON.stringify({
+          prompt: [
+            "Object: 30 ml printable cup.",
+            "Known details: cylindrical body, rounded rim, handle.",
+            "Details to confirm: exact height, wall thickness, handle clearance."
+          ].join("\n")
+        })
+      })
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { prompt, trace } = await optimizePrompt({
+      apiKey: "sk-user",
+      modelId: "mimo-v2.5",
+      requirement: "做一个30ml杯子"
+    });
+
+    expect(prompt).toContain("Object: 30 ml printable cup");
+    expect(prompt).toContain("Details to confirm");
+    expect(trace).toMatchObject({
+      phase: "prompt-optimization",
+      modelId: "mimo-v2.5",
+      userPrompt: expect.stringContaining("做一个30ml杯子"),
+      response: expect.stringContaining("Details to confirm")
+    });
+
+    const request = fetchMock.mock.calls[0];
+    expect(request[0]).toBe("/api/llm");
+    const body = JSON.parse(String(request[1]?.body)) as {
+      messages: Array<{ content: unknown }>;
+    };
+    const systemPrompt = String(body.messages[0].content);
+    const userPrompt = String(body.messages[1].content);
+    const serializedBody = JSON.stringify(body);
+    expect(systemPrompt).toMatch(/CAD-ready|text-to-CAD|structured/i);
+    expect(systemPrompt).toMatch(/Details to confirm|missing details/i);
+    expect(userPrompt).toContain("做一个30ml杯子");
+    expect(serializedBody).not.toContain("data:image");
+    expect(serializedBody).not.toContain("OpenSCAD code");
+    expect(serializedBody).not.toContain("Render evidence");
+    expect(serializedBody).not.toContain("promptTrace");
+    expect(serializedBody).not.toContain("solid ");
+
+    vi.unstubAllGlobals();
+  });
+
+  it("accepts plain text prompt optimization responses", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          content: "Object: wall hook\nDetails to confirm: screw diameter."
+        })
+      })
+    );
+
+    const { prompt } = await optimizePrompt({
+      apiKey: "sk-user",
+      modelId: "mimo-v2.5",
+      requirement: "hook"
+    });
+
+    expect(prompt).toBe("Object: wall hook\nDetails to confirm: screw diameter.");
+    vi.unstubAllGlobals();
+  });
+
+  it("rejects malformed JSON prompt optimization responses", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          content: JSON.stringify({ prompt: "" })
+        })
+      })
+    );
+
+    await expect(
+      optimizePrompt({
+        apiKey: "sk-user",
+        modelId: "mimo-v2.5",
+        requirement: "hook"
+      })
+    ).rejects.toThrow("Prompt optimization response is empty.");
+    vi.unstubAllGlobals();
   });
 
   it("revision prompt includes review feedback and user iteration notes", () => {
@@ -203,7 +296,7 @@ describe("apiClient prompt assembly", () => {
       modelId: "mimo-v2.5",
       requirement: "Make a printable box",
       code: "cube(10);",
-      images: reviewImages,
+      renderedImages: reviewImages,
       renderEvidence: {
         compileStatus: "success",
         diagnostics: "Compiled to STL in browser.",
@@ -234,6 +327,62 @@ describe("apiClient prompt assembly", () => {
     vi.unstubAllGlobals();
   });
 
+  it("appends retained reference images after rendered views and labels shape-only review", async () => {
+    const retainedReferenceImages = [
+      `data:image/png;base64,${uploadedReferenceImagePayload}`,
+      "data:image/jpeg;base64,retained-reference-side"
+    ];
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        content: JSON.stringify({
+          summary: "Shape mostly matches the retained references.",
+          issues: [],
+          correctionPrompt: "No shape change needed.",
+          confidence: 0.9
+        })
+      })
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await reviewViews({
+      apiKey: "sk-user",
+      modelId: "mimo-v2.5",
+      requirement: "Make the bracket from the reference images",
+      code: "cube(10);",
+      renderedImages: reviewImages,
+      referenceImages: retainedReferenceImages
+    });
+
+    const body = JSON.parse(String(fetchMock.mock.calls[0][1]?.body)) as {
+      messages: Array<{ content: unknown }>;
+    };
+    const userContent = body.messages[1].content;
+    const parts = Array.isArray(userContent) ? userContent : [];
+    const text = JSON.stringify(parts[0]);
+    const imageUrls = parts
+      .filter(
+        (part): part is { type: "image_url"; image_url: { url: string } } =>
+          Boolean(
+            part &&
+              typeof part === "object" &&
+              "type" in part &&
+              part.type === "image_url" &&
+              "image_url" in part
+          )
+      )
+      .map((part) => part.image_url.url);
+
+    expect(imageUrls).toEqual([...reviewImages, ...retainedReferenceImages]);
+    expect(text).toContain("Rendered model views: 14");
+    expect(text).toContain("Original reference images: 2");
+    expect(text).toMatch(/shape|structure/i);
+    expect(text).toMatch(/ignore.*color/i);
+    expect(text).toMatch(/printed graphics|decals|surface patterns/i);
+
+    vi.unstubAllGlobals();
+  });
+
   it("rejects oversized fourteen-view payloads before calling the vision endpoint", async () => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
@@ -244,7 +393,7 @@ describe("apiClient prompt assembly", () => {
         modelId: "mimo-v2.5",
         requirement: "Make a printable box",
         code: "cube(10);",
-        images: reviewImages.map((image) => `${image}${"A".repeat(600_000)}`),
+        renderedImages: reviewImages.map((image) => `${image}${"A".repeat(600_000)}`),
         renderEvidence: {
           compileStatus: "success",
           diagnostics: "Compiled to STL in browser.",
@@ -254,6 +403,43 @@ describe("apiClient prompt assembly", () => {
         }
       })
     ).rejects.toThrow(/vision payload/i);
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    vi.unstubAllGlobals();
+  });
+
+  it("rejects retained-reference review payloads over budget before calling vision", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      reviewViews({
+        apiKey: "sk-user",
+        modelId: "mimo-v2.5",
+        requirement: "Make a printable box from references",
+        code: "cube(10);",
+        renderedImages: reviewImages,
+        referenceImages: [
+          `data:image/png;base64,${"A".repeat(7_500_000)}`
+        ]
+      })
+    ).rejects.toThrow(/retained reference images are too large/i);
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    vi.unstubAllGlobals();
+  });
+
+  it("rejects oversized reference-image drafts before calling vision", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      describeReferenceImages({
+        apiKey: "sk-user",
+        modelId: "mimo-v2.5",
+        images: [`data:image/png;base64,${"A".repeat(7_500_000)}`]
+      })
+    ).rejects.toThrow(/selected reference images are too large/i);
 
     expect(fetchMock).not.toHaveBeenCalled();
     vi.unstubAllGlobals();
@@ -296,6 +482,7 @@ describe("apiClient prompt assembly", () => {
     const body = JSON.parse(String(fetchMock.mock.calls[0][1]?.body)) as {
       messages: Array<{ content: unknown }>;
     };
+    const systemPrompt = JSON.stringify(body.messages[0].content);
     const userContent = JSON.stringify(body.messages[1].content);
     expect(fetchMock.mock.calls[0][0]).toBe("/api/vision");
     expect(
@@ -314,6 +501,12 @@ describe("apiClient prompt assembly", () => {
     ).toHaveLength(2);
     expect(userContent).toContain(uploadedReferenceImagePayload);
     expect(userContent).toContain("target model prompt");
+    expect(userContent).toMatch(/shape|geometry/i);
+    expect(userContent).toMatch(/ignore.*color/i);
+    expect(userContent).toMatch(/printed graphics|decals|surface patterns/i);
+    expect(systemPrompt).toMatch(/subject.*shape/i);
+    expect(systemPrompt).toMatch(/ignore.*color/i);
+    expect(systemPrompt).toMatch(/printed.*graphics|decals|surface patterns/i);
     expect(userContent).not.toContain("cube(10)");
     expect(userContent).not.toContain("Render evidence");
     expect(userContent).not.toContain("promptTrace");
@@ -397,7 +590,7 @@ describe("apiClient prompt assembly", () => {
       modelId: "mimo-v2.5",
       requirement: "生成一个30ML的杯子模型",
       code: "module cup() { cup(); }",
-      images: reviewImages
+      renderedImages: reviewImages
     });
 
     expect(review.correctionPrompt).toContain("Original requirement");

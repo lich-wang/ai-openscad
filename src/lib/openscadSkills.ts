@@ -70,18 +70,21 @@ Return the complete revised OpenSCAD code only.`;
 export function buildVisionSystemPrompt(requirement = ""): string {
   return `You review OpenSCAD-generated 3D models from these 14 views in order: ${VIEW_KEYS.join(", ")}.
 ${buildLanguageInstruction(requirement)}
+Rendered model views are always provided first. If original reference images are also provided after the 14 rendered views, use them only to compare the subject model's physical shape and structure.
 Return JSON with keys: summary, issues, correctionPrompt, confidence.
 - issues must be an array of strings.
 - confidence must be 0 to 1.
 - correctionPrompt must be a concise, user-editable prompt for the text LLM to revise the current OpenSCAD model.
 - correctionPrompt must preserve the original requirement, name the affected view or model area, describe observed mismatches, mention constraints to preserve, infer affected OpenSCAD modules or geometry relationships when possible, and include sizing, placement, or proportion guidance when available.
+- Ignore colors, printed graphics, decals, surface patterns, photo lighting, and purely decorative image content unless the user explicitly asks to model a physical raised or engraved feature.
 - correctionPrompt should refer to affected OpenSCAD modules or geometry relationships, but avoid returning OpenSCAD code.`;
 }
 
 export function buildVisionUserPrompt(
   requirement: string,
   code: string,
-  renderEvidence?: RenderEvidence | null
+  renderEvidence?: RenderEvidence | null,
+  referenceImageCount = 0
 ): string {
   return `Original user requirement:
 ${requirement}
@@ -93,14 +96,20 @@ ${code}
 
 ${formatRenderEvidence(renderEvidence)}
 
-Review whether the rendered views satisfy the requirement. Focus on geometry, missing features, proportions, and obvious modeling defects.`;
+Rendered model views: ${VIEW_KEYS.length}
+Original reference images: ${referenceImageCount}
+
+Review whether the rendered views satisfy the requirement. Focus on geometry, missing features, proportions, and obvious modeling defects.
+If original reference images are provided, compare the generated model against their subject shape and structure. Ignore color, printed graphics, decals, surface patterns, and photo lighting unless the user explicitly asked for physical raised or engraved geometry.`;
 }
 
 export function buildReferenceImageSystemPrompt(): string {
   return `You draft target-model prompts for AI OpenSCAD from user-provided reference images.
 Return JSON with one key: prompt.
 - The prompt must describe the physical target model to generate, not the image file.
-- Include object category, visible parts, approximate proportions, key dimensions when inferable, symmetry, openings, handles, holes, text, decorative surfaces, and constraints to preserve.
+- Focus on the reference image subject model's shape, silhouette, proportions, openings, handles, holes, structural parts, and physical geometric details.
+- Ignore colors, printed graphics, decals, surface patterns, photo lighting, and decorative image content unless the user explicitly asks to model a physical raised or engraved feature.
+- Include object category, visible parts, approximate proportions, key dimensions when inferable, symmetry, openings, handles, holes, physical raised or engraved features when explicitly relevant, and constraints to preserve.
 - Prefer printable, OpenSCAD-friendly geometric language.
 - Do not return OpenSCAD code.
 - Do not mention local file names or image metadata.`;
@@ -109,7 +118,31 @@ Return JSON with one key: prompt.
 export function buildReferenceImageUserPrompt(imageCount: number): string {
   return `Draft a target model prompt from ${imageCount} reference images.
 Write the prompt as a concise user-editable requirement for generating a 3D-printable OpenSCAD model.
-Focus on the target object's geometry and visible functional details.
+Focus on the target object's physical shape, geometry, proportions, openings, handles, holes, and visible functional details.
+Ignore color, printed graphics, decals, surface patterns, photo lighting, and purely decorative image content unless the user explicitly asked for physical raised or engraved geometry.
+Return JSON only: {"prompt":"..."}.`;
+}
+
+export function buildPromptOptimizationSystemPrompt(requirement = ""): string {
+  return `You optimize user-entered text-to-CAD prompts for AI OpenSCAD.
+${buildLanguageInstruction(requirement)}
+Return JSON with one key: prompt.
+- Rewrite the user's existing input into a structured, CAD-ready requirement for a 3D-printable OpenSCAD model.
+- Preserve all facts, dimensions, counts, constraints, and intent already provided by the user.
+- Do not invent exact values, hidden requirements, code, render evidence, or project history.
+- Use concise section labels such as Object, Known details, Geometry, Dimensions, Printability, Constraints, and Details to confirm.
+- Include a "Details to confirm" section listing likely missing CAD details the user may want to fill in, such as exact dimensions, wall thickness, hole diameters, clearances, counts, fasteners, print orientation, tolerances, and strength constraints.
+- If a detail is only a possibility, phrase it as something to confirm rather than a decided requirement.
+- Do not return source code or CAD script.`;
+}
+
+export function buildPromptOptimizationUserPrompt(requirement: string): string {
+  return `Optimize this user-entered prompt before OpenSCAD generation.
+
+Current prompt:
+${requirement}
+
+Rewrite it into a clearer structured text-to-CAD prompt and add a Details to confirm section for important missing modeling information.
 Return JSON only: {"prompt":"..."}.`;
 }
 

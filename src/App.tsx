@@ -8,6 +8,7 @@ import {
   Play,
   RefreshCw,
   Send,
+  WandSparkles,
   X
 } from "lucide-react";
 import { ChangeEvent, useEffect, useMemo, useRef, useState } from "react";
@@ -15,6 +16,7 @@ import { InteractiveStlPreview } from "./InteractiveStlPreview";
 import {
   describeReferenceImages,
   generateOpenScad,
+  optimizePrompt,
   proposeRevision,
   reviewViews
 } from "./lib/apiClient";
@@ -66,6 +68,7 @@ import { acceptRevision, rejectRevision } from "./lib/workflow";
 type BusyState =
   | "idle"
   | "draftingReference"
+  | "optimizingPrompt"
   | "generating"
   | "compiling"
   | "reviewing"
@@ -290,6 +293,7 @@ export default function App() {
   const operationTokenRef = useRef(0);
   const referenceDraftTokenRef = useRef(0);
   const referenceDraftFingerprintRef = useRef("");
+  const promptOptimizationTokenRef = useRef(0);
   const projectRef = useRef(project);
   const requirementInputRef = useRef<HTMLTextAreaElement | null>(null);
   const referenceFileInputRef = useRef<HTMLInputElement | null>(null);
@@ -304,7 +308,11 @@ export default function App() {
   const controlsLocked = autoRunActive || isBusy;
   const hasRenderedViews = hasCleanRenderedViews(project);
   const hasCurrentReview = Boolean(project.review && hasRenderedViews);
+  const hasReviewReadyModel = Boolean(
+    project.currentCode.trim() && hasRenderedViews && !hasCurrentReview
+  );
   const hasPendingRevision = Boolean(project.proposedCode.trim());
+  const canUseCodeModelForPrompt = canUseCodeModel(project.codeModelId, llmApiKey);
   const canUseCodeModelForRepair = canUseCodeModel(project.codeModelId, llmApiKey);
   const hasDiagnosticFix = Boolean(
     project.currentCode.trim() &&
@@ -337,6 +345,19 @@ export default function App() {
   const referenceControlsDisabled =
     controlsLocked || hasPendingRevision || !canUseVisionModelForDraft;
   const describeReferenceDisabled = referenceControlsDisabled;
+  const showPromptOptimizeAction =
+    hasPendingRevision || (!hasDiagnosticFix && !hasReviewReadyModel);
+  const optimizePromptDisabled =
+    controlsLocked ||
+    hasPendingRevision ||
+    hasDiagnosticFix ||
+    hasReviewReadyModel ||
+    !project.requirement.trim() ||
+    !canUseCodeModelForPrompt;
+  const showGenerateAction =
+    !hasPendingRevision &&
+    !hasDiagnosticFix &&
+    (!hasRenderedViews || !project.currentCode.trim() || busy === "optimizingPrompt");
 
   function addDraftRenderTimeoutGuidance(diagnostics: string): string {
     if (!diagnostics.includes("OpenSCAD render timed out")) {
@@ -644,6 +665,9 @@ export default function App() {
       if (activeProject.proposedCode.trim()) {
         throw new Error(tr("pendingRevisionActionHint"));
       }
+      const failureRetentionMessage = activeProject.referenceImages.length
+        ? tr("referenceImagesNotRetainedPreviousRemain")
+        : tr("referenceImagesNotRetained");
       const baselineRequirement = activeProject.requirement;
       const activeProjectId = activeProject.id;
       const imageSetFingerprint = referenceImageFingerprint(imagesAtStart);
@@ -685,12 +709,19 @@ export default function App() {
             review: null,
             stl: "",
             views: emptyViews(),
+            referenceImages: imagesAtStart.map((image) => image.dataUrl),
             runEvents: [
               ...current.runEvents,
               createRunEvent({
                 role: "assistant",
                 title: tr("referencePromptDrafted"),
                 content: prompt,
+                status: "complete"
+              }),
+              createRunEvent({
+                role: "tool",
+                title: tr("referenceImagesRetained"),
+                content: tr("referenceImagesRetained"),
                 status: "complete"
               })
             ],
@@ -700,11 +731,89 @@ export default function App() {
           projectRef.current = next;
           return next;
         });
+      } catch (caught) {
+        const message = caught instanceof Error ? caught.message : String(caught);
+        throw new Error(`${message}\n${failureRetentionMessage}`);
       } finally {
         if (referenceDraftTokenRef.current === requestToken) {
           referenceDraftFingerprintRef.current = "";
         }
       }
+    });
+  }
+
+  async function handleOptimizePrompt() {
+    if (optimizePromptDisabled) {
+      return;
+    }
+    await runSafely("optimizingPrompt", async () => {
+      requireLlmApiKey();
+      const activeProject = projectRef.current;
+      if (!activeProject.requirement.trim()) {
+        throw new Error(tr("missingRequirement"));
+      }
+      if (activeProject.proposedCode.trim()) {
+        throw new Error(tr("pendingRevisionActionHint"));
+      }
+      if (
+        activeProject.currentCode.trim() &&
+        hasCleanRenderedViews(activeProject) &&
+        !activeProject.review
+      ) {
+        return;
+      }
+      const baselineRequirement = activeProject.requirement;
+      const activeProjectId = activeProject.id;
+      const requestToken = promptOptimizationTokenRef.current + 1;
+      promptOptimizationTokenRef.current = requestToken;
+      const { prompt, trace } = await optimizePrompt({
+        apiKey: llmApiKey,
+        modelId: activeProject.codeModelId,
+        requirement: baselineRequirement
+      });
+      const editorValue = requirementInputRef.current?.value ?? projectRef.current.requirement;
+      const stillCurrent =
+        projectRef.current.id === activeProjectId &&
+        projectRef.current.requirement === baselineRequirement &&
+        editorValue === baselineRequirement &&
+        promptOptimizationTokenRef.current === requestToken;
+      if (!stillCurrent) {
+        return;
+      }
+      setProject((current) => {
+        if (
+          current.id !== activeProjectId ||
+          current.requirement !== baselineRequirement ||
+          (requirementInputRef.current?.value ?? current.requirement) !== baselineRequirement
+        ) {
+          return current;
+        }
+        const next = {
+          ...current,
+          requirement: prompt,
+          originalRequirement: "",
+          currentCode: "",
+          proposedCode: "",
+          compilerOutput: "",
+          renderEvidence: null,
+          review: null,
+          stl: "",
+          views: emptyViews(),
+          runEvents: [
+            ...current.runEvents,
+            createRunEvent({
+              role: "assistant",
+              title: tr("promptOptimized"),
+              content: prompt,
+              status: "complete"
+            })
+          ],
+          promptTrace: [...current.promptTrace, trace],
+          updatedAt: new Date().toISOString()
+        };
+        projectRef.current = next;
+        return next;
+      });
     });
   }
 
@@ -1199,12 +1308,14 @@ export default function App() {
     }));
     let reviewed: Awaited<ReturnType<typeof reviewViews>>;
     try {
+      const currentProject = projectRef.current;
       reviewed = await reviewViews({
         apiKey: visionApiKey,
-        modelId: project.visionModelId,
+        modelId: currentProject.visionModelId,
         requirement: input.originalRequirement,
         code: input.code,
-        images: viewImagesInOrder(input.views),
+        renderedImages: viewImagesInOrder(input.views),
+        referenceImages: currentProject.referenceImages,
         renderEvidence: input.renderEvidence,
         strictConfidence: input.strictConfidence
       });
@@ -2286,7 +2397,7 @@ export default function App() {
             </div>
             <textarea
               className="agentInput requirementInput"
-              disabled={busy === "draftingReference"}
+              disabled={busy === "draftingReference" || busy === "optimizingPrompt"}
               ref={requirementInputRef}
               value={project.requirement}
               onChange={(event) => updateProject({ requirement: event.target.value })}
@@ -2314,6 +2425,17 @@ export default function App() {
                 <Eye size={15} />
                 <span>{tr("referenceImages")}</span>
               </button>
+              {showPromptOptimizeAction ? (
+                <button
+                  className="promptOptimizeButton"
+                  disabled={optimizePromptDisabled}
+                  onClick={handleOptimizePrompt}
+                  type="button"
+                >
+                  <WandSparkles size={15} />
+                  <span>{tr("optimizePrompt")}</span>
+                </button>
+              ) : null}
               {hasPendingRevision ? (
                 <p className="pendingActionHint">{tr("pendingRevisionActionHint")}</p>
               ) : null}
@@ -2323,7 +2445,7 @@ export default function App() {
                   {tr("fixWithDiagnostics")}
                 </button>
               ) : null}
-              {!hasPendingRevision && !hasRenderedViews && !hasDiagnosticFix ? (
+              {showGenerateAction ? (
                 <button className="primaryAction" disabled={isBusy} onClick={handleGenerate}>
                   <Send size={16} />
                   {tr("generate")}
@@ -2388,7 +2510,7 @@ export default function App() {
             </summary>
             <textarea
               className="codeEditor"
-              disabled={busy === "draftingReference"}
+              disabled={busy === "draftingReference" || busy === "optimizingPrompt"}
               spellCheck={false}
               value={project.currentCode}
               onChange={(event) => handleCodeEdit(event.target.value)}
@@ -2706,6 +2828,7 @@ function AgentRunPanel(props: {
 function busyStatusLabel(locale: Locale, busy: Exclude<BusyState, "idle">): string {
   const keys: Record<Exclude<BusyState, "idle">, MessageKey> = {
     draftingReference: "busyDraftingReference",
+    optimizingPrompt: "busyOptimizingPrompt",
     generating: "busyGenerating",
     compiling: "busyCompiling",
     reviewing: "busyReviewing",
@@ -2715,7 +2838,7 @@ function busyStatusLabel(locale: Locale, busy: Exclude<BusyState, "idle">): stri
 }
 
 function workflowStageForBusy(busy: BusyState): WorkflowStage {
-  if (busy === "generating" || busy === "draftingReference") {
+  if (busy === "generating" || busy === "draftingReference" || busy === "optimizingPrompt") {
     return "code";
   }
   if (busy === "reviewing") {

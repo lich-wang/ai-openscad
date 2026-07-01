@@ -16,6 +16,8 @@ describe("i18n", () => {
   it("translates core UI text", () => {
     expect(t("zh", "generate")).toBe("生成");
     expect(t("en", "generate")).toBe("Generate");
+    expect(t("zh", "optimizePrompt")).toBe("优化提示词");
+    expect(t("en", "optimizePrompt")).toBe("Optimize prompt");
     expect(t("zh", "browserLanguageTitle")).toBe("AI OpenSCAD");
   });
 });

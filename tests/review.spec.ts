@@ -58,6 +58,7 @@ const emptyViews = Object.fromEntries(viewKeys.map((key) => [key, ""])) as Recor
 const pixel =
   "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADElEQVR42mP8z8AARQAFAAH/AnH9zAAAAABJRU5ErkJggg==";
 const referenceImagePayload = pixel.split(",")[1];
+const previouslyRetainedReferenceImage = "data:image/png;base64,previous-retained-reference";
 
 const project = {
   id: "project-review-test",
@@ -99,11 +100,14 @@ function sseChunks(text: string): string {
   ].join("\n");
 }
 
-function referenceImageFile(name: string) {
+function referenceImageFile(
+  name: string,
+  buffer = Buffer.from(pixel.split(",")[1], "base64")
+) {
   return {
     name,
     mimeType: "image/png",
-    buffer: Buffer.from(pixel.split(",")[1], "base64")
+    buffer
   };
 }
 
@@ -423,6 +427,135 @@ test("oversized fourteen-view payload fails before vision and keeps retry contro
   expect(visionRequests).toBe(0);
 });
 
+test("oversized retained reference images fail review before vision and keep compact UI", async ({
+  page
+}, testInfo) => {
+  const hugeReferenceProject = {
+    ...project,
+    stl: "solid current\nendsolid current",
+    referenceImages: [`data:image/png;base64,${"A".repeat(7_500_000)}`],
+    review: null,
+    promptTrace: []
+  };
+  await page.addInitScript(({ storedProject }) => {
+    const memoryStore: Record<string, string> = {
+      "ai-openscad.vision-api-key": "sk-vision",
+      "ai-openscad.project": JSON.stringify(storedProject),
+      "ai-openscad.projects": JSON.stringify([storedProject]),
+      "ai-openscad.active-project-id": storedProject.id
+    };
+    const originalGetItem = Storage.prototype.getItem;
+    const originalSetItem = Storage.prototype.setItem;
+    Storage.prototype.getItem = function getItem(key: string) {
+      if (key in memoryStore) {
+        return memoryStore[key];
+      }
+      return originalGetItem.call(this, key);
+    };
+    Storage.prototype.setItem = function setItem(key: string, value: string) {
+      if (key.startsWith("ai-openscad.")) {
+        memoryStore[key] = value;
+        return;
+      }
+      return originalSetItem.call(this, key, value);
+    };
+  }, { storedProject: hugeReferenceProject });
+
+  let visionRequests = 0;
+  await page.route("**/api/vision", async (route) => {
+    visionRequests += 1;
+    await route.fulfill({
+      status: 500,
+      contentType: "application/json",
+      body: JSON.stringify({ error: "Vision should not receive oversized retained refs" })
+    });
+  });
+
+  await page.goto("/");
+  await expect(page.locator(".resultPanel .viewTile img")).toHaveCount(14);
+  const reviewButton = page.getByRole("button", { name: /^Review$/i });
+  await expect(reviewButton).toBeEnabled();
+
+  await reviewButton.click();
+
+  const oversizedRetainedAlert = page.locator(".agentRun").getByRole("alert");
+  await expect(oversizedRetainedAlert).toContainText(
+    /retained reference images are too large/i
+  );
+  await expect(oversizedRetainedAlert).toContainText(/smaller reference images/i);
+  await expect(page.locator(".agentRun")).not.toContainText(/vision payload/i);
+  await expect(reviewButton).toBeEnabled();
+  await expect(page.getByRole("button", { name: /^Rerender$/i })).toBeEnabled();
+  await expect(page.locator(".resultPanel .viewTile img")).toHaveCount(14);
+  await expect(page.locator(".resultPanel")).not.toContainText(/retained-reference|referenceImages/i);
+  await page.locator(".workspace").screenshot({
+    path: testInfo.outputPath("oversized-retained-reference-error.png")
+  });
+  expect(visionRequests).toBe(0);
+});
+
+test("oversized selected reference images fail drafting before vision and keep previous references", async ({
+  page
+}, testInfo) => {
+  await page.addInitScript(({ storedProject, retainedReference }) => {
+    localStorage.setItem("ai-openscad.vision-api-key", "sk-vision");
+    const activeProject = {
+      ...storedProject,
+      requirement: "手写的备用需求",
+      referenceImages: [retainedReference],
+      review: null,
+      promptTrace: []
+    };
+    localStorage.setItem("ai-openscad.project", JSON.stringify(activeProject));
+    localStorage.setItem("ai-openscad.projects", JSON.stringify([activeProject]));
+    localStorage.setItem("ai-openscad.active-project-id", activeProject.id);
+  }, { storedProject: project, retainedReference: previouslyRetainedReferenceImage });
+
+  let visionRequests = 0;
+  await page.route("**/api/vision", async (route) => {
+    visionRequests += 1;
+    await route.fulfill({
+      status: 500,
+      contentType: "application/json",
+      body: JSON.stringify({ error: "Vision should not receive oversized selected refs" })
+    });
+  });
+
+  await page.goto("/");
+  await chooseReferenceImages(page, [
+    referenceImageFile("too-large-reference.png", Buffer.alloc(5_800_000, 65))
+  ]);
+
+  const alert = page.locator(".agentRun").getByRole("alert");
+  await expect(alert).toContainText(/selected reference images are too large/i, {
+    timeout: 30_000
+  });
+  await expect(alert).toContainText(
+    /New reference images were not retained; previous references remain for visual review/i
+  );
+  await expect(page.locator(".agentRun")).not.toContainText(/vision payload/i);
+  await expect(page.locator(".agentInput")).toHaveValue("手写的备用需求");
+  await expect(page.getByText("too-large-reference.png")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: /^Reference images$/ })).toBeEnabled();
+  await page.locator(".workspace").screenshot({
+    path: testInfo.outputPath("oversized-selected-reference-error.png")
+  });
+  expect(visionRequests).toBe(0);
+  const storedAfterFailure = await page.evaluate(() =>
+    JSON.parse(localStorage.getItem("ai-openscad.project") ?? "{}")
+  );
+  const storedProjectsAfterFailure = await page.evaluate(() =>
+    JSON.parse(localStorage.getItem("ai-openscad.projects") ?? "[]")
+  );
+  expect(storedAfterFailure.referenceImages).toEqual([previouslyRetainedReferenceImage]);
+  const activeStoredProjectAfterFailure = storedProjectsAfterFailure.find(
+    (storedProject: { id?: string }) => storedProject.id === storedAfterFailure.id
+  );
+  expect(activeStoredProjectAfterFailure.referenceImages).toEqual([
+    previouslyRetainedReferenceImage
+  ]);
+});
+
 test("reference images draft an editable requirement before generation", async ({
   page
 }, testInfo) => {
@@ -528,6 +661,7 @@ test("reference images draft an editable requirement before generation", async (
   expect(visionRequests).toBe(1);
   expect(llmRequests).toBe(0);
   await expect(page.locator(".agentRun")).toContainText(/Reference prompt drafted/i);
+  await expect(page.locator(".agentRun")).toContainText(/retained.*visual review/i);
   await page.locator(".workspace").screenshot({
     path: testInfo.outputPath("reference-image-draft-filled.png")
   });
@@ -543,12 +677,14 @@ test("reference images draft an editable requirement before generation", async (
   expect(storedAfterDraft.stl).toBe("");
   expect(storedAfterDraft.renderEvidence).toBeNull();
   expect(Object.values(storedAfterDraft.views).every((value) => value === "")).toBe(true);
+  expect(storedAfterDraft.referenceImages).toHaveLength(2);
+  expect(JSON.stringify(storedAfterDraft.referenceImages)).toContain(referenceImagePayload);
   const serializedStoredAfterDraft = JSON.stringify(storedAfterDraft);
   expect(serializedStoredAfterDraft).not.toContain("reference-front");
-  expect(serializedStoredAfterDraft).not.toContain("data:image/png;base64");
-  expect(serializedStoredAfterDraft).not.toContain(referenceImagePayload);
+  expect(serializedStoredAfterDraft).toContain("data:image/png;base64");
+  expect(serializedStoredAfterDraft).toContain(referenceImagePayload);
   expect(serializedStoredAfterDraft).not.toContain("blob:");
-  expect(serializedStoredAfterDraft).not.toContain("referenceImages");
+  expect(serializedStoredAfterDraft).toContain("referenceImages");
   expect(storedAfterDraft.promptTrace.at(-1)).toMatchObject({
     phase: "reference-image-draft",
     response: expect.stringContaining("壁挂杯架")
@@ -634,7 +770,407 @@ test("reference images draft an editable requirement before generation", async (
   expect(generationPayload).not.toContain("OLD_TRACE");
 });
 
-test("pending revision blocks reference image prompt drafting", async ({ page }) => {
+test("prompt optimization rewrites editable requirement before generation", async ({
+  page
+}, testInfo) => {
+  test.setTimeout(60_000);
+  await page.addInitScript(({ storedProject, retainedReference }) => {
+    localStorage.setItem("ai-openscad.llm-api-key", "sk-llm");
+    const activeProject = {
+      ...storedProject,
+      requirement: "做一个30ml杯子",
+      originalRequirement: "做一个30ml杯子",
+      currentCode: "cube(10);",
+      proposedCode: "",
+      stl: "solid stale\nendsolid stale",
+      referenceImages: [retainedReference],
+      renderEvidence: {
+        compileStatus: "success",
+        diagnostics: "Compiled stale draft.",
+        renderPrecision: "draft",
+        backend: "web-manifold",
+        viewCount: 14
+      },
+      review: {
+        summary: "旧评审",
+        issues: ["旧问题"],
+        correctionPrompt: "旧修正提示词",
+        confidence: 0.7
+      },
+      promptTrace: [
+        {
+          id: "stale-trace",
+          createdAt: "2026-06-25T00:00:00.000Z",
+          phase: "code-generation",
+          modelId: "mimo-v2.5",
+          systemPrompt: "OLD_TRACE_SYSTEM_SECRET",
+          userPrompt: "OLD_TRACE_USER_SECRET",
+          response: "OLD_TRACE_RESPONSE_SECRET"
+        }
+      ]
+    };
+    localStorage.setItem("ai-openscad.project", JSON.stringify(activeProject));
+    localStorage.setItem("ai-openscad.projects", JSON.stringify([activeProject]));
+    localStorage.setItem("ai-openscad.active-project-id", activeProject.id);
+  }, { storedProject: project, retainedReference: previouslyRetainedReferenceImage });
+
+  let llmRequests = 0;
+  let optimizePayload = "";
+  let generationPayload = "";
+  let releaseOptimize = () => {};
+  let optimizeStarted = () => {};
+  const optimizeStartedPromise = new Promise<void>((resolve) => {
+    optimizeStarted = resolve;
+  });
+  const releaseOptimizePromise = new Promise<void>((resolve) => {
+    releaseOptimize = resolve;
+  });
+  await page.route("**/api/llm", async (route) => {
+    llmRequests += 1;
+    const body = route.request().postDataJSON() as { stream?: boolean };
+    const payload = JSON.stringify(body);
+    if (llmRequests === 1) {
+      optimizePayload = payload;
+      expect(body.stream).not.toBe(true);
+      expect(payload).toContain("做一个30ml杯子");
+      expect(payload).toMatch(/structured|CAD-ready|text-to-CAD|Details to confirm/i);
+      expect(payload).not.toContain("data:image");
+      expect(payload).not.toContain("cube(10)");
+      expect(payload).not.toContain("solid stale");
+      expect(payload).not.toContain("Compiled stale draft");
+      expect(payload).not.toContain("旧评审");
+      expect(payload).not.toContain("OLD_TRACE");
+      optimizeStarted();
+      await releaseOptimizePromise;
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          content: JSON.stringify({
+            prompt: [
+              "目标模型：一个可3D打印的30ml杯子。",
+              "已知结构：圆柱杯身、圆滑杯口、可握持把手。",
+              "待确认细节：精确高度、壁厚、把手间隙、杯底倒角。"
+            ].join("\n")
+          })
+        })
+      });
+      return;
+    }
+    generationPayload = payload;
+    expect(body.stream).toBe(true);
+    await route.fulfill({
+      status: 200,
+      contentType: "text/event-stream",
+      body: sseChunks("cube(10);")
+    });
+  });
+  let visionRequests = 0;
+  await page.route("**/api/vision", async (route) => {
+    visionRequests += 1;
+    await route.fulfill({
+      status: 500,
+      contentType: "application/json",
+      body: JSON.stringify({ error: "Vision should not run during prompt optimization" })
+    });
+  });
+
+  await page.goto("/");
+  const referenceButton = page.getByRole("button", { name: /^Reference images$/ });
+  const optimizeButton = page.getByRole("button", { name: /^Optimize prompt$/ });
+  const generateButton = page.getByRole("button", { name: /^Generate$/i });
+  await expect(optimizeButton).toBeEnabled();
+  await optimizeButton.click();
+  await optimizeStartedPromise;
+  await expect(page.locator(".agentInput")).toBeDisabled();
+  await expect(referenceButton).toBeDisabled();
+  await expect(optimizeButton).toBeDisabled();
+  await expect(generateButton).toBeDisabled();
+  await expect(page.locator(".agentRun")).toContainText(/Optimizing prompt/i);
+  releaseOptimize();
+  await expect(page.locator(".agentInput")).toHaveValue(/待确认细节/, {
+    timeout: 30_000
+  });
+  await expect(page.locator(".agentInput")).toBeEnabled();
+  await expect(optimizeButton).toBeEnabled();
+  await expect(page.locator(".agentRun")).toContainText(/Prompt optimized/i);
+  await page.locator(".workspace").screenshot({
+    path: testInfo.outputPath("prompt-optimization-success.png")
+  });
+
+  const storedAfterOptimize = await page.evaluate(() =>
+    JSON.parse(localStorage.getItem("ai-openscad.project") ?? "{}")
+  );
+  expect(storedAfterOptimize.requirement).toContain("待确认细节");
+  expect(storedAfterOptimize.originalRequirement).toBe("");
+  expect(storedAfterOptimize.currentCode).toBe("");
+  expect(storedAfterOptimize.proposedCode).toBe("");
+  expect(storedAfterOptimize.review).toBeNull();
+  expect(storedAfterOptimize.stl).toBe("");
+  expect(storedAfterOptimize.renderEvidence).toBeNull();
+  expect(Object.values(storedAfterOptimize.views).every((value) => value === "")).toBe(true);
+  expect(storedAfterOptimize.referenceImages).toEqual([
+    previouslyRetainedReferenceImage
+  ]);
+  expect(storedAfterOptimize.promptTrace.at(-1)).toMatchObject({
+    phase: "prompt-optimization",
+    response: expect.stringContaining("待确认细节")
+  });
+  const latestTrace = JSON.stringify(storedAfterOptimize.promptTrace.at(-1));
+  expect(latestTrace).not.toContain("data:image");
+  expect(latestTrace).not.toContain("cube(10)");
+  expect(latestTrace).not.toContain("solid stale");
+  expect(latestTrace).not.toContain("OLD_TRACE");
+
+  await page.locator(".agentInput").fill(
+    "目标模型：一个可3D打印的30ml杯子。\n已知结构：圆柱杯身、圆滑杯口、可握持把手。\n待确认细节：高度55mm，壁厚2mm，把手间隙18mm，杯底倒角2mm。"
+  );
+  await page.getByRole("button", { name: /^Generate$/i }).click();
+  await expect.poll(() => llmRequests, { timeout: 30_000 }).toBe(2);
+  expect(generationPayload).toContain("高度55mm");
+  expect(generationPayload).toContain("壁厚2mm");
+  expect(generationPayload).not.toContain("data:image");
+  expect(generationPayload).not.toContain("OLD_TRACE");
+  expect(optimizePayload).toContain("做一个30ml杯子");
+  expect(visionRequests).toBe(0);
+});
+
+test("prompt optimization failure preserves existing project state and recovers controls", async ({
+  page
+}, testInfo) => {
+  await page.addInitScript(({ storedProject, retainedReference }) => {
+    localStorage.setItem("ai-openscad.llm-api-key", "sk-llm");
+    const activeProject = {
+      ...storedProject,
+      requirement: "手写的备用需求",
+      currentCode: "cube(10); // existing code",
+      stl: "solid existing\nendsolid existing",
+      views: {
+        ...storedProject.views
+      },
+      referenceImages: [retainedReference],
+      renderEvidence: {
+        compileStatus: "success",
+        diagnostics: "Existing clean render.",
+        renderPrecision: "draft",
+        backend: "web-manifold",
+        viewCount: 14
+      },
+      review: {
+        summary: "Existing review",
+        issues: ["Existing issue"],
+        correctionPrompt: "Existing correction prompt.",
+        confidence: 0.7
+      },
+      promptTrace: []
+    };
+    localStorage.setItem(
+      "ai-openscad.project",
+      JSON.stringify(activeProject)
+    );
+    localStorage.setItem("ai-openscad.projects", JSON.stringify([activeProject]));
+    localStorage.setItem("ai-openscad.active-project-id", activeProject.id);
+  }, { storedProject: project, retainedReference: previouslyRetainedReferenceImage });
+
+  let llmRequests = 0;
+  await page.route("**/api/llm", async (route) => {
+    llmRequests += 1;
+    await route.fulfill({
+      status: 500,
+      contentType: "application/json",
+      body: JSON.stringify({ error: "Prompt optimizer unavailable" })
+    });
+  });
+
+  await page.goto("/");
+  const optimizeButton = page.getByRole("button", { name: /^Optimize prompt$/ });
+  await expect(optimizeButton).toBeEnabled();
+  await optimizeButton.click();
+
+  const alert = page.locator(".agentRun").getByRole("alert");
+  await expect(alert).toContainText("Prompt optimizer unavailable", {
+    timeout: 30_000
+  });
+  await expect(page.locator(".agentInput")).toHaveValue("手写的备用需求");
+  await expect(page.locator(".agentInput")).toBeEnabled();
+  await expect(optimizeButton).toBeEnabled();
+  await page.locator(".workspace").screenshot({
+    path: testInfo.outputPath("prompt-optimization-failure.png")
+  });
+  expect(llmRequests).toBe(1);
+  const stored = await page.evaluate(() =>
+    JSON.parse(localStorage.getItem("ai-openscad.project") ?? "{}")
+  );
+  const storedProjects = await page.evaluate(() =>
+    JSON.parse(localStorage.getItem("ai-openscad.projects") ?? "[]")
+  );
+  expect(stored.requirement).toBe("手写的备用需求");
+  expect(stored.currentCode).toContain("existing code");
+  expect(stored.stl).toContain("solid existing");
+  expect(stored.review.summary).toBe("Existing review");
+  expect(stored.renderEvidence.diagnostics).toBe("Existing clean render.");
+  expect(stored.referenceImages).toEqual([previouslyRetainedReferenceImage]);
+  expect(Object.values(stored.views).every((value) => typeof value === "string" && value.length > 0)).toBe(true);
+  expect(JSON.stringify(stored.promptTrace ?? [])).toBe("[]");
+  const activeStoredProject = storedProjects.find(
+    (storedProject: { id?: string }) => storedProject.id === stored.id
+  );
+  expect(activeStoredProject.currentCode).toContain("existing code");
+  expect(activeStoredProject.referenceImages).toEqual([
+    previouslyRetainedReferenceImage
+  ]);
+});
+
+test("late prompt optimization responses do not overwrite newer composer state", async ({
+  page
+}) => {
+  await page.addInitScript((storedProject) => {
+    localStorage.setItem("ai-openscad.llm-api-key", "sk-llm");
+    localStorage.setItem(
+      "ai-openscad.project",
+      JSON.stringify({
+        ...storedProject,
+        requirement: "初始手写需求",
+        currentCode: "",
+        review: null,
+        promptTrace: []
+      })
+    );
+  }, project);
+
+  let releaseFirst = () => {};
+  let firstStarted = () => {};
+  const firstStartedPromise = new Promise<void>((resolve) => {
+    firstStarted = resolve;
+  });
+  const releaseFirstPromise = new Promise<void>((resolve) => {
+    releaseFirst = resolve;
+  });
+  await page.route("**/api/llm", async (route) => {
+    firstStarted();
+    await releaseFirstPromise;
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        content: JSON.stringify({
+          prompt: "过期优化响应不应该覆盖用户后续输入。"
+        })
+      })
+    });
+  });
+
+  await page.goto("/");
+  await page.getByRole("button", { name: /^Optimize prompt$/ }).click();
+  await firstStartedPromise;
+  await page.locator(".agentInput").evaluate((node) => {
+    const textarea = node as HTMLTextAreaElement;
+    textarea.disabled = false;
+    textarea.value = "用户在旧优化返回前写的新需求";
+    textarea.dispatchEvent(new Event("input", { bubbles: true }));
+    textarea.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+  releaseFirst();
+
+  await delay(500);
+  await expect(page.locator(".agentInput")).toHaveValue("用户在旧优化返回前写的新需求");
+  await expect(page.locator(".agentRun")).not.toContainText("过期优化响应");
+  const stored = await page.evaluate(() =>
+    JSON.parse(localStorage.getItem("ai-openscad.project") ?? "{}")
+  );
+  expect(stored.requirement).toBe("用户在旧优化返回前写的新需求");
+  expect(JSON.stringify(stored.promptTrace ?? [])).not.toContain("过期优化响应");
+});
+
+test("prompt optimization locks project navigation while in flight", async ({
+  page
+}) => {
+  await page.addInitScript((storedProject) => {
+    localStorage.setItem("ai-openscad.llm-api-key", "sk-llm");
+    const optimizingProject = {
+      ...storedProject,
+      id: "project-optimizing-stale",
+      title: "Optimizing source",
+      requirement: "旧项目优化中的需求",
+      currentCode: "",
+      review: null,
+      promptTrace: [],
+      runEvents: [],
+      updatedAt: "2026-06-26T00:00:00.000Z"
+    };
+    const targetProject = {
+      ...storedProject,
+      id: "project-switched-target",
+      title: "Switched target",
+      requirement: "切换后的项目需求",
+      currentCode: "",
+      review: null,
+      promptTrace: [],
+      runEvents: [],
+      updatedAt: "2026-06-26T01:00:00.000Z"
+    };
+    localStorage.setItem("ai-openscad.project", JSON.stringify(optimizingProject));
+    localStorage.setItem(
+      "ai-openscad.projects",
+      JSON.stringify([targetProject, optimizingProject])
+    );
+    localStorage.setItem("ai-openscad.active-project-id", optimizingProject.id);
+  }, project);
+
+  let releaseFirst = () => {};
+  let firstStarted = () => {};
+  const firstStartedPromise = new Promise<void>((resolve) => {
+    firstStarted = resolve;
+  });
+  const releaseFirstPromise = new Promise<void>((resolve) => {
+    releaseFirst = resolve;
+  });
+  await page.route("**/api/llm", async (route) => {
+    firstStarted();
+    await releaseFirstPromise;
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        content: JSON.stringify({
+          prompt: "优化中的项目需求已完成结构化。"
+        })
+      })
+    });
+  });
+
+  await page.goto("/");
+  await page.getByRole("button", { name: /^Optimize prompt$/ }).click();
+  await firstStartedPromise;
+  const historyButtons = page.locator(".modelHistory button");
+  await expect(historyButtons).toHaveCount(2);
+  for (let index = 0; index < await historyButtons.count(); index += 1) {
+    await expect(historyButtons.nth(index)).toBeDisabled();
+  }
+  releaseFirst();
+
+  await expect(page.locator(".agentInput")).toHaveValue(/优化中的项目需求已完成结构化/, {
+    timeout: 30_000
+  });
+  const stored = await page.evaluate(() =>
+    JSON.parse(localStorage.getItem("ai-openscad.project") ?? "{}")
+  );
+  const storedProjects = await page.evaluate(() =>
+    JSON.parse(localStorage.getItem("ai-openscad.projects") ?? "[]")
+  );
+  expect(stored.id).toBe("project-optimizing-stale");
+  expect(stored.requirement).toContain("优化中的项目需求已完成结构化");
+  const optimizingProject = storedProjects.find(
+    (storedProject: { id?: string }) => storedProject.id === "project-optimizing-stale"
+  );
+  const targetProject = storedProjects.find(
+    (storedProject: { id?: string }) => storedProject.id === "project-switched-target"
+  );
+  expect(optimizingProject.requirement).toContain("优化中的项目需求已完成结构化");
+  expect(targetProject.requirement).toBe("切换后的项目需求");
+});
+
+test("pending revision blocks pre-generation prompt helpers", async ({ page }) => {
   await page.addInitScript((storedProject) => {
     localStorage.setItem("ai-openscad.vision-api-key", "sk-vision");
     localStorage.setItem(
@@ -664,6 +1200,7 @@ test("pending revision blocks reference image prompt drafting", async ({ page })
   }, project);
 
   let visionRequests = 0;
+  let llmRequests = 0;
   await page.route("**/api/vision", async (route) => {
     visionRequests += 1;
     await route.fulfill({
@@ -672,24 +1209,95 @@ test("pending revision blocks reference image prompt drafting", async ({ page })
       body: JSON.stringify({ error: "Vision should not run with a pending revision" })
     });
   });
+  await page.route("**/api/llm", async (route) => {
+    llmRequests += 1;
+    await route.fulfill({
+      status: 500,
+      contentType: "application/json",
+      body: JSON.stringify({ error: "LLM should not run with a pending revision" })
+    });
+  });
 
   await page.goto("/");
   await expect(page.getByRole("button", { name: /^Reference images$/ })).toBeDisabled();
+  await expect(page.getByRole("button", { name: /^Optimize prompt$/ })).toBeDisabled();
   await expect(page.getByText("pending-reference.png")).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Clear reference images" })).toHaveCount(0);
   await expect(page.locator(".pendingActionHint")).toBeVisible();
   await delay(500);
   expect(visionRequests).toBe(0);
+  expect(llmRequests).toBe(0);
   const stored = await page.evaluate(() =>
     JSON.parse(localStorage.getItem("ai-openscad.project") ?? "{}")
   );
   expect(stored.proposedCode).toContain("PENDING_PROPOSED_SECRET");
 });
 
+test("visual review appends retained reference images after generated views", async ({
+  page
+}, testInfo) => {
+  const retainedReferenceImages = [
+    `data:image/png;base64,${referenceImagePayload}`,
+    "data:image/jpeg;base64,retained-reference-side"
+  ];
+  await page.addInitScript(({ storedProject, retainedRefs }) => {
+    localStorage.setItem("ai-openscad.vision-api-key", "sk-vision");
+    localStorage.setItem(
+      "ai-openscad.project",
+      JSON.stringify({
+        ...storedProject,
+        stl: "solid current\nendsolid current",
+        referenceImages: retainedRefs,
+        review: null
+      })
+    );
+  }, { storedProject: project, retainedRefs: retainedReferenceImages });
+
+  let visionRequests = 0;
+  await page.route("**/api/vision", async (route) => {
+    visionRequests += 1;
+    const body = route.request().postDataJSON() as {
+      messages: Array<{ content: unknown }>;
+    };
+    const imageUrls = imageUrlsFromVisionContent(body.messages[1].content);
+    const renderedViewUrls = viewKeys.map((key) => viewDataUrls[key]);
+    expect(imageUrls).toEqual([...renderedViewUrls, ...retainedReferenceImages]);
+    const promptPayload = JSON.stringify(body.messages);
+    expect(promptPayload).toContain("Original reference images: 2");
+    expect(promptPayload).toMatch(/shape|structure/i);
+    expect(promptPayload).toMatch(/ignore.*color/i);
+    expect(promptPayload).toMatch(/printed graphics|decals|surface patterns/i);
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        content: JSON.stringify({
+          summary: "Shape matches the retained references.",
+          issues: [],
+          correctionPrompt: "No shape change needed.",
+          confidence: 0.92
+        })
+      })
+    });
+  });
+
+  await page.goto("/");
+  await expect(page.locator(".resultPanel .viewTile img")).toHaveCount(14);
+  await expect(page.locator(".resultPanel")).not.toContainText(/retained-reference/i);
+  await page.getByRole("button", { name: /^Review$/i }).click();
+  await expect(page.locator(".agentRun")).toContainText("Shape matches the retained references.");
+  expect(visionRequests).toBe(1);
+  await expect(page.locator(".resultPanel .viewTile img")).toHaveCount(14);
+  await expect(page.locator(".resultPanel")).not.toContainText(/retained-reference/i);
+  await page.locator(".resultPanel").screenshot({
+    path: testInfo.outputPath("review-with-hidden-retained-references.png")
+  });
+});
+
 test("late reference image draft responses do not overwrite newer composer state", async ({
   page
 }) => {
-  await page.addInitScript((storedProject) => {
+  await page.addInitScript(({ storedProject, retainedReference }) => {
     localStorage.setItem("ai-openscad.vision-api-key", "sk-vision");
     localStorage.setItem(
       "ai-openscad.project",
@@ -697,6 +1305,7 @@ test("late reference image draft responses do not overwrite newer composer state
         ...storedProject,
         requirement: "初始手写需求",
         currentCode: "",
+        referenceImages: [retainedReference],
         views: {
           front: "",
           back: "",
@@ -717,7 +1326,7 @@ test("late reference image draft responses do not overwrite newer composer state
         promptTrace: []
       })
     );
-  }, project);
+  }, { storedProject: project, retainedReference: previouslyRetainedReferenceImage });
 
   let releaseFirst = () => {};
   let firstStarted = () => {};
@@ -773,11 +1382,12 @@ test("late reference image draft responses do not overwrite newer composer state
     JSON.parse(localStorage.getItem("ai-openscad.project") ?? "{}")
   );
   expect(stored.requirement).toBe("用户在旧请求返回前写的新需求");
+  expect(stored.referenceImages).toEqual([previouslyRetainedReferenceImage]);
   expect(JSON.stringify(stored.promptTrace ?? [])).not.toContain("过期响应不应该覆盖");
 });
 
 test("canceling the reference image picker sends no vision request", async ({ page }) => {
-  await page.addInitScript((storedProject) => {
+  await page.addInitScript(({ storedProject, retainedReference }) => {
     localStorage.setItem("ai-openscad.vision-api-key", "sk-vision");
     localStorage.setItem(
       "ai-openscad.project",
@@ -785,6 +1395,7 @@ test("canceling the reference image picker sends no vision request", async ({ pa
         ...storedProject,
         requirement: "初始手写需求",
         currentCode: "",
+        referenceImages: [retainedReference],
         views: {
           front: "",
           back: "",
@@ -805,7 +1416,7 @@ test("canceling the reference image picker sends no vision request", async ({ pa
         promptTrace: []
       })
     );
-  }, project);
+  }, { storedProject: project, retainedReference: previouslyRetainedReferenceImage });
 
   let visionRequests = 0;
   await page.route("**/api/vision", async (route) => {
@@ -831,6 +1442,7 @@ test("canceling the reference image picker sends no vision request", async ({ pa
     JSON.parse(localStorage.getItem("ai-openscad.project") ?? "{}")
   );
   expect(stored.requirement).toBe("初始手写需求");
+  expect(stored.referenceImages).toEqual([previouslyRetainedReferenceImage]);
   expect(JSON.stringify(stored.promptTrace ?? [])).toBe("[]");
 });
 
@@ -838,11 +1450,12 @@ test("reference image draft failure preserves request-start text without selecte
   page
 }, testInfo) => {
   test.setTimeout(45_000);
-  await page.addInitScript((storedProject) => {
+  await page.addInitScript(({ storedProject, retainedReference }) => {
     localStorage.setItem("ai-openscad.vision-api-key", "sk-vision");
     const activeProject = {
       ...storedProject,
       requirement: "手写的备用需求",
+      referenceImages: [retainedReference],
       review: null,
       promptTrace: []
     };
@@ -859,7 +1472,7 @@ test("reference image draft failure preserves request-start text without selecte
     );
     localStorage.setItem("ai-openscad.projects", JSON.stringify([activeProject, olderProject]));
     localStorage.setItem("ai-openscad.active-project-id", activeProject.id);
-  }, project);
+  }, { storedProject: project, retainedReference: previouslyRetainedReferenceImage });
 
   let releaseVision = () => {};
   let visionStarted = () => {};
@@ -919,23 +1532,37 @@ test("reference image draft failure preserves request-start text without selecte
   });
 
   releaseVision();
-  await expect(page.locator(".agentRun").getByRole("alert")).toContainText(
+  const draftFailureAlert = page.locator(".agentRun").getByRole("alert");
+  await expect(draftFailureAlert).toContainText(
     "Reference image provider unavailable",
     { timeout: 30_000 }
+  );
+  await expect(draftFailureAlert).toContainText(
+    /New reference images were not retained; previous references remain for visual review/i
   );
   await expect(page.locator(".agentInput")).toHaveValue("手写的备用需求");
   await expect(page.locator(".agentInput")).toBeEnabled();
   await expect(page.getByText("failed-front.png")).toHaveCount(0);
   await expect(page.getByText("failed-side.png")).toHaveCount(0);
   const storedAfterFailure = await page.evaluate(() =>
-    JSON.stringify(JSON.parse(localStorage.getItem("ai-openscad.project") ?? "{}"))
+    JSON.parse(localStorage.getItem("ai-openscad.project") ?? "{}")
   );
-  expect(storedAfterFailure).not.toContain("failed-front.png");
-  expect(storedAfterFailure).not.toContain("failed-side.png");
-  expect(storedAfterFailure).not.toContain(`data:image/png;base64,${referenceImagePayload}`);
-  expect(storedAfterFailure).not.toContain(referenceImagePayload);
-  expect(storedAfterFailure).not.toContain("blob:");
-  expect(storedAfterFailure).not.toContain("referenceImages");
+  const storedProjectsAfterFailure = await page.evaluate(() =>
+    JSON.parse(localStorage.getItem("ai-openscad.projects") ?? "[]")
+  );
+  const serializedStoredAfterFailure = JSON.stringify(storedAfterFailure);
+  expect(serializedStoredAfterFailure).not.toContain("failed-front.png");
+  expect(serializedStoredAfterFailure).not.toContain("failed-side.png");
+  expect(serializedStoredAfterFailure).not.toContain(`data:image/png;base64,${referenceImagePayload}`);
+  expect(serializedStoredAfterFailure).not.toContain(referenceImagePayload);
+  expect(serializedStoredAfterFailure).not.toContain("blob:");
+  expect(storedAfterFailure.referenceImages).toEqual([previouslyRetainedReferenceImage]);
+  const activeStoredProjectAfterFailure = storedProjectsAfterFailure.find(
+    (storedProject: { id?: string }) => storedProject.id === storedAfterFailure.id
+  );
+  expect(activeStoredProjectAfterFailure.referenceImages).toEqual([
+    previouslyRetainedReferenceImage
+  ]);
   await expect(page.getByRole("button", { name: /^Reference images$/ })).toBeEnabled();
   await expect(page.getByRole("button", { name: "Remove failed-front.png" })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Remove failed-side.png" })).toHaveCount(0);

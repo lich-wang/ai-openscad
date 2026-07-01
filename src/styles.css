@@ -554,7 +554,13 @@ textarea {
 }
 
 .agentActions {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.agentActions button {
+  font-size: 12px;
+  line-height: 1.2;
+  white-space: normal;
 }
 
 .agentActions .primaryAction {
@@ -992,6 +998,17 @@ textarea {
   overflow-wrap: anywhere;
 }
 
+.promptOptimizeButton {
+  background: #315f9d;
+  color: #ffffff;
+  font-weight: 800;
+}
+
+.promptOptimizeButton span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
 .codeEditor {
   font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
   font-size: 13px;
@@ -1257,7 +1274,7 @@ textarea {
   }
 
   .agentActions {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
   .codeEditor {

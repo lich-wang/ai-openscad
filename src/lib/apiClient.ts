@@ -1,6 +1,8 @@
 import { createModelRequest } from "./models";
 import {
   buildCodeSystemPrompt,
+  buildPromptOptimizationSystemPrompt,
+  buildPromptOptimizationUserPrompt,
   buildReferenceImageSystemPrompt,
   buildReferenceImageUserPrompt,
   buildRevisionPrompt,
@@ -17,6 +19,10 @@ interface GatewayResponse {
 }
 
 const MAX_VISION_PAYLOAD_BYTES = 7_500_000;
+type VisionPayloadContext =
+  | "review"
+  | "retained-reference-review"
+  | "selected-reference-draft";
 
 export async function generateOpenScad(input: {
   apiKey: string;
@@ -54,15 +60,18 @@ export async function reviewViews(input: {
   modelId: string;
   requirement: string;
   code: string;
-  images: string[];
+  renderedImages: string[];
+  referenceImages?: string[];
   renderEvidence?: RenderEvidence | null;
   strictConfidence?: boolean;
 }): Promise<{ review: VisionReview; trace: PromptTraceEntry }> {
+  const referenceImages = input.referenceImages ?? [];
   const systemPrompt = buildVisionSystemPrompt(input.requirement);
   const userPrompt = buildVisionUserPrompt(
     input.requirement,
     input.code,
-    input.renderEvidence
+    input.renderEvidence,
+    referenceImages.length
   );
   const request = createModelRequest({
     apiKey: input.apiKey,
@@ -70,10 +79,22 @@ export async function reviewViews(input: {
     mode: "vision",
     systemPrompt,
     userPrompt,
-    images: input.images,
+    images: [...input.renderedImages, ...referenceImages],
     responseFormat: "json"
   });
-  assertVisionPayloadWithinBudget(request);
+  const payloadContext =
+    referenceImages.length > 0 && visionPayloadBytes(request) > MAX_VISION_PAYLOAD_BYTES
+      ? reviewPayloadContextWithoutReferences({
+          apiKey: input.apiKey,
+          modelId: input.modelId,
+          systemPrompt,
+          requirement: input.requirement,
+          code: input.code,
+          renderEvidence: input.renderEvidence,
+          renderedImages: input.renderedImages
+        })
+      : "review";
+  assertVisionPayloadWithinBudget(request, payloadContext);
   const content = await sendGatewayRequest(request);
   const review = parseReview(content, input.requirement, Boolean(input.strictConfidence));
   return {
@@ -105,13 +126,43 @@ export async function describeReferenceImages(input: {
     images: input.images,
     responseFormat: "json"
   });
-  assertVisionPayloadWithinBudget(request);
+  assertVisionPayloadWithinBudget(request, "selected-reference-draft");
   const content = await sendGatewayRequest(request);
   const prompt = parseReferenceImagePrompt(content);
   return {
     prompt,
     trace: createPromptTraceEntry({
       phase: "reference-image-draft",
+      modelId: input.modelId,
+      systemPrompt,
+      userPrompt,
+      response: prompt,
+      apiKey: input.apiKey
+    })
+  };
+}
+
+export async function optimizePrompt(input: {
+  apiKey: string;
+  modelId: string;
+  requirement: string;
+}): Promise<{ prompt: string; trace: PromptTraceEntry }> {
+  const systemPrompt = buildPromptOptimizationSystemPrompt(input.requirement);
+  const userPrompt = buildPromptOptimizationUserPrompt(input.requirement);
+  const request = createModelRequest({
+    apiKey: input.apiKey,
+    modelId: input.modelId,
+    mode: "code",
+    systemPrompt,
+    userPrompt,
+    responseFormat: "json"
+  });
+  const content = await sendGatewayRequest(request);
+  const prompt = parsePromptText(content, "Prompt optimization response is empty.");
+  return {
+    prompt,
+    trace: createPromptTraceEntry({
+      phase: "prompt-optimization",
       modelId: input.modelId,
       systemPrompt,
       userPrompt,
@@ -222,20 +273,67 @@ export function estimateTokenUsage(input: {
   };
 }
 
-function assertVisionPayloadWithinBudget(request: ReturnType<typeof createModelRequest>) {
+function reviewPayloadContextWithoutReferences(input: {
+  apiKey: string;
+  modelId: string;
+  systemPrompt: string;
+  requirement: string;
+  code: string;
+  renderEvidence?: RenderEvidence | null;
+  renderedImages: string[];
+}): VisionPayloadContext {
+  const renderedOnlyRequest = createModelRequest({
+    apiKey: input.apiKey,
+    modelId: input.modelId,
+    mode: "vision",
+    systemPrompt: input.systemPrompt,
+    userPrompt: buildVisionUserPrompt(
+      input.requirement,
+      input.code,
+      input.renderEvidence,
+      0
+    ),
+    images: input.renderedImages,
+    responseFormat: "json"
+  });
+  return visionPayloadBytes(renderedOnlyRequest) <= MAX_VISION_PAYLOAD_BYTES
+    ? "retained-reference-review"
+    : "review";
+}
+
+function assertVisionPayloadWithinBudget(
+  request: ReturnType<typeof createModelRequest>,
+  context: VisionPayloadContext = "review"
+) {
   if (request.endpoint !== "/api/vision") {
     return;
   }
-  const payload = JSON.stringify(request.body);
-  const payloadBytes = new TextEncoder().encode(payload).byteLength;
+  const payloadBytes = visionPayloadBytes(request);
   if (payloadBytes <= MAX_VISION_PAYLOAD_BYTES) {
     return;
   }
-  throw new Error(
-    `Vision payload is too large for review (${formatBytes(payloadBytes)} > ${formatBytes(
-      MAX_VISION_PAYLOAD_BYTES
-    )}). Rerender with bounded captures before reviewing.`
-  );
+  throw new Error(visionPayloadTooLargeMessage(context, payloadBytes));
+}
+
+function visionPayloadBytes(request: ReturnType<typeof createModelRequest>): number {
+  if (request.endpoint !== "/api/vision") {
+    return 0;
+  }
+  return new TextEncoder().encode(JSON.stringify(request.body)).byteLength;
+}
+
+function visionPayloadTooLargeMessage(
+  context: VisionPayloadContext,
+  payloadBytes: number
+): string {
+  const sizeText = `${formatBytes(payloadBytes)} > ${formatBytes(MAX_VISION_PAYLOAD_BYTES)}`;
+  if (context === "retained-reference-review") {
+    return `Retained reference images are too large for review (${sizeText}). Use the Reference images button with smaller reference images, or start/import a project without retained references before reviewing.`;
+  }
+  if (context === "selected-reference-draft") {
+    return `Selected reference images are too large to analyze (${sizeText}). Choose smaller reference images and try again.`;
+  }
+  return `Vision payload is too large for review (${sizeText}). Rerender with bounded captures before reviewing.`;
 }
 
 function formatBytes(bytes: number): string {
@@ -286,19 +384,27 @@ function stripCodeFence(content: string): string {
 }
 
 function parseReferenceImagePrompt(content: string): string {
+  return parsePromptText(content, "Reference image prompt is empty.");
+}
+
+function parsePromptText(content: string, emptyMessage: string): string {
   const trimmed = stripCodeFence(content);
   try {
     const parsed = JSON.parse(trimmed) as { prompt?: unknown };
     if (typeof parsed.prompt === "string" && parsed.prompt.trim()) {
       return parsed.prompt.trim();
     }
-  } catch {
+    throw new Error(emptyMessage);
+  } catch (caught) {
+    if (!(caught instanceof SyntaxError)) {
+      throw caught;
+    }
     if (trimmed) {
       return trimmed;
     }
   }
   if (!trimmed) {
-    throw new Error("Reference image prompt is empty.");
+    throw new Error(emptyMessage);
   }
   return trimmed;
 }

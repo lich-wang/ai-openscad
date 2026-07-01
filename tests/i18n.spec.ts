@@ -62,7 +62,8 @@ test.describe("browser locale", () => {
   test.describe("Chinese", () => {
     test.use({ locale: "zh-CN" });
 
-    test("shows Chinese UI for Chinese browsers", async ({ page }) => {
+    test("shows Chinese UI for Chinese browsers", async ({ page }, testInfo) => {
+      await page.setViewportSize({ width: 390, height: 920 });
       await seedProject(page);
       await page.goto("/");
 
@@ -71,15 +72,31 @@ test.describe("browser locale", () => {
       await expect(page.getByText("告诉 Agent 要做什么")).toBeVisible();
       await expect(page.getByText("图像识别模型")).toBeVisible();
       const referenceButton = page.getByRole("button", { name: /^参考图片$/ });
+      const optimizeButton = page.getByRole("button", { name: /^优化提示词$/ });
       const generateButton = page.getByRole("button", { name: /^生成$/ });
       await expect(generateButton).toBeVisible();
       await expect(referenceButton).toBeVisible();
+      await expect(optimizeButton).toBeVisible();
       await expect(page.locator(".agentComposer").getByText("参考图片", { exact: true })).toHaveCount(1);
+      await expect(page.locator(".agentComposer").getByText("优化提示词", { exact: true })).toHaveCount(1);
       const referenceBox = await referenceButton.boundingBox();
+      const optimizeBox = await optimizeButton.boundingBox();
       const generateBox = await generateButton.boundingBox();
       expect(referenceBox).not.toBeNull();
+      expect(optimizeBox).not.toBeNull();
       expect(generateBox).not.toBeNull();
+      expect(referenceBox!.x).toBeLessThan(optimizeBox!.x);
+      expect(optimizeBox!.x).toBeLessThan(generateBox!.x);
       expect(Math.abs(referenceBox!.y - generateBox!.y)).toBeLessThanOrEqual(2);
+      expect(Math.abs(referenceBox!.y - optimizeBox!.y)).toBeLessThanOrEqual(2);
+      const pageWidth = await page.evaluate(() => ({
+        clientWidth: document.documentElement.clientWidth,
+        scrollWidth: document.documentElement.scrollWidth
+      }));
+      expect(pageWidth.scrollWidth).toBeLessThanOrEqual(pageWidth.clientWidth);
+      await page.locator(".agentComposer").screenshot({
+        path: testInfo.outputPath("chinese-prompt-actions-narrow.png")
+      });
       await expect(page.getByRole("heading", { name: "AI 思考" })).toHaveCount(0);
       await expect(page.getByText("生成、编译或评审后会在这里显示提示词。")).toHaveCount(0);
       await expect(page.getByRole("button", { name: "没有 Key？" }).first()).toBeVisible();

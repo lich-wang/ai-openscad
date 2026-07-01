@@ -57,8 +57,10 @@ three columns:
    or clicks the reference-image action, selects one or more local images, and
    asks the vision model to draft an editable target-model prompt from them.
 2. The reference-image prompt draft, when used, replaces the composer text but
-   does not submit the model request. The user can edit the generated prompt
-   before continuing.
+   does not submit the model request. The user may also click **Optimize
+   prompt** to have the text LLM turn the current composer text into a more
+   structured CAD-ready requirement and list likely missing details. The user
+   can edit the generated or optimized prompt before continuing.
 3. User clicks **Generate**.
 4. The code model streams OpenSCAD into the center chat stream in real time.
 5. After the complete code arrives, the run stream collapses the code preview
@@ -109,12 +111,47 @@ three columns:
   user then receives a concise editable prompt in the same composer used for
   text requirements. This action must never call the code model, render
   OpenSCAD, start visual review, or start a bounded confidence loop by itself.
-- Reference images are transient browser inputs for the current prompt-drafting
-  request. They are sent only to `/api/vision` for the explicit drafting action,
-  are not stored in exported project JSON, are not included in later code or
-  review provider requests, and are discarded when the picker is canceled or the
-  drafting request finishes. There is no persistent selected-image state for the
-  user to clear before generation.
+- Prompt optimization is a separate, user-triggered text-to-text action before
+  code generation. The user clicks the inline `Optimize prompt` button between
+  `Reference images` and **Generate**. The app calls the configured text LLM
+  with the current composer text only, rewrites it into a more structured,
+  CAD-ready requirement, and lists likely missing details for the user to fill
+  in before generation. This action must never call the vision model, generate
+  OpenSCAD, render, start visual review, create or replace retained reference
+  image context, or start a bounded confidence loop by itself. Any retained
+  reference images already on the project remain unchanged.
+- Reference images are user-provided local project context after a successful
+  prompt draft. They are sent to `/api/vision` for the explicit drafting action
+  and are retained in browser project state so later visual review can compare
+  the rendered model with the original reference images. They are not sent to
+  text LLM requests, not stored in prompt traces, and not included in exported
+  project JSON. If the picker is canceled, the drafting request fails, or the
+  drafting response is stale, no newly selected reference images are retained.
+  There is no persistent selected-file UI for the user to clear before
+  generation.
+- The retained reference-image lifecycle is explicit even though the UI stays
+  compact: a successful reference-image draft replaces any previously retained
+  reference images for that project; manual edits to the drafted composer text
+  keep those references so later review can compare against the original
+  uploaded subject; **New model** and project import start with no retained
+  references; switching projects restores that project's own retained
+  references; canceled, failed, and stale drafts keep the previous retained
+  references unchanged. The Agent Run stream records a non-thumbnail status
+  message when references are retained for later review or when a draft fails
+  without retaining new images.
+- Reference-image drafting and review must focus on the reference image's
+  subject model shape: silhouette, proportions, openings, handles, holes,
+  structural parts, and physical geometric details. Colors, printed graphics,
+  decals, surface patterns, photo lighting, and purely decorative image content
+  on the reference object are ignored unless the user's text explicitly asks for
+  a physical raised/engraved feature.
+- Prompt optimization must preserve the user's intent and concrete facts while
+  making the prompt easier for text-to-CAD generation: object category,
+  use-case, dimensions, quantities, parts, openings, holes, handles, clearances,
+  wall thickness, fillets/chamfers, printability constraints, and viewable
+  structure should be grouped or stated plainly when already implied. When
+  important CAD details are missing, the optimized text should include a short
+  editable "Details to confirm" section rather than inventing values.
 - The generated reference-image prompt replaces the composer requirement text
   and clears stale render/review output exactly like a manual requirement edit.
   The generated prompt is shown as editable text before **Generate** becomes the
@@ -458,19 +495,59 @@ Workbench acceptance criteria:
   review images, review history, prompt traces, filenames, or STL data; the
   prompt trace uses a reference-image drafting phase distinct from visual
   review; no `/api/llm`, render, visual review, or bounded auto-loop starts from
-  the drafting response alone; project export excludes reference images;
-  provider failure preserves the composer text captured when the request
-  started and lets the user retry by clicking the same action again; success
-  clears `currentCode`, `proposedCode`, `review`, `stl`, `views`, and
-  `renderEvidence`; and stale/late vision responses after a project switch,
-  image-set change, composer edit, or newer draft request are ignored.
+  the drafting response alone; successful drafts retain reference images only
+  in browser-local project state for later visual review; project export and
+  prompt traces exclude reference images; provider failure preserves the
+  composer text captured when the request started and lets the user retry by
+  clicking the same action again; success clears `currentCode`, `proposedCode`,
+  `review`, `stl`, `views`, and `renderEvidence`; and stale/late vision
+  responses after a project switch, image-set change, composer edit, or newer
+  draft request are ignored.
 - E2E and local visual-regression coverage must also cover the compact
-  reference-image composer UI: the inline `Reference images` action is visible
-  in the same row as the primary workflow action, no separate reference-image
-  text label or persistent filename/thumbnail list appears after selection, the
-  action disabled/read-only state while drafting is clear, provider failure
-  keeps the composer text captured when the request started, and narrow layout
-  keeps both action buttons visible without overflow or overlap.
+  reference-image and prompt-optimization composer UI: the inline actions
+  appear in this order in the action row, `Reference images` -> `Optimize
+  prompt` -> the current primary workflow action; no separate reference-image
+  text label or persistent filename/thumbnail list appears after image
+  selection; action disabled/read-only states while drafting or optimizing are
+  clear; provider failure keeps the composer text captured when the request
+  started; and desktop plus narrow-layout screenshots confirm English and
+  Chinese button text fits without overflow, overlap, or clipping. Screenshots
+  after successful drafting or optimization must confirm the composer/status is
+  visible, stale model views are cleared, and no retained-reference thumbnails
+  or filenames appear in the right panel. Screenshots after later render/review
+  must confirm the right result panel shows only the interactive preview plus
+  fourteen generated model view tiles, with no retained-reference thumbnails or
+  filenames.
+- Automated E2E coverage must verify prompt optimization: clicking `Optimize
+  prompt` sends the current composer text to `/api/llm`; does not send
+  reference image data URLs, OpenSCAD, STL, render evidence, review history, or
+  prompt traces; replaces the composer with editable structured CAD-ready text
+  that includes missing details for the user to fill in; does not generate,
+  render, review, or start an automatic loop; and the next **Generate** request
+  uses the user-editable optimized text.
+- Unit and E2E coverage must verify retained reference images in visual review:
+  after a successful reference-image draft, a later Review request sends exactly
+  the fourteen generated model views first in stable order, then the retained
+  original reference images; the review prompt labels the appended images as
+  original references and instructs the vision model to compare shape/structure
+  while ignoring colors, printed graphics, decals, and surface patterns. The
+  same coverage must verify that canceled, failed, and stale reference-image
+  drafts append no new references, and that a new successful reference-image
+  draft replaces earlier retained references for that project.
+- Unit coverage must verify the persistence boundary for retained references:
+  normal local save/load and project switching preserve each project's
+  `referenceImages`, while user export omits them and user import creates a
+  project with no retained references even if the JSON contains a
+  `referenceImages` field. Internal local-storage hydration and user import are
+  separate code paths or equivalent explicit modes.
+- Unit or E2E coverage must verify the payload-budget failure path with
+  retained references: if the fourteen rendered views plus retained reference
+  images exceed the vision payload budget, the app must stop before calling
+  `/api/vision`, show a readable center-stream error, recover the Review action,
+  and keep the compact UI unchanged.
+- Unit coverage must verify localStorage quota compaction drops retained
+  `referenceImages` before dropping persisted generated views, so project
+  metadata and generated view evidence survive when possible.
 - Automated E2E coverage must verify that review UI displays the confidence
   percentage in the review conclusion and renders exactly one correction prompt
   block per review event. It must also cover lower-confidence automatic
@@ -592,24 +669,35 @@ Workbench acceptance criteria:
   project history.
 - The inline `Reference images` action owns the file-selection step. It opens a
   multi-image local file picker and starts drafting immediately after the user
-  selects files. The selected images are request-scoped only; there is no
-  separate selected-file list to manage in the composer.
+  selects files. The selected-file UI is request-scoped; after a successful
+  draft the original image payloads are retained only as hidden browser-local
+  project context for visual review. There is no separate selected-file list to
+  manage in the composer.
 - Accepts JSON with `prompt`, or plain text when a provider does not follow the
   JSON contract. The final prompt is trimmed, must be non-empty, and should
   describe the physical target model in printable OpenSCAD-friendly terms:
   object category, visible parts, approximate proportions, key dimensions when
-  inferable, symmetry, openings, handles, holes, text, decorative surfaces, and
-  constraints that should be preserved. It should not return OpenSCAD code.
+  inferable, symmetry, openings, handles, holes, physical raised/engraved
+  features when explicitly relevant, and constraints that should be preserved.
+  It must ignore colors, printed text, decals, surface patterns, and decorative
+  graphics as modeling requirements unless the user explicitly asks to model
+  them as physical geometry. It should not return OpenSCAD code.
 - A successful draft appends a vision prompt trace, records an Agent Run event,
   fills the editable requirement composer, clears stale current code, pending
   revision, review, STL, rendered views, and render evidence, and leaves the
-  workflow at the pre-generation state. The trace stores the text instruction,
-  model id, and returned prompt only; it must not store uploaded image data
-  URLs, binary image payloads, or thumbnail object URLs.
+  workflow at the pre-generation state. It also stores the uploaded reference
+  image data URLs in browser-local project state for later visual review. The
+  trace stores the text instruction, model id, and returned prompt only; it
+  must not store uploaded image data URLs, binary image payloads, or thumbnail
+  object URLs. Exported project JSON omits the retained reference images.
+- A successful draft also appends a compact Agent Run status stating that the
+  original reference images are retained for later visual review. This status
+  must not include thumbnails, filenames, or a selected-file list.
 - A failed draft keeps the composer text captured when the request started
   visible, shows a readable workflow error, and lets the user retry by clicking
   `Reference images` and choosing images again. The failed request does
-  not leave a persistent uploaded-image list in the composer.
+  not leave a persistent uploaded-image list in the composer and does not
+  retain the failed image selection as new review context.
   Reference-image drafting is not part of review confidence and never consumes
   automatic iteration budget.
 - The drafting response may update the project only when it still matches the
@@ -617,18 +705,68 @@ Workbench acceptance criteria:
   latest drafting request token captured when the request started. Otherwise
   the response is discarded without changing the composer, project state, or run
   events.
+- Reference-image drafting uses the same browser/gateway vision payload budget
+  as visual review. If the selected reference images make the drafting payload
+  exceed that budget, the app fails before calling `/api/vision`, shows a
+  readable workflow error, and keeps any previously retained references
+  unchanged.
+
+### Prompt Optimization
+
+- Sends only the current editable requirement text to the text LLM endpoint. It
+  does not send reference image data URLs, rendered review images, STL data,
+  OpenSCAD source, render evidence, prior reviews, prompt traces, API keys, or
+  hidden project history.
+- The inline `Optimize prompt` action is available before generation when the
+  workbench is idle, the current composer text is non-empty, and there is no
+  pending revision. It sits between `Reference images` and the main **Generate**
+  action in the composer action row. While it is running, the composer and
+  workflow actions are locked like other text LLM operations. The Agent Run
+  header or equivalent live region must announce a visible optimizing state,
+  and the button must expose disabled semantics while the request is in flight.
+- The text LLM response may be JSON with `prompt`, or plain text when a
+  provider does not follow the JSON contract. The optimized prompt is trimmed,
+  must be non-empty, and replaces the editable composer text. It should keep
+  existing user-provided facts, rewrite ambiguous prose into a structured
+  CAD-ready requirement, and include an editable missing-detail checklist for
+  likely important but absent values such as exact dimensions, hole counts,
+  hole diameters, wall thickness, clearances, fastener standards, orientation,
+  and printability constraints.
+- Prompt optimization clears stale generated code, pending revision, review,
+  STL, rendered views, and render evidence exactly like a manual requirement
+  edit. It appends a text prompt trace and an Agent Run event showing the
+  optimized prompt. It does not modify retained reference images and does not
+  consume automatic iteration budget.
+- A prompt-optimization response may update the project only when it still
+  matches the active project id, baseline composer text, and latest
+  optimization request token captured when the request started. Otherwise the
+  stale response is discarded without changing the composer, project state, or
+  run events.
+- If prompt optimization fails, the app keeps the user's current composer text
+  unchanged and shows a readable, accessible workflow error in the Agent Run
+  stream or equivalent live region. After completion or failure, focus and
+  controls must be recoverable so the user can edit the optimized text, retry
+  optimization, choose reference images, or click **Generate**.
 
 ### Review And Iteration
 
 - Sends the original requirement, current OpenSCAD, and the multi-angle rendered
-  images to the vision endpoint.
+  images to the vision endpoint. If the current project has retained original
+  reference images from a successful reference-image draft, visual review also
+  sends those original reference images after the fourteen rendered model views.
+  The review prompt identifies them as reference images and asks the vision
+  model to evaluate whether the generated model matches the reference object's
+  shape and structure, while ignoring color, printed graphics, decals, surface
+  patterns, and purely decorative image content unless the user explicitly asked
+  to model a physical raised/engraved feature.
 - Visual review is allowed only when all fourteen view keys have non-empty images.
   The image array sent to the provider must follow the stable view order:
   front, back, left, right, top, bottom, isoFrontRightTop, isoFrontLeftTop,
   isoBackRightTop, isoBackLeftTop, isoFrontRightBottom, isoFrontLeftBottom,
-  isoBackRightBottom, isoBackLeftBottom. If capture fails or fewer than fourteen
-  views are available, the app stays in render/error state and does not call the
-  vision endpoint.
+  isoBackRightBottom, isoBackLeftBottom. Any retained original reference images
+  are appended after those fourteen rendered views. If capture fails or fewer
+  than fourteen views are available, the app stays in render/error state and
+  does not call the vision endpoint.
 - Legacy three-view or six-view projects, partial capture results such as
   13/14 views, and stale reviews attached to incomplete current views must block
   Review, Final Export, and Iterate Again until the current code rerenders all
@@ -804,11 +942,20 @@ The core project state contains:
 - Model assets: `currentCode`, `proposedCode`, `stl`, `views`
 - Runtime output: `compilerOutput`, `renderEvidence`, `review`, `runEvents`
 - Audit trail: `iterations`, `promptTrace`
+- Hidden local reference context: `referenceImages`, a data URL array from the
+  latest successful reference-image draft, used only for visual review in the
+  same browser project
 
 Reference-image file selections and in-flight prompt draft state are local,
-request-scoped UI state only. They are not part of project export/import and
-are cleared after the drafting request finishes, when the picker is canceled,
-or when the page reloads, project import, project switch, or new model occurs.
+request-scoped UI state only. Successful drafts replace the project's
+`referenceImages` context for later visual review; canceled, failed, and stale
+drafts do not retain new images. `referenceImages` is browser-local project
+state, is preserved for that project across ordinary page reloads and project
+switching, and is cleared by **New model** or project import. It is not part of
+project export/import, prompt traces, run events, or text LLM requests. If
+localStorage quota fallback has to compact a project, retained reference images
+are dropped before persisted generated views so saved project metadata remains
+usable.
 
 Workbench preference state in browser `localStorage` also includes:
 
@@ -850,11 +997,14 @@ file or calls an external model provider through the gateway.
 
 The frontend calls:
 
-- `POST /api/llm` for code generation and revision.
+- `POST /api/llm` for code generation, revision, and user-triggered prompt
+  optimization. Prompt optimization uses its own system/user prompt and trace
+  phase, and sends only the current composer text.
 - `POST /api/vision` for visual review and user-triggered reference-image
   prompt drafting. The two request types use different system/user prompts and
   trace phases; reference-image drafting never sends rendered model review
-  evidence.
+  evidence, while visual review may send retained original reference images
+  after the fourteen rendered model views for shape-only comparison.
 
 Both endpoints are Cloudflare Pages Functions that proxy OpenAI-compatible chat
 completion requests to configured providers.
@@ -891,10 +1041,17 @@ The app should preserve these guarantees:
 - STL download is available only after a clean successful render with required
   views and no unsafe diagnostics; source SCAD download is available whenever
   current code exists.
-- Review requests include rendered images.
+- Review requests include rendered images and, when present, retained original
+  reference images after the rendered views for shape-only comparison.
 - Reference-image prompt drafting requests include only user-selected reference
   images, fill an editable requirement prompt, and do not call the code model
-  until the user clicks **Generate**.
+  until the user clicks **Generate**. Drafting focuses on physical shape and
+  ignores color, printed graphics, decals, and surface patterns unless the user
+  explicitly asks for physical raised/engraved geometry.
+- Prompt optimization requests include only the current composer text, rewrite
+  it into a more structured CAD-ready requirement, and list likely missing
+  details for the user to fill in before **Generate**. Optimization does not
+  call vision, render, or start generation by itself.
 - Review does not trigger text generation unless it is part of an explicit
   user-started bounded confidence run with remaining automatic iterations.
 - New iterations clear stale review state.

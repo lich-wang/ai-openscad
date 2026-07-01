@@ -31,13 +31,14 @@ describe("project persistence", () => {
     vi.restoreAllMocks();
   });
 
-  it("exports all project state except API keys", () => {
+  it("exports shareable project state except API keys and retained references", () => {
     const project = createEmptyProject();
     project.requirement = "rounded organizer";
     project.originalRequirement = "rounded organizer";
     project.currentCode = "cube([10, 10, 10]);";
     project.stl = "solid organizer\nendsolid organizer";
     project.views.front = "data:image/png;base64,front";
+    project.referenceImages = ["data:image/png;base64,retained-reference-secret"];
     project.iterations.push({
       id: "iteration-1",
       createdAt: "2026-06-26T00:00:00.000Z",
@@ -54,12 +55,14 @@ describe("project persistence", () => {
 
     expect(exported).toContain("rounded organizer");
     expect(exported).not.toContain("sk-secret");
+    expect(exported).not.toContain("retained-reference-secret");
     expect(importProject(exported)).toMatchObject({
       requirement: "rounded organizer",
       originalRequirement: "rounded organizer",
       currentCode: "cube([10, 10, 10]);",
       stl: "solid organizer\nendsolid organizer",
-      runEvents: []
+      runEvents: [],
+      referenceImages: []
     });
   });
 
@@ -69,8 +72,22 @@ describe("project persistence", () => {
     expect(project).toMatchObject({
       originalRequirement: "",
       views: emptyViews,
-      runEvents: []
+      runEvents: [],
+      referenceImages: []
     });
+  });
+
+  it("strips retained reference images from user-imported project JSON", () => {
+    const imported = importProject(
+      JSON.stringify({
+        requirement: "imported bracket",
+        referenceImages: ["data:image/png;base64,imported-secret"]
+      })
+    );
+
+    expect(imported.requirement).toBe("imported bracket");
+    expect(imported.referenceImages).toEqual([]);
+    expect(JSON.stringify(imported)).not.toContain("imported-secret");
   });
 
   it("imports legacy three-view projects with empty fourteen-view slots", () => {
@@ -123,10 +140,12 @@ describe("project persistence", () => {
     const first = createEmptyProject();
     first.id = "first";
     first.requirement = "第一个模型";
+    first.referenceImages = ["data:image/png;base64,first-reference"];
     first.updatedAt = "2026-06-26T00:00:00.000Z";
     const second = createEmptyProject();
     second.id = "second";
     second.requirement = "第二个模型";
+    second.referenceImages = ["data:image/png;base64,second-reference"];
     second.updatedAt = "2026-06-26T01:00:00.000Z";
 
     localStorage.setItem("ai-openscad.projects", JSON.stringify([first, second]));
@@ -135,7 +154,110 @@ describe("project persistence", () => {
     const workspace = loadProjectWorkspace();
 
     expect(workspace.activeProject.id).toBe("first");
+    expect(workspace.activeProject.referenceImages).toEqual([
+      "data:image/png;base64,first-reference"
+    ]);
     expect(workspace.projects.map((project) => project.id)).toEqual(["second", "first"]);
+    expect(workspace.projects[0].referenceImages).toEqual([
+      "data:image/png;base64,second-reference"
+    ]);
+  });
+
+  it("preserves retained reference images through normal save and load", () => {
+    const project = createEmptyProject();
+    project.id = "saved-reference-project";
+    project.requirement = "reference based model";
+    project.referenceImages = ["data:image/png;base64,saved-reference"];
+
+    saveProject(project);
+    const workspace = loadProjectWorkspace();
+
+    expect(workspace.activeProject.id).toBe("saved-reference-project");
+    expect(workspace.activeProject.referenceImages).toEqual([
+      "data:image/png;base64,saved-reference"
+    ]);
+    const storedProjects = JSON.parse(
+      localStorage.getItem("ai-openscad.projects") ?? "[]"
+    ) as Array<typeof project>;
+    expect(storedProjects).toHaveLength(1);
+    expect(storedProjects[0].referenceImages).toEqual([
+      "data:image/png;base64,saved-reference"
+    ]);
+  });
+
+  it("drops retained reference images before generated views during quota compaction", () => {
+    const project = createEmptyProject();
+    project.id = "large-reference";
+    project.currentCode = "holder();";
+    project.referenceImages = ["data:image/png;base64,reference-secret"];
+    for (const key of Object.keys(project.views) as Array<keyof typeof project.views>) {
+      project.views[key] = `data:image/png;base64,${key}`;
+    }
+
+    const originalSetItem = Storage.prototype.setItem;
+    const setItem = vi
+      .spyOn(Storage.prototype, "setItem")
+      .mockImplementation(function setItemWithQuota(key, value) {
+        if (String(value).includes("reference-secret")) {
+          throw new DOMException("Storage quota exceeded", "QuotaExceededError");
+        }
+        return originalSetItem.call(this, key, value);
+      });
+
+    saveProject(project);
+
+    const stored = JSON.parse(
+      localStorage.getItem("ai-openscad.project") ?? "{}"
+    ) as typeof project;
+    expect(stored.id).toBe("large-reference");
+    expect(stored.referenceImages).toEqual([]);
+    expect(stored.views).toEqual(project.views);
+    expect(JSON.stringify(stored)).not.toContain("reference-secret");
+    expect(setItem).toHaveBeenCalledWith(
+      "ai-openscad.project",
+      expect.stringContaining("reference-secret")
+    );
+    expect(setItem).toHaveBeenLastCalledWith(
+      "ai-openscad.active-project-id",
+      "large-reference"
+    );
+  });
+
+  it("drops retained reference images from stored project list during quota compaction", () => {
+    const oldProject = createEmptyProject();
+    oldProject.id = "old-reference-heavy";
+    oldProject.requirement = "old heavy reference";
+    oldProject.updatedAt = "2026-06-26T00:00:00.000Z";
+    oldProject.referenceImages = ["data:image/png;base64,old-reference-secret"];
+    const activeProject = createEmptyProject();
+    activeProject.id = "new-active";
+    activeProject.requirement = "new active model";
+    activeProject.updatedAt = "2026-06-26T01:00:00.000Z";
+
+    localStorage.setItem("ai-openscad.projects", JSON.stringify([oldProject]));
+    localStorage.setItem("ai-openscad.active-project-id", oldProject.id);
+
+    const originalSetItem = Storage.prototype.setItem;
+    vi.spyOn(Storage.prototype, "setItem").mockImplementation(function setItemWithQuota(key, value) {
+      if (String(value).includes("old-reference-secret")) {
+        throw new DOMException("Storage quota exceeded", "QuotaExceededError");
+      }
+      return originalSetItem.call(this, key, value);
+    });
+
+    saveProject(activeProject);
+
+    const storedProjects = JSON.parse(
+      localStorage.getItem("ai-openscad.projects") ?? "[]"
+    ) as Array<typeof activeProject>;
+    expect(localStorage.getItem("ai-openscad.active-project-id")).toBe("new-active");
+    expect(storedProjects.map((project) => project.id)).toEqual([
+      "new-active",
+      "old-reference-heavy"
+    ]);
+    expect(storedProjects[0].referenceImages).toEqual([]);
+    expect(storedProjects[1].referenceImages).toEqual([]);
+    expect(JSON.stringify(storedProjects)).not.toContain("old-reference-secret");
   });
 
   it("keeps the page saveable when rendered STL exceeds local storage quota", () => {

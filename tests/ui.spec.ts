@@ -872,12 +872,20 @@ test("reference image action opens a compact multi-image picker", async ({
   await page.goto("/");
 
   const describeButton = page.getByRole("button", { name: /^Reference images$/ });
+  const optimizeButton = page.getByRole("button", { name: /^Optimize prompt$/ });
   const generateButton = page.getByRole("button", { name: /^Generate$/i });
   await expect(describeButton).toBeVisible();
   await expect(describeButton).toBeEnabled();
+  await expect(optimizeButton).toBeVisible();
+  await expect(optimizeButton).toBeDisabled();
   await expect(generateButton).toBeVisible();
+  await page.locator(".agentInput").fill("Make a small printable wall hook");
+  await expect(optimizeButton).toBeEnabled();
   await expect(
     page.locator(".agentComposer").getByText("Reference images", { exact: true })
+  ).toHaveCount(1);
+  await expect(
+    page.locator(".agentComposer").getByText("Optimize prompt", { exact: true })
   ).toHaveCount(1);
   await expect(page.getByRole("button", { name: /^Describe reference images$/ })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Clear reference images" })).toHaveCount(0);
@@ -886,10 +894,15 @@ test("reference image action opens a compact multi-image picker", async ({
   await expect(page.getByText("front-reference.png")).toHaveCount(0);
 
   const initialReferenceBox = await describeButton.boundingBox();
+  const initialOptimizeBox = await optimizeButton.boundingBox();
   const initialGenerateBox = await generateButton.boundingBox();
   expect(initialReferenceBox).not.toBeNull();
+  expect(initialOptimizeBox).not.toBeNull();
   expect(initialGenerateBox).not.toBeNull();
+  expect(initialReferenceBox!.x).toBeLessThan(initialOptimizeBox!.x);
+  expect(initialOptimizeBox!.x).toBeLessThan(initialGenerateBox!.x);
   expect(Math.abs(initialReferenceBox!.y - initialGenerateBox!.y)).toBeLessThanOrEqual(2);
+  expect(Math.abs(initialReferenceBox!.y - initialOptimizeBox!.y)).toBeLessThanOrEqual(2);
 
   const canceledChooserPromise = page.waitForEvent("filechooser");
   await describeButton.click();
@@ -914,6 +927,7 @@ test("reference image action opens a compact multi-image picker", async ({
   await expect(page.getByRole("button", { name: /Remove front-reference\.png/i })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Clear reference images" })).toHaveCount(0);
   await expect(describeButton).toBeDisabled();
+  await expect(optimizeButton).toBeDisabled();
   await expect(generateButton).toBeDisabled();
 
   const pageWidthWithImages = await page.evaluate(() => ({
@@ -935,6 +949,24 @@ test("reference image action opens a compact multi-image picker", async ({
   await expect(page.getByText("front-reference.png")).toHaveCount(0);
   await expect(page.getByText("side-reference.png")).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Clear reference images" })).toHaveCount(0);
+});
+
+test("prompt optimization is unavailable after the model is ready for review", async ({
+  page
+}) => {
+  await page.addInitScript((storedProject) => {
+    localStorage.setItem("ai-openscad.llm-api-key", "sk-llm");
+    localStorage.setItem("ai-openscad.project", JSON.stringify(storedProject));
+  }, {
+    ...project,
+    review: null
+  });
+
+  await page.goto("/");
+
+  await expect(page.getByRole("button", { name: /^Review$/i })).toBeEnabled();
+  await expect(page.getByRole("button", { name: /^Generate$/i })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: /^Optimize prompt$/ })).toHaveCount(0);
 });
 
 test("invalid STL keeps a labelled preview and leaves the workbench usable", async ({
