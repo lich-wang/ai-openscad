@@ -107,6 +107,25 @@ function referenceImageFile(name: string) {
   };
 }
 
+async function chooseReferenceImages(
+  page: Page,
+  files: ReturnType<typeof referenceImageFile>[]
+) {
+  const chooserPromise = page.waitForEvent("filechooser");
+  await page.getByRole("button", { name: "Describe reference images" }).click();
+  const chooser = await chooserPromise;
+  expect(chooser.isMultiple()).toBe(true);
+  await chooser.setFiles(files);
+}
+
+async function cancelReferenceImageSelection(page: Page) {
+  const chooserPromise = page.waitForEvent("filechooser");
+  await page.getByRole("button", { name: "Describe reference images" }).click();
+  const chooser = await chooserPromise;
+  expect(chooser.isMultiple()).toBe(true);
+  await chooser.setFiles([]);
+}
+
 async function expectTimelineOrder(page: Page, labels: string[]) {
   const positions = await page.locator(".agentTimeline").evaluate((timeline, expected) => {
     const text = timeline.textContent ?? "";
@@ -491,20 +510,20 @@ test("reference images draft an editable requirement before generation", async (
 
   await page.setViewportSize({ width: 1440, height: 980 });
   await page.goto("/");
-  const referenceInput = page.getByLabel("Reference images");
   const describeButton = page.getByRole("button", { name: "Describe reference images" });
-  await expect(describeButton).toBeDisabled();
-  await referenceInput.setInputFiles([
+  await expect(describeButton).toBeEnabled();
+  await chooseReferenceImages(page, [
     referenceImageFile("reference-front.png"),
     referenceImageFile("reference-side.png")
   ]);
-  await expect(page.getByText("reference-front.png")).toBeVisible();
-  await expect(page.getByText("reference-side.png")).toBeVisible();
-  await expect(describeButton).toBeEnabled();
+  await expect(page.getByText("reference-front.png")).toHaveCount(0);
+  await expect(page.getByText("reference-side.png")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Clear reference images" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: /Remove reference-front\.png/i })).toHaveCount(0);
 
-  await describeButton.click();
   await expect(page.locator(".agentInput")).toHaveValue(/壁挂杯架/, { timeout: 30_000 });
   await expect(page.locator(".agentInput")).toBeEnabled();
+  await expect(describeButton).toBeEnabled();
   expect(visionRequests).toBe(1);
   expect(llmRequests).toBe(0);
   await expect(page.locator(".agentRun")).toContainText(/Reference prompt drafted/i);
@@ -654,11 +673,9 @@ test("pending revision blocks reference image prompt drafting", async ({ page })
   });
 
   await page.goto("/");
-  await page.getByLabel("Reference images").setInputFiles([
-    referenceImageFile("pending-reference.png")
-  ]);
-  await expect(page.getByText("pending-reference.png")).toBeVisible();
   await expect(page.getByRole("button", { name: "Describe reference images" })).toBeDisabled();
+  await expect(page.getByText("pending-reference.png")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Clear reference images" })).toHaveCount(0);
   await expect(page.locator(".pendingActionHint")).toBeVisible();
   await delay(500);
   expect(visionRequests).toBe(0);
@@ -734,11 +751,11 @@ test("late reference image draft responses do not overwrite newer composer state
   });
 
   await page.goto("/");
-  await page.getByLabel("Reference images").setInputFiles([
+  await chooseReferenceImages(page, [
     referenceImageFile("late-reference.png")
   ]);
-  await page.getByRole("button", { name: "Describe reference images" }).click();
   await firstStartedPromise;
+  await expect(page.getByText("late-reference.png")).toHaveCount(0);
   await page.locator(".agentInput").evaluate((node) => {
     const textarea = node as HTMLTextAreaElement;
     textarea.disabled = false;
@@ -758,7 +775,7 @@ test("late reference image draft responses do not overwrite newer composer state
   expect(JSON.stringify(stored.promptTrace ?? [])).not.toContain("过期响应不应该覆盖");
 });
 
-test("changed reference image set invalidates late draft responses", async ({ page }) => {
+test("canceling the reference image picker sends no vision request", async ({ page }) => {
   await page.addInitScript((storedProject) => {
     localStorage.setItem("ai-openscad.vision-api-key", "sk-vision");
     localStorage.setItem(
@@ -789,61 +806,34 @@ test("changed reference image set invalidates late draft responses", async ({ pa
     );
   }, project);
 
-  let releaseFirst = () => {};
-  let firstStarted = () => {};
-  const firstStartedPromise = new Promise<void>((resolve) => {
-    firstStarted = resolve;
-  });
-  const releaseFirstPromise = new Promise<void>((resolve) => {
-    releaseFirst = resolve;
-  });
+  let visionRequests = 0;
   await page.route("**/api/vision", async (route) => {
-    firstStarted();
-    await releaseFirstPromise;
+    visionRequests += 1;
     await route.fulfill({
-      status: 200,
+      status: 500,
       contentType: "application/json",
-      body: JSON.stringify({
-        content: JSON.stringify({
-          prompt: "第一张图片的过期响应不应该覆盖换图后的输入。"
-        })
-      })
+      body: JSON.stringify({ error: "Canceled picker should not call vision" })
     });
   });
 
   await page.goto("/");
-  const referenceInput = page.getByLabel("Reference images");
-  await referenceInput.setInputFiles([referenceImageFile("first-reference.png")]);
-  await page.getByRole("button", { name: "Describe reference images" }).click();
-  await firstStartedPromise;
-  await referenceInput.evaluate((node, payload) => {
-    const input = node as HTMLInputElement;
-    const bytes = Uint8Array.from(atob(payload as string), (char) => char.charCodeAt(0));
-    const transfer = new DataTransfer();
-    transfer.items.add(
-      new File([bytes], "replacement-reference.png", { type: "image/png" })
-    );
-    input.disabled = false;
-    Object.defineProperty(input, "files", {
-      configurable: true,
-      value: transfer.files
-    });
-    input.dispatchEvent(new Event("change", { bubbles: true }));
-  }, referenceImagePayload);
-  await expect(page.getByText("replacement-reference.png")).toBeVisible();
-  releaseFirst();
+  await expect(page.getByRole("button", { name: "Describe reference images" })).toBeEnabled();
+  await cancelReferenceImageSelection(page);
 
   await delay(500);
   await expect(page.locator(".agentInput")).toHaveValue("初始手写需求");
-  await expect(page.locator(".agentRun")).not.toContainText("第一张图片的过期响应");
+  await expect(page.locator(".agentRun")).not.toContainText("Canceled picker");
+  await expect(page.getByText(/reference\.png/i)).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Clear reference images" })).toHaveCount(0);
+  expect(visionRequests).toBe(0);
   const stored = await page.evaluate(() =>
     JSON.parse(localStorage.getItem("ai-openscad.project") ?? "{}")
   );
   expect(stored.requirement).toBe("初始手写需求");
-  expect(JSON.stringify(stored.promptTrace ?? [])).not.toContain("第一张图片的过期响应");
+  expect(JSON.stringify(stored.promptTrace ?? [])).toBe("[]");
 });
 
-test("reference image draft failure preserves selected images and request-start text", async ({
+test("reference image draft failure preserves request-start text without selected images", async ({
   page
 }, testInfo) => {
   test.setTimeout(45_000);
@@ -898,19 +888,19 @@ test("reference image draft failure preserves selected images and request-start 
   });
 
   await page.goto("/");
-  await page.getByLabel("Reference images").setInputFiles([
+  await chooseReferenceImages(page, [
     referenceImageFile("failed-front.png"),
     referenceImageFile("failed-side.png")
   ]);
-  await page.getByRole("button", { name: "Describe reference images" }).click();
   await visionStartedPromise;
 
   await expect(page.locator(".agentInput")).toBeDisabled();
-  await expect(page.getByLabel("Reference images")).toBeDisabled();
+  await expect(page.getByText("failed-front.png")).toHaveCount(0);
+  await expect(page.getByText("failed-side.png")).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Describe reference images" })).toBeDisabled();
-  await expect(page.getByRole("button", { name: "Remove failed-front.png" })).toBeDisabled();
-  await expect(page.getByRole("button", { name: "Remove failed-side.png" })).toBeDisabled();
-  await expect(page.getByRole("button", { name: "Clear reference images" })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Remove failed-front.png" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Remove failed-side.png" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Clear reference images" })).toHaveCount(0);
   await expectButtonAbsentOrDisabled(page, /^Generate$/i);
   await expect(page.getByRole("button", { name: /^Review$/i })).toBeDisabled();
   await expect(page.getByRole("button", { name: /^Rerender$/i })).toBeDisabled();
@@ -934,12 +924,21 @@ test("reference image draft failure preserves selected images and request-start 
   );
   await expect(page.locator(".agentInput")).toHaveValue("手写的备用需求");
   await expect(page.locator(".agentInput")).toBeEnabled();
-  await expect(page.getByText("failed-front.png")).toBeVisible();
-  await expect(page.getByText("failed-side.png")).toBeVisible();
+  await expect(page.getByText("failed-front.png")).toHaveCount(0);
+  await expect(page.getByText("failed-side.png")).toHaveCount(0);
+  const storedAfterFailure = await page.evaluate(() =>
+    JSON.stringify(JSON.parse(localStorage.getItem("ai-openscad.project") ?? "{}"))
+  );
+  expect(storedAfterFailure).not.toContain("failed-front.png");
+  expect(storedAfterFailure).not.toContain("failed-side.png");
+  expect(storedAfterFailure).not.toContain(`data:image/png;base64,${referenceImagePayload}`);
+  expect(storedAfterFailure).not.toContain(referenceImagePayload);
+  expect(storedAfterFailure).not.toContain("blob:");
+  expect(storedAfterFailure).not.toContain("referenceImages");
   await expect(page.getByRole("button", { name: "Describe reference images" })).toBeEnabled();
-  await expect(page.getByRole("button", { name: "Remove failed-front.png" })).toBeEnabled();
-  await expect(page.getByRole("button", { name: "Remove failed-side.png" })).toBeEnabled();
-  await expect(page.getByRole("button", { name: "Clear reference images" })).toBeEnabled();
+  await expect(page.getByRole("button", { name: "Remove failed-front.png" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Remove failed-side.png" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Clear reference images" })).toHaveCount(0);
   await expect(page.getByRole("button", { name: /^Review$/i })).toBeEnabled();
   await expect(page.getByRole("button", { name: /^Rerender$/i })).toBeEnabled();
   await expect(page.getByRole("button", { name: /Final Export/i })).toBeEnabled();
@@ -953,6 +952,10 @@ test("reference image draft failure preserves selected images and request-start 
   await page.locator(".workspace").screenshot({
     path: testInfo.outputPath("reference-image-draft-failure.png")
   });
+  await cancelReferenceImageSelection(page);
+  await delay(500);
+  await expect(page.locator(".agentInput")).toHaveValue("手写的备用需求");
+  await expect(page.getByText("failed-front.png")).toHaveCount(0);
 });
 
 test("generation streams code and automatically renders draft views", async ({ page }) => {

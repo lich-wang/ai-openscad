@@ -285,14 +285,14 @@ export default function App() {
   const [error, setError] = useState("");
   const [errorStage, setErrorStage] = useState<WorkflowStage | "">("");
   const [renderStatus, setRenderStatus] = useState("");
-  const [referenceImages, setReferenceImages] = useState<ReferenceImageSelection[]>([]);
   const [autoRunActive, setAutoRunActive] = useState(false);
   const busyRef = useRef<BusyState>("idle");
   const operationTokenRef = useRef(0);
   const referenceDraftTokenRef = useRef(0);
+  const referenceDraftFingerprintRef = useRef("");
   const projectRef = useRef(project);
   const requirementInputRef = useRef<HTMLTextAreaElement | null>(null);
-  const referenceImagesRef = useRef<ReferenceImageSelection[]>([]);
+  const referenceFileInputRef = useRef<HTMLInputElement | null>(null);
   const autoRunTokenRef = useRef(0);
   const targetConfidencePercentRef = useRef(targetConfidencePercent);
   const autoIterationLimitRef = useRef(autoIterationLimit);
@@ -331,9 +331,12 @@ export default function App() {
       renderedViewCount(project.views) > 0 ||
       project.review
   );
-  const referenceControlsDisabled = controlsLocked;
-  const describeReferenceDisabled =
-    referenceControlsDisabled || hasPendingRevision || referenceImages.length === 0;
+  const canUseVisionModelForDraft =
+    getModelPreset(project.visionModelId, "vision").provider === "mimo" ||
+    Boolean(visionApiKey.trim());
+  const referenceControlsDisabled =
+    controlsLocked || hasPendingRevision || !canUseVisionModelForDraft;
+  const describeReferenceDisabled = referenceControlsDisabled;
 
   function addDraftRenderTimeoutGuidance(diagnostics: string): string {
     if (!diagnostics.includes("OpenSCAD render timed out")) {
@@ -365,10 +368,6 @@ export default function App() {
   }, [project]);
 
   useEffect(() => {
-    referenceImagesRef.current = referenceImages;
-  }, [referenceImages]);
-
-  useEffect(() => {
     saveProject(project);
     setProjectList((current) => upsertProjectList(current, project));
   }, [project]);
@@ -390,18 +389,16 @@ export default function App() {
     setBusy(nextBusy);
   }
 
-  function replaceReferenceImages(nextImages: ReferenceImageSelection[]) {
-    referenceImagesRef.current = nextImages;
-    setReferenceImages(nextImages);
-  }
-
   function invalidateReferenceDrafts() {
     referenceDraftTokenRef.current += 1;
+    referenceDraftFingerprintRef.current = "";
   }
 
   function clearReferenceImages() {
-    replaceReferenceImages([]);
     invalidateReferenceDrafts();
+    if (referenceFileInputRef.current) {
+      referenceFileInputRef.current.value = "";
+    }
   }
 
   function updateTargetConfidence(value: number) {
@@ -602,17 +599,10 @@ export default function App() {
     }
   }
 
-  async function handleReferenceImageChange(event: ChangeEvent<HTMLInputElement>) {
-    invalidateReferenceDrafts();
-    const selectionToken = referenceDraftTokenRef.current;
-    const files = Array.from(event.currentTarget.files ?? []).filter((file) =>
-      file.type.startsWith("image/")
-    );
-    if (!files.length) {
-      replaceReferenceImages([]);
-      return;
-    }
-    const images = await Promise.all(
+  async function buildReferenceImagesFromFiles(
+    files: File[]
+  ): Promise<ReferenceImageSelection[]> {
+    return Promise.all(
       files.map(async (file) => ({
         id: crypto.randomUUID(),
         name: file.name,
@@ -623,24 +613,32 @@ export default function App() {
         fingerprint: `${file.name}:${file.type}:${file.size}:${file.lastModified}`
       }))
     );
-    if (referenceDraftTokenRef.current !== selectionToken) {
+  }
+
+  async function handleReferenceImageChange(event: ChangeEvent<HTMLInputElement>) {
+    const files = Array.from(event.currentTarget.files ?? []).filter((file) =>
+      file.type.startsWith("image/")
+    );
+    event.currentTarget.value = "";
+    if (!files.length) {
       return;
     }
-    replaceReferenceImages(images);
-    event.currentTarget.value = "";
+    await draftReferenceImages(files);
   }
 
-  function handleRemoveReferenceImage(id: string) {
-    invalidateReferenceDrafts();
-    replaceReferenceImages(referenceImagesRef.current.filter((image) => image.id !== id));
+  function handleDescribeReferenceImages() {
+    if (describeReferenceDisabled) {
+      return;
+    }
+    referenceFileInputRef.current?.click();
   }
 
-  async function handleDescribeReferenceImages() {
+  async function draftReferenceImages(files: File[]) {
     await runSafely("draftingReference", async () => {
       requireVisionApiKey();
-      const imagesAtStart = referenceImagesRef.current;
+      const imagesAtStart = await buildReferenceImagesFromFiles(files);
       if (!imagesAtStart.length) {
-        throw new Error(tr("missingReferenceImages"));
+        return;
       }
       const activeProject = projectRef.current;
       if (activeProject.proposedCode.trim()) {
@@ -651,57 +649,62 @@ export default function App() {
       const imageSetFingerprint = referenceImageFingerprint(imagesAtStart);
       const requestToken = referenceDraftTokenRef.current + 1;
       referenceDraftTokenRef.current = requestToken;
-      const { prompt, trace } = await describeReferenceImages({
-        apiKey: visionApiKey,
-        modelId: activeProject.visionModelId,
-        images: imagesAtStart.map((image) => image.dataUrl)
-      });
-      const stillCurrent =
-        projectRef.current.id === activeProjectId &&
-        projectRef.current.requirement === baselineRequirement &&
-        (requirementInputRef.current?.value ?? projectRef.current.requirement) ===
-          baselineRequirement &&
-        referenceImageFingerprint(referenceImagesRef.current) === imageSetFingerprint &&
-        referenceDraftTokenRef.current === requestToken;
-      if (!stillCurrent) {
-        return;
-      }
-      setProject((current) => {
-        if (
-          current.id !== activeProjectId ||
-          current.requirement !== baselineRequirement ||
-          (requirementInputRef.current?.value ?? current.requirement) !== baselineRequirement ||
-          referenceImageFingerprint(referenceImagesRef.current) !== imageSetFingerprint ||
-          referenceDraftTokenRef.current !== requestToken
-        ) {
-          return current;
+      referenceDraftFingerprintRef.current = imageSetFingerprint;
+      try {
+        const { prompt, trace } = await describeReferenceImages({
+          apiKey: visionApiKey,
+          modelId: activeProject.visionModelId,
+          images: imagesAtStart.map((image) => image.dataUrl)
+        });
+        const stillCurrent =
+          projectRef.current.id === activeProjectId &&
+          projectRef.current.requirement === baselineRequirement &&
+          (requirementInputRef.current?.value ?? projectRef.current.requirement) ===
+            baselineRequirement &&
+          referenceDraftFingerprintRef.current === imageSetFingerprint &&
+          referenceDraftTokenRef.current === requestToken;
+        if (!stillCurrent) {
+          return;
         }
-        const next = {
-          ...current,
-          requirement: prompt,
-          originalRequirement: "",
-          currentCode: "",
-          proposedCode: "",
-          compilerOutput: "",
-          renderEvidence: null,
-          review: null,
-          stl: "",
-          views: emptyViews(),
-          runEvents: [
-            ...current.runEvents,
-            createRunEvent({
-              role: "assistant",
-              title: tr("referencePromptDrafted"),
-              content: prompt,
-              status: "complete"
-            })
-          ],
-          promptTrace: [...current.promptTrace, trace],
-          updatedAt: new Date().toISOString()
-        };
-        projectRef.current = next;
-        return next;
-      });
+        setProject((current) => {
+          if (
+            current.id !== activeProjectId ||
+            current.requirement !== baselineRequirement ||
+            (requirementInputRef.current?.value ?? current.requirement) !== baselineRequirement
+          ) {
+            return current;
+          }
+          const next = {
+            ...current,
+            requirement: prompt,
+            originalRequirement: "",
+            currentCode: "",
+            proposedCode: "",
+            compilerOutput: "",
+            renderEvidence: null,
+            review: null,
+            stl: "",
+            views: emptyViews(),
+            runEvents: [
+              ...current.runEvents,
+              createRunEvent({
+                role: "assistant",
+                title: tr("referencePromptDrafted"),
+                content: prompt,
+                status: "complete"
+              })
+            ],
+            promptTrace: [...current.promptTrace, trace],
+            updatedAt: new Date().toISOString()
+          };
+          projectRef.current = next;
+          return next;
+        });
+      } finally {
+        if (referenceDraftTokenRef.current === requestToken) {
+          referenceDraftFingerprintRef.current = "";
+        }
+      }
     });
   }
 
@@ -2291,46 +2294,18 @@ export default function App() {
               placeholder={tr("requirementPlaceholder")}
             />
             <div className="referenceImagePanel">
-              <label className="referenceImagePicker">
-                <span>{tr("referenceImages")}</span>
-                <input
-                  accept="image/*"
-                  aria-label={tr("referenceImages")}
-                  disabled={referenceControlsDisabled}
-                  multiple
-                  onChange={handleReferenceImageChange}
-                  type="file"
-                />
-              </label>
-              {referenceImages.length ? (
-                <ul className="referenceImageList">
-                  {referenceImages.map((image) => (
-                    <li key={image.id}>
-                      <span>{image.name}</span>
-                      <button
-                        aria-label={`${tr("removeReferenceImage")} ${image.name}`}
-                        disabled={referenceControlsDisabled}
-                        onClick={() => handleRemoveReferenceImage(image.id)}
-                        type="button"
-                      >
-                        <X size={14} />
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-              ) : null}
+              <input
+                accept="image/*"
+                aria-label={tr("referenceImages")}
+                className="referenceImageInput"
+                disabled={referenceControlsDisabled}
+                multiple
+                onChange={handleReferenceImageChange}
+                ref={referenceFileInputRef}
+                type="file"
+              />
               <div className="referenceImageActions">
-                {referenceImages.length ? (
-                  <button
-                    className="referenceClearButton"
-                    disabled={referenceControlsDisabled}
-                    onClick={clearReferenceImages}
-                    type="button"
-                  >
-                    <X size={14} />
-                    <span>{tr("clearReferenceImages")}</span>
-                  </button>
-                ) : null}
+                <span className="referenceImageLabel">{tr("referenceImages")}</span>
                 <button
                   className="referenceDescribeButton"
                   disabled={describeReferenceDisabled}

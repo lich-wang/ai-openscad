@@ -49,6 +49,11 @@ function referenceImageFile(name: string) {
     buffer: Buffer.from(pixel.split(",")[1], "base64")
   };
 }
+
+function delay(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
 const validStl = `solid ui-test
 facet normal 0 0 1
   outer loop
@@ -826,7 +831,7 @@ test("empty task keeps the Agent Run surface without a thinking placeholder", as
   }
 });
 
-test("reference image controls support multi-image and narrow composer states", async ({
+test("reference image action opens a compact multi-image picker", async ({
   page
 }, testInfo) => {
   await page.setViewportSize({ width: 390, height: 920 });
@@ -835,25 +840,66 @@ test("reference image controls support multi-image and narrow composer states", 
     localStorage.setItem("ai-openscad.project", JSON.stringify(storedProject));
   }, emptyProject);
 
+  let visionRequests = 0;
+  let releaseVision = () => {};
+  let visionStarted = () => {};
+  const visionStartedPromise = new Promise<void>((resolve) => {
+    visionStarted = resolve;
+  });
+  const releaseVisionPromise = new Promise<void>((resolve) => {
+    releaseVision = resolve;
+  });
+  await page.route("**/api/vision", async (route) => {
+    visionRequests += 1;
+    const payload = JSON.stringify(route.request().postDataJSON());
+    expect(payload).toContain(pixel.split(",")[1]);
+    expect(payload).toContain("target model prompt");
+    expect(payload).not.toContain("front-reference.png");
+    expect(payload).not.toContain("side-reference.png");
+    visionStarted();
+    await releaseVisionPromise;
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        content: JSON.stringify({
+          prompt: "A compact printable reference-image prompt."
+        })
+      })
+    });
+  });
+
   await page.goto("/");
 
-  const referenceInput = page.getByLabel("Reference images");
   const describeButton = page.getByRole("button", { name: "Describe reference images" });
-  await expect(referenceInput).toBeVisible();
-  await expect(describeButton).toBeDisabled();
+  await expect(describeButton).toBeVisible();
+  await expect(describeButton).toBeEnabled();
   await expect(page.getByRole("button", { name: "Clear reference images" })).toHaveCount(0);
+  await expect(page.getByText("front-reference.png")).toHaveCount(0);
 
-  await referenceInput.setInputFiles([
+  const canceledChooserPromise = page.waitForEvent("filechooser");
+  await describeButton.click();
+  const canceledChooser = await canceledChooserPromise;
+  expect(canceledChooser.isMultiple()).toBe(true);
+  await canceledChooser.setFiles([]);
+  await delay(300);
+  expect(visionRequests).toBe(0);
+  await expect(describeButton).toBeEnabled();
+
+  const chooserPromise = page.waitForEvent("filechooser");
+  await describeButton.click();
+  const chooser = await chooserPromise;
+  expect(chooser.isMultiple()).toBe(true);
+  await chooser.setFiles([
     referenceImageFile("front-reference.png"),
     referenceImageFile("side-reference.png")
   ]);
-  await expect(page.getByText("front-reference.png")).toBeVisible();
-  await expect(page.getByText("side-reference.png")).toBeVisible();
-  await expect(describeButton).toBeEnabled();
-  await expect(
-    page.getByRole("button", { name: "Remove front-reference.png" })
-  ).toBeVisible();
-  await expect(page.getByRole("button", { name: "Clear reference images" })).toBeVisible();
+  await visionStartedPromise;
+  await expect(page.getByText("front-reference.png")).toHaveCount(0);
+  await expect(page.getByText("side-reference.png")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: /Remove front-reference\.png/i })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Clear reference images" })).toHaveCount(0);
+  await expect(describeButton).toBeDisabled();
 
   const pageWidthWithImages = await page.evaluate(() => ({
     clientWidth: document.documentElement.clientWidth,
@@ -864,15 +910,16 @@ test("reference image controls support multi-image and narrow composer states", 
     path: testInfo.outputPath("reference-image-composer-narrow.png")
   });
 
-  await page.getByRole("button", { name: "Remove front-reference.png" }).click();
-  await expect(page.getByText("front-reference.png")).toHaveCount(0);
-  await expect(page.getByText("side-reference.png")).toBeVisible();
+  releaseVision();
+  await expect(page.locator(".agentInput")).toHaveValue(
+    "A compact printable reference-image prompt.",
+    { timeout: 30_000 }
+  );
+  expect(visionRequests).toBe(1);
   await expect(describeButton).toBeEnabled();
-
-  await page.getByRole("button", { name: "Clear reference images" }).click();
+  await expect(page.getByText("front-reference.png")).toHaveCount(0);
   await expect(page.getByText("side-reference.png")).toHaveCount(0);
-  await expect(describeButton).toBeDisabled();
-  await expect(referenceInput).toBeVisible();
+  await expect(page.getByRole("button", { name: "Clear reference images" })).toHaveCount(0);
 });
 
 test("invalid STL keeps a labelled preview and leaves the workbench usable", async ({
