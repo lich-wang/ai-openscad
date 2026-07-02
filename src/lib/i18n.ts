@@ -180,6 +180,8 @@ export const messages = {
     autoRunRollbackFreshReview:
       "Fresh review of the restored model is running before any further automatic revision.",
     streamingCode: "Streaming OpenSCAD from LLM...",
+    thinking: "Thinking",
+    thinkingCollapsed: "Collapsed",
     generatedCode: "Generated OpenSCAD code",
     codeCollapsed: "Collapsed",
     renderStarted: "Render started",
@@ -369,6 +371,8 @@ export const messages = {
     regressedConfidence: "退步置信度",
     autoRunRollbackFreshReview: "正在重新评审恢复后的模型，然后才会继续任何自动修订。",
     streamingCode: "正在从 LLM 流式生成 OpenSCAD...",
+    thinking: "思考过程",
+    thinkingCollapsed: "已折叠",
     generatedCode: "已生成 OpenSCAD 代码",
     codeCollapsed: "已折叠",
     renderStarted: "渲染开始",

@@ -198,6 +198,24 @@ class AutoRunCanceledError extends Error {
   }
 }
 
+class StaleTextStreamError extends Error {
+  constructor() {
+    super("Stale text stream was ignored.");
+  }
+}
+
+interface TextStreamIdentity {
+  token: number;
+  projectId: string;
+  eventId: string;
+  submittedRequirement: string;
+}
+
+interface WorkflowIdentity {
+  token: number;
+  projectId: string;
+}
+
 function clampInteger(value: number, min: number, max: number): number {
   if (!Number.isFinite(value)) {
     return min;
@@ -302,6 +320,8 @@ export default function App() {
   const [promptFieldDraft, setPromptFieldDraft] = useState<PromptFieldDraft | null>(null);
   const busyRef = useRef<BusyState>("idle");
   const operationTokenRef = useRef(0);
+  const workflowTokenRef = useRef(0);
+  const textStreamTokenRef = useRef(0);
   const referenceDraftTokenRef = useRef(0);
   const referenceDraftFingerprintRef = useRef("");
   const promptOptimizationTokenRef = useRef(0);
@@ -526,6 +546,60 @@ export default function App() {
     updateBusy("idle");
   }
 
+  function cancelTextStreams() {
+    textStreamTokenRef.current += 1;
+  }
+
+  function cancelWorkflows() {
+    workflowTokenRef.current += 1;
+    cancelTextStreams();
+  }
+
+  function beginWorkflow(projectId: string): WorkflowIdentity {
+    const token = workflowTokenRef.current + 1;
+    workflowTokenRef.current = token;
+    return { token, projectId };
+  }
+
+  function workflowIsCurrent(identity: WorkflowIdentity, current = projectRef.current) {
+    return workflowTokenRef.current === identity.token && current.id === identity.projectId;
+  }
+
+  function ensureWorkflowCurrent(identity?: WorkflowIdentity) {
+    if (identity && !workflowIsCurrent(identity)) {
+      throw new StaleTextStreamError();
+    }
+  }
+
+  function beginTextStream(input: {
+    projectId: string;
+    eventId: string;
+    submittedRequirement: string;
+  }): TextStreamIdentity {
+    const token = textStreamTokenRef.current + 1;
+    textStreamTokenRef.current = token;
+    return {
+      token,
+      projectId: input.projectId,
+      eventId: input.eventId,
+      submittedRequirement: input.submittedRequirement
+    };
+  }
+
+  function textStreamIsCurrent(identity: TextStreamIdentity, current = projectRef.current) {
+    return (
+      textStreamTokenRef.current === identity.token &&
+      current.id === identity.projectId &&
+      current.runEvents.some((event) => event.id === identity.eventId)
+    );
+  }
+
+  function ensureTextStreamCurrent(identity: TextStreamIdentity) {
+    if (!textStreamIsCurrent(identity)) {
+      throw new StaleTextStreamError();
+    }
+  }
+
   function ensureAutoRunCurrent(token: number) {
     if (autoRunTokenRef.current !== token) {
       throw new AutoRunCanceledError();
@@ -564,6 +638,8 @@ export default function App() {
     content: string;
     status?: RunEventStatus;
     code?: string;
+    thinking?: string;
+    thinkingCollapsed?: boolean;
     id?: string;
     review?: NonNullable<ProjectState["review"]>;
   }): RunEvent {
@@ -575,8 +651,31 @@ export default function App() {
       content: input.content,
       status: input.status ?? "complete",
       code: input.code,
+      thinking: input.thinking,
+      thinkingCollapsed: input.thinkingCollapsed,
       review: input.review
     };
+  }
+
+  function updateRunEventThinking(identity: TextStreamIdentity, thinking: string) {
+    setProject((current) => {
+      if (!textStreamIsCurrent(identity, current)) {
+        return current;
+      }
+      return {
+        ...current,
+        runEvents: current.runEvents.map((event) =>
+          event.id === identity.eventId
+            ? { ...event, thinking, thinkingCollapsed: false }
+            : event
+        ),
+        updatedAt: new Date().toISOString()
+      };
+    });
+  }
+
+  function collapseRunEventThinking(event: RunEvent) {
+    return event.thinking ? { ...event, thinkingCollapsed: true } : event;
   }
 
   function appendRunEvent(event: RunEvent) {
@@ -655,7 +754,7 @@ export default function App() {
     try {
       await task();
     } catch (caught) {
-      if (caught instanceof AutoRunCanceledError) {
+      if (caught instanceof AutoRunCanceledError || caught instanceof StaleTextStreamError) {
         return;
       }
       const message = caught instanceof Error ? caught.message : String(caught);
@@ -897,10 +996,12 @@ export default function App() {
     const autoRunToken = shouldAutoRun ? beginAutoRun() : 0;
     await runSafely("generating", async () => {
       requireLlmApiKey();
-      if (!project.requirement.trim()) {
+      const activeProject = projectRef.current;
+      if (!activeProject.requirement.trim()) {
         throw new Error(tr("missingRequirement"));
       }
-      const originalRequirement = project.requirement.trim();
+      const originalRequirement = activeProject.requirement.trim();
+      const workflow = beginWorkflow(activeProject.id);
       const userEvent = createRunEvent({
         role: "user",
         title: tr("userRequest"),
@@ -914,23 +1015,33 @@ export default function App() {
         content: tr("streamingCode"),
         status: "active"
       });
-      setProject((current) => ({
-        ...current,
-        originalRequirement,
-        currentCode: "",
-        proposedCode: "",
-        review: null,
-        stl: "",
-        views: emptyViews(),
-        renderEvidence: null,
-        compilerOutput: tr("streamingCode"),
-        runEvents: [userEvent, codeEvent]
-      }));
+      const textStream = beginTextStream({
+        projectId: activeProject.id,
+        eventId: codeEventId,
+        submittedRequirement: originalRequirement
+      });
+      setProject((current) =>
+        current.id === activeProject.id
+          ? {
+              ...current,
+              requirement: "",
+              originalRequirement,
+              currentCode: "",
+              proposedCode: "",
+              review: null,
+              stl: "",
+              views: emptyViews(),
+              renderEvidence: null,
+              compilerOutput: tr("streamingCode"),
+              runEvents: [userEvent, codeEvent]
+            }
+          : current
+      );
       let generated: Awaited<ReturnType<typeof generateOpenScad>>;
       try {
         generated = await generateOpenScad({
           apiKey: llmApiKey,
-          modelId: project.codeModelId,
+          modelId: activeProject.codeModelId,
           requirement: originalRequirement,
           precision: "draft",
           onToken: (streamedCode) => {
@@ -938,16 +1049,24 @@ export default function App() {
               return;
             }
             setProject((current) => ({
-              ...current,
-              currentCode: streamedCode,
-              compilerOutput: tr("streamingCode"),
-              runEvents: current.runEvents.map((event) =>
-                event.id === codeEventId ? { ...event, code: streamedCode } : event
-              )
+              ...(workflowIsCurrent(workflow, current) && textStreamIsCurrent(textStream, current)
+                ? {
+                    ...current,
+                    currentCode: streamedCode,
+                    compilerOutput: tr("streamingCode"),
+                    runEvents: current.runEvents.map((event) =>
+                      event.id === codeEventId ? { ...event, code: streamedCode } : event
+                    )
+                  }
+                : current)
             }));
-          }
+          },
+          onThinkingToken: (thinking) => updateRunEventThinking(textStream, thinking)
         });
       } catch (caught) {
+        if (!workflowIsCurrent(workflow) || !textStreamIsCurrent(textStream)) {
+          throw new StaleTextStreamError();
+        }
         if (shouldAutoRun) {
           ensureAutoRunCurrent(autoRunToken);
         }
@@ -957,34 +1076,46 @@ export default function App() {
       if (shouldAutoRun) {
         ensureAutoRunCurrent(autoRunToken);
       }
+      ensureTextStreamCurrent(textStream);
+      ensureWorkflowCurrent(workflow);
       setProject((current) => ({
-        ...current,
-        currentCode: code,
-        proposedCode: "",
-        review: null,
-        stl: "",
-        views: emptyViews(),
-        renderEvidence: null,
-        compilerOutput: tr("renderingDraft"),
-        runEvents: current.runEvents.map((event) =>
-          event.id === codeEventId
-            ? { ...event, content: "", code, status: "complete" }
-            : event
-        ),
-        promptTrace: [...current.promptTrace, trace],
-        updatedAt: new Date().toISOString(),
-        iterations: [
-          ...current.iterations,
-          {
-            id: crypto.randomUUID(),
-            createdAt: new Date().toISOString(),
-            requirement: current.originalRequirement,
-            code,
-            modelId: current.codeModelId,
-            status: "generated"
-          }
-        ]
+        ...(workflowIsCurrent(workflow, current) && textStreamIsCurrent(textStream, current)
+          ? {
+              ...current,
+              currentCode: code,
+              proposedCode: "",
+              review: null,
+              stl: "",
+              views: emptyViews(),
+              renderEvidence: null,
+              compilerOutput: tr("renderingDraft"),
+              runEvents: current.runEvents.map((event) =>
+                event.id === codeEventId
+                  ? collapseRunEventThinking({
+                      ...event,
+                      content: "",
+                      code,
+                      status: "complete"
+                    })
+                  : event
+              ),
+              promptTrace: [...current.promptTrace, trace],
+              updatedAt: new Date().toISOString(),
+              iterations: [
+                ...current.iterations,
+                {
+                  id: crypto.randomUUID(),
+                  createdAt: new Date().toISOString(),
+                  requirement: originalRequirement,
+                  code,
+                  modelId: current.codeModelId,
+                  status: "generated"
+                }
+              ]
+            }
+          : current)
       }));
+      ensureWorkflowCurrent(workflow);
       updateBusy("compiling");
       appendRunEvent(createRunEvent({
         role: "tool",
@@ -992,35 +1123,48 @@ export default function App() {
         content: tr("renderStarted")
       }));
       let finalCode = code;
-      let rendered = await compileDraftCode(code, shouldAutoRun ? autoRunToken : undefined);
+      let rendered = await compileDraftCode(
+        code,
+        shouldAutoRun ? autoRunToken : undefined,
+        workflow
+      );
       if (shouldAutoRun) {
         ensureAutoRunCurrent(autoRunToken);
       }
+      ensureWorkflowCurrent(workflow);
       if (!rendered.ok || !rendered.views || !rendered.stl) {
         const repaired = await repairDraftCompileIfPossible({
           code,
           rendered,
           originalRequirement,
           sourceCodeEventId: codeEventId,
-          autoRunToken: shouldAutoRun ? autoRunToken : undefined
+          autoRunToken: shouldAutoRun ? autoRunToken : undefined,
+          workflow
         });
         finalCode = repaired.code;
         rendered = repaired.rendered;
         if (shouldAutoRun) {
           ensureAutoRunCurrent(autoRunToken);
         }
+        ensureWorkflowCurrent(workflow);
       }
       if (!rendered.ok || !rendered.views || !rendered.stl) {
         if (shouldAutoRun) {
           ensureAutoRunCurrent(autoRunToken);
         }
+        ensureWorkflowCurrent(workflow);
         setProject((current) => ({
-          ...current,
-          ...diagnosticFixPatch(current, rendered.diagnostics, rendered.evidence),
-          promptTrace: [...current.promptTrace, rendered.trace],
-          updatedAt: new Date().toISOString()
+          ...(workflowIsCurrent(workflow, current)
+            ? {
+                ...current,
+                ...diagnosticFixPatch(current, rendered.diagnostics, rendered.evidence),
+                promptTrace: [...current.promptTrace, rendered.trace],
+                updatedAt: new Date().toISOString()
+              }
+            : current)
         }));
         if (shouldAutoRun) {
+          ensureWorkflowCurrent(workflow);
           appendRunEvent(autoRunStopEvent(tr("autoRunCompileStopped")));
         }
         throw new Error(rendered.diagnostics);
@@ -1028,33 +1172,38 @@ export default function App() {
       if (shouldAutoRun) {
         ensureAutoRunCurrent(autoRunToken);
       }
+      ensureWorkflowCurrent(workflow);
       appendRunEvent(createRunEvent({
         role: "tool",
         title: tr("renderFinished"),
         content: `${rendered.diagnostics}\n${tr("compiledDraft")}`
       }));
       setProject((current) => ({
-        ...current,
-        currentCode: finalCode,
-        proposedCode: "",
-        review: null,
-        views: rendered.views,
-        stl: rendered.stl,
-        compilerOutput: `${rendered.diagnostics}\n${tr("compiledDraft")}`,
-        renderEvidence: rendered.evidence,
-        promptTrace: [...current.promptTrace, rendered.trace],
-        updatedAt: new Date().toISOString(),
-        iterations: [
-          ...current.iterations,
-          {
-            id: crypto.randomUUID(),
-            createdAt: new Date().toISOString(),
-            requirement: current.requirement,
-            code: finalCode,
-            modelId: current.codeModelId,
-            status: "compiled"
-          }
-        ]
+        ...(workflowIsCurrent(workflow, current)
+          ? {
+              ...current,
+              currentCode: finalCode,
+              proposedCode: "",
+              review: null,
+              views: rendered.views,
+              stl: rendered.stl,
+              compilerOutput: `${rendered.diagnostics}\n${tr("compiledDraft")}`,
+              renderEvidence: rendered.evidence,
+              promptTrace: [...current.promptTrace, rendered.trace],
+              updatedAt: new Date().toISOString(),
+              iterations: [
+                ...current.iterations,
+                {
+                  id: crypto.randomUUID(),
+                  createdAt: new Date().toISOString(),
+                  requirement: originalRequirement,
+                  code: finalCode,
+                  modelId: current.codeModelId,
+                  status: "compiled"
+                }
+              ]
+            }
+          : current)
       }));
       if (shouldAutoRun) {
         ensureAutoRunCurrent(autoRunToken);
@@ -1075,6 +1224,7 @@ export default function App() {
       if (!project.currentCode.trim()) {
         throw new Error(tr("missingCode"));
       }
+      const workflow = beginWorkflow(projectRef.current.id);
       appendRunEvent(createRunEvent({
         role: "tool",
         title: tr("renderStarted"),
@@ -1082,72 +1232,90 @@ export default function App() {
       }));
       const originalRequirement = originalRequirementFor(project);
       let finalCode = project.currentCode;
-      let rendered = await compileDraftCode(project.currentCode);
+      let rendered = await compileDraftCode(project.currentCode, undefined, workflow);
+      ensureWorkflowCurrent(workflow);
       if (!rendered.ok || !rendered.views || !rendered.stl) {
         const repaired = await repairDraftCompileIfPossible({
           code: project.currentCode,
           rendered,
-          originalRequirement
+          originalRequirement,
+          workflow
         });
         finalCode = repaired.code;
         rendered = repaired.rendered;
+        ensureWorkflowCurrent(workflow);
       }
       if (!rendered.ok || !rendered.views || !rendered.stl) {
+        ensureWorkflowCurrent(workflow);
         setProject((current) => ({
-          ...current,
-          ...diagnosticFixPatch(current, rendered.diagnostics, rendered.evidence),
-          promptTrace: [...current.promptTrace, rendered.trace],
-          updatedAt: new Date().toISOString()
+          ...(workflowIsCurrent(workflow, current)
+            ? {
+                ...current,
+                ...diagnosticFixPatch(current, rendered.diagnostics, rendered.evidence),
+                promptTrace: [...current.promptTrace, rendered.trace],
+                updatedAt: new Date().toISOString()
+              }
+            : current)
         }));
         throw new Error(rendered.diagnostics);
       }
+      ensureWorkflowCurrent(workflow);
       appendRunEvent(createRunEvent({
         role: "tool",
         title: tr("renderFinished"),
         content: `${rendered.diagnostics}\n${tr("compiledDraft")}`
       }));
       setProject((current) => ({
-        ...current,
-        currentCode: finalCode,
-        review: null,
-        proposedCode: "",
-        views: rendered.views,
-        stl: rendered.stl,
-        compilerOutput: `${rendered.diagnostics}\n${tr("compiledDraft")}`,
-        renderEvidence: rendered.evidence,
-        promptTrace: [...current.promptTrace, rendered.trace],
-        updatedAt: new Date().toISOString(),
-        iterations: [
-          ...current.iterations,
-          {
-            id: crypto.randomUUID(),
-            createdAt: new Date().toISOString(),
-            requirement: current.requirement,
-            code: finalCode,
-            modelId: current.codeModelId,
-            status: "compiled"
-          }
-        ]
+        ...(workflowIsCurrent(workflow, current)
+          ? {
+              ...current,
+              currentCode: finalCode,
+              review: null,
+              proposedCode: "",
+              views: rendered.views,
+              stl: rendered.stl,
+              compilerOutput: `${rendered.diagnostics}\n${tr("compiledDraft")}`,
+              renderEvidence: rendered.evidence,
+              promptTrace: [...current.promptTrace, rendered.trace],
+              updatedAt: new Date().toISOString(),
+              iterations: [
+                ...current.iterations,
+                {
+                  id: crypto.randomUUID(),
+                  createdAt: new Date().toISOString(),
+                  requirement: current.requirement,
+                  code: finalCode,
+                  modelId: current.codeModelId,
+                  status: "compiled"
+                }
+              ]
+            }
+          : current)
       }));
     });
   }
 
   async function compileDraftCode(
     code: string,
-    autoRunToken?: number
+    autoRunToken?: number,
+    workflow?: WorkflowIdentity
   ): Promise<DraftCompileResult> {
-    await updateRenderStatus("renderPreparing", autoRunToken);
+    await updateRenderStatus("renderPreparing", autoRunToken, workflow);
     const draftCode = normalizeOpenScadPrecision(code, "draft");
     let result: Awaited<ReturnType<typeof adapter.render>>;
     try {
+      ensureWorkflowCurrent(workflow);
       result = await adapter.render({
         source: draftCode,
-        onProgress: (stage) => updateRenderStatus(renderMcpStageMessageKey(stage), autoRunToken)
+        onProgress: (stage) =>
+          updateRenderStatus(renderMcpStageMessageKey(stage), autoRunToken, workflow)
       });
+      ensureWorkflowCurrent(workflow);
     } catch (caught) {
       if (autoRunToken !== undefined) {
         ensureAutoRunCurrent(autoRunToken);
       }
+      ensureWorkflowCurrent(workflow);
       throw caught;
     }
     const viewCount = result.views ? renderedViewCount(result.views) : 0;
@@ -1202,10 +1370,12 @@ export default function App() {
     originalRequirement: string;
     sourceCodeEventId?: string;
     autoRunToken?: number;
+    workflow?: WorkflowIdentity;
   }): Promise<{ code: string; rendered: DraftCompileResult }> {
     if (input.autoRunToken !== undefined) {
       ensureAutoRunCurrent(input.autoRunToken);
     }
+    ensureWorkflowCurrent(input.workflow);
     let code = input.code;
     let rendered = input.rendered;
     if (
@@ -1217,39 +1387,49 @@ export default function App() {
     }
 
     for (let attempt = 1; attempt <= MAX_COMPILER_REPAIR_ATTEMPTS; attempt += 1) {
+      ensureWorkflowCurrent(input.workflow);
       const diagnostics = rendered.diagnostics;
       const renderEvidence = rendered.evidence;
       const repairPrompt = buildDiagnosticFixPrompt(input.originalRequirement, diagnostics);
       const codeEventId = crypto.randomUUID();
       const title = `${tr("compilerRepairStarted")} ${attempt} of ${MAX_COMPILER_REPAIR_ATTEMPTS}`;
+      const textStream = beginTextStream({
+        projectId: projectRef.current.id,
+        eventId: codeEventId,
+        submittedRequirement: repairPrompt
+      });
 
       updateBusy("generating");
       setProject((current) => ({
-        ...current,
-        currentCode: code,
-        proposedCode: "",
-        review: null,
-        stl: "",
-        views: emptyViews(),
-        renderEvidence,
-        compilerOutput: diagnostics,
-        runEvents: [
-          ...current.runEvents,
-          createRunEvent({
-            role: "tool",
-            title: tr("renderDiagnostics"),
-            content: diagnostics,
-            status: "error"
-          }),
-          createRunEvent({
-            id: codeEventId,
-            role: "assistant",
-            title,
-            content: title,
-            status: "active"
-          })
-        ],
-        updatedAt: new Date().toISOString()
+        ...(input.workflow && !workflowIsCurrent(input.workflow, current)
+          ? current
+          : {
+              ...current,
+              currentCode: code,
+              proposedCode: "",
+              review: null,
+              stl: "",
+              views: emptyViews(),
+              renderEvidence,
+              compilerOutput: diagnostics,
+              runEvents: [
+                ...current.runEvents,
+                createRunEvent({
+                  role: "tool",
+                  title: tr("renderDiagnostics"),
+                  content: diagnostics,
+                  status: "error"
+                }),
+                createRunEvent({
+                  id: codeEventId,
+                  role: "assistant",
+                  title,
+                  content: title,
+                  status: "active"
+                })
+              ],
+              updatedAt: new Date().toISOString()
+            })
       }));
 
       let repairedCode: string;
@@ -1277,34 +1457,54 @@ export default function App() {
               return;
             }
             setProject((current) => ({
-              ...current,
-              currentCode: streamedCode,
-              compilerOutput: tr("streamingIteration")
+              ...(input.workflow && !workflowIsCurrent(input.workflow, current)
+                ? current
+                : textStreamIsCurrent(textStream, current)
+                ? {
+                    ...current,
+                    currentCode: streamedCode,
+                    compilerOutput: tr("streamingIteration"),
+                    runEvents: current.runEvents.map((event) =>
+                      event.id === codeEventId ? { ...event, code: streamedCode } : event
+                    )
+                  }
+                : current)
             }));
-          }
+          },
+          onThinkingToken: (thinking) => updateRunEventThinking(textStream, thinking)
         });
         if (input.autoRunToken !== undefined) {
           ensureAutoRunCurrent(input.autoRunToken);
         }
+        ensureTextStreamCurrent(textStream);
+        ensureWorkflowCurrent(input.workflow);
         repairedCode = proposed.code;
         trace = proposed.trace;
       } catch (caught) {
         if (caught instanceof AutoRunCanceledError) {
           throw caught;
         }
+        if (caught instanceof StaleTextStreamError) {
+          throw caught;
+        }
         if (input.autoRunToken !== undefined) {
           ensureAutoRunCurrent(input.autoRunToken);
         }
+        ensureWorkflowCurrent(input.workflow);
         const message = caught instanceof Error ? caught.message : String(caught);
         setProject((current) => ({
-          ...current,
-          currentCode: code,
-          runEvents: current.runEvents.map((event) =>
-            event.id === codeEventId
-              ? { ...event, content: message, status: "error" }
-              : event
-          ),
-          updatedAt: new Date().toISOString()
+          ...(input.workflow && !workflowIsCurrent(input.workflow, current)
+            ? current
+            : {
+                ...current,
+                currentCode: code,
+                runEvents: current.runEvents.map((event) =>
+                  event.id === codeEventId
+                    ? { ...event, content: message, status: "error" }
+                    : event
+                ),
+                updatedAt: new Date().toISOString()
+              })
         }));
         updateBusy("compiling");
         return { code, rendered };
@@ -1312,34 +1512,38 @@ export default function App() {
 
       code = repairedCode;
       setProject((current) => ({
-        ...current,
-        currentCode: code,
-        proposedCode: "",
-        review: null,
-        stl: "",
-        views: emptyViews(),
-        renderEvidence: null,
-        compilerOutput: tr("renderingDraft"),
-        runEvents: current.runEvents.map((event) =>
-          event.id === codeEventId
-            ? { ...event, content: "", status: "complete" }
-            : event.id === input.sourceCodeEventId
-              ? { ...event, code }
-            : event
-        ),
-        promptTrace: [...current.promptTrace, trace],
-        updatedAt: new Date().toISOString(),
-        iterations: [
-          ...current.iterations,
-          {
-            id: crypto.randomUUID(),
-            createdAt: new Date().toISOString(),
-            requirement: repairPrompt,
-            code,
-            modelId: current.codeModelId,
-            status: "generated"
-          }
-        ]
+        ...(input.workflow && !workflowIsCurrent(input.workflow, current)
+          ? current
+          : {
+              ...current,
+              currentCode: code,
+              proposedCode: "",
+              review: null,
+              stl: "",
+              views: emptyViews(),
+              renderEvidence: null,
+              compilerOutput: tr("renderingDraft"),
+              runEvents: current.runEvents.map((event) =>
+                event.id === codeEventId
+                  ? collapseRunEventThinking({ ...event, content: "", code, status: "complete" })
+                  : event.id === input.sourceCodeEventId
+                    ? { ...event, code }
+                    : event
+              ),
+              promptTrace: [...current.promptTrace, trace],
+              updatedAt: new Date().toISOString(),
+              iterations: [
+                ...current.iterations,
+                {
+                  id: crypto.randomUUID(),
+                  createdAt: new Date().toISOString(),
+                  requirement: repairPrompt,
+                  code,
+                  modelId: current.codeModelId,
+                  status: "generated"
+                }
+              ]
+            })
       }));
 
       updateBusy("compiling");
@@ -1348,10 +1552,11 @@ export default function App() {
         title: tr("renderStarted"),
         content: tr("renderStarted")
       }));
-      rendered = await compileDraftCode(code, input.autoRunToken);
+      rendered = await compileDraftCode(code, input.autoRunToken, input.workflow);
       if (input.autoRunToken !== undefined) {
         ensureAutoRunCurrent(input.autoRunToken);
       }
+      ensureWorkflowCurrent(input.workflow);
       if (rendered.ok) {
         return { code, rendered };
       }
@@ -1596,6 +1801,11 @@ export default function App() {
       }));
 
       let proposed: Awaited<ReturnType<typeof proposeRevision>>;
+      const textStream = beginTextStream({
+        projectId: projectRef.current.id,
+        eventId: codeEventId,
+        submittedRequirement: review.correctionPrompt
+      });
       try {
         proposed = await proposeRevision({
           apiKey: llmApiKey,
@@ -1611,20 +1821,26 @@ export default function App() {
               return;
             }
             setProject((current) => ({
-              ...current,
-              currentCode: streamedCode,
-              compilerOutput: tr("streamingIteration"),
-              runEvents: current.runEvents.map((event) =>
-                event.id === codeEventId ? { ...event, code: streamedCode } : event
-              )
+              ...(textStreamIsCurrent(textStream, current)
+                ? {
+                    ...current,
+                    currentCode: streamedCode,
+                    compilerOutput: tr("streamingIteration"),
+                    runEvents: current.runEvents.map((event) =>
+                      event.id === codeEventId ? { ...event, code: streamedCode } : event
+                    )
+                  }
+                : current)
             }));
-          }
+          },
+          onThinkingToken: (thinking) => updateRunEventThinking(textStream, thinking)
         });
       } catch (caught) {
         ensureAutoRunCurrent(input.autoRunToken);
         throw caught;
       }
       ensureAutoRunCurrent(input.autoRunToken);
+      ensureTextStreamCurrent(textStream);
 
       code = proposed.code;
       setProject((current) => ({
@@ -1638,7 +1854,7 @@ export default function App() {
         compilerOutput: tr("renderingDraft"),
         runEvents: current.runEvents.map((event) =>
           event.id === codeEventId
-            ? { ...event, content: "", code, status: "complete" }
+            ? collapseRunEventThinking({ ...event, content: "", code, status: "complete" })
             : event
         ),
         promptTrace: [...current.promptTrace, proposed.trace],
@@ -1720,16 +1936,25 @@ export default function App() {
     }
   }
 
-  async function updateRenderStatus(key: MessageKey, autoRunToken?: number) {
+  async function updateRenderStatus(
+    key: MessageKey,
+    autoRunToken?: number,
+    workflow?: WorkflowIdentity
+  ) {
     if (autoRunToken !== undefined) {
       ensureAutoRunCurrent(autoRunToken);
     }
+    ensureWorkflowCurrent(workflow);
     const message = tr(key);
     setRenderStatus(message);
     setProject((current) => ({
-      ...current,
-      compilerOutput: message,
-      updatedAt: new Date().toISOString()
+      ...(workflow && !workflowIsCurrent(workflow, current)
+        ? current
+        : {
+            ...current,
+            compilerOutput: message,
+            updatedAt: new Date().toISOString()
+          })
     }));
     await waitForPaint();
   }
@@ -1760,6 +1985,12 @@ export default function App() {
       const fixPrompt =
         project.requirement.trim() || buildDiagnosticFixPrompt(originalRequirement, diagnostics);
       const codeEventId = crypto.randomUUID();
+      const workflow = beginWorkflow(projectRef.current.id);
+      const textStream = beginTextStream({
+        projectId: projectRef.current.id,
+        eventId: codeEventId,
+        submittedRequirement: fixPrompt
+      });
       setProject((current) => ({
         ...current,
         currentCode: "",
@@ -1793,59 +2024,80 @@ export default function App() {
           })
         ]
       }));
-      const { code, trace } = await proposeRevision({
-        apiKey: llmApiKey,
-        modelId: project.codeModelId,
-        requirement: originalRequirement,
-        code: project.currentCode,
-        review: {
-          summary: "Compile failed before visual review.",
-          issues: [diagnostics],
-          correctionPrompt: fixPrompt,
-          confidence: 0.2
-        },
-        userNotes: fixPrompt,
-        renderEvidence,
-        precision: "draft",
-        onToken: (streamedCode) => {
-          setProject((current) => ({
-            ...current,
-            currentCode: streamedCode,
-            compilerOutput: tr("streamingIteration"),
-            runEvents: current.runEvents.map((event) =>
-              event.id === codeEventId ? { ...event, code: streamedCode } : event
-            )
-          }));
+      let fixed: Awaited<ReturnType<typeof proposeRevision>>;
+      try {
+        fixed = await proposeRevision({
+          apiKey: llmApiKey,
+          modelId: project.codeModelId,
+          requirement: originalRequirement,
+          code: project.currentCode,
+          review: {
+            summary: "Compile failed before visual review.",
+            issues: [diagnostics],
+            correctionPrompt: fixPrompt,
+            confidence: 0.2
+          },
+          userNotes: fixPrompt,
+          renderEvidence,
+          precision: "draft",
+          onToken: (streamedCode) => {
+            setProject((current) => ({
+              ...(workflowIsCurrent(workflow, current) && textStreamIsCurrent(textStream, current)
+                ? {
+                    ...current,
+                    currentCode: streamedCode,
+                    compilerOutput: tr("streamingIteration"),
+                    runEvents: current.runEvents.map((event) =>
+                      event.id === codeEventId ? { ...event, code: streamedCode } : event
+                    )
+                  }
+                : current)
+            }));
+          },
+          onThinkingToken: (thinking) => updateRunEventThinking(textStream, thinking)
+        });
+      } catch (caught) {
+        if (!workflowIsCurrent(workflow) || !textStreamIsCurrent(textStream)) {
+          throw new StaleTextStreamError();
         }
-      });
+        throw caught;
+      }
+      const { code, trace } = fixed;
+      ensureTextStreamCurrent(textStream);
+      ensureWorkflowCurrent(workflow);
       setProject((current) => ({
-        ...current,
-        currentCode: code,
-        proposedCode: "",
-        review: null,
-        views: emptyViews(),
-        stl: "",
-        renderEvidence: null,
-        compilerOutput: tr("renderingDraft"),
-        runEvents: current.runEvents.map((event) =>
-          event.id === codeEventId
-            ? { ...event, content: "", code, status: "complete" }
-            : event
-        ),
-        promptTrace: [...current.promptTrace, trace],
-        updatedAt: new Date().toISOString(),
-        iterations: [
-          ...current.iterations,
-          {
-            id: crypto.randomUUID(),
-            createdAt: new Date().toISOString(),
-            requirement: fixPrompt,
-            code,
-            modelId: current.codeModelId,
-            status: "generated"
-          }
-        ]
+        ...(workflowIsCurrent(workflow, current) && textStreamIsCurrent(textStream, current)
+          ? {
+              ...current,
+              currentCode: code,
+              proposedCode: "",
+              review: null,
+              views: emptyViews(),
+              stl: "",
+              renderEvidence: null,
+              compilerOutput: tr("renderingDraft"),
+              runEvents: current.runEvents.map((event) =>
+                event.id === codeEventId
+                  ? collapseRunEventThinking({ ...event, content: "", code, status: "complete" })
+                  : event
+              ),
+              promptTrace: [...current.promptTrace, trace],
+              updatedAt: new Date().toISOString(),
+              iterations: [
+                ...current.iterations,
+                {
+                  id: crypto.randomUUID(),
+                  createdAt: new Date().toISOString(),
+                  requirement: fixPrompt,
+                  code,
+                  modelId: current.codeModelId,
+                  status: "generated"
+                }
+              ]
+            }
+          : current)
       }));
+      ensureWorkflowCurrent(workflow);
       updateBusy("compiling");
       appendRunEvent(createRunEvent({
         role: "tool",
@@ -1853,53 +2105,66 @@ export default function App() {
         content: tr("renderStarted")
       }));
       let finalCode = code;
-      let rendered = await compileDraftCode(code);
+      let rendered = await compileDraftCode(code, undefined, workflow);
+      ensureWorkflowCurrent(workflow);
       if (!rendered.ok || !rendered.views || !rendered.stl) {
         const repaired = await repairDraftCompileIfPossible({
           code,
           rendered,
           originalRequirement,
-          sourceCodeEventId: codeEventId
+          sourceCodeEventId: codeEventId,
+          workflow
         });
         finalCode = repaired.code;
         rendered = repaired.rendered;
+        ensureWorkflowCurrent(workflow);
       }
       if (!rendered.ok || !rendered.views || !rendered.stl) {
+        ensureWorkflowCurrent(workflow);
         setProject((current) => ({
-          ...current,
-          ...diagnosticFixPatch(current, rendered.diagnostics, rendered.evidence),
-          promptTrace: [...current.promptTrace, rendered.trace],
-          updatedAt: new Date().toISOString()
+          ...(workflowIsCurrent(workflow, current)
+            ? {
+                ...current,
+                ...diagnosticFixPatch(current, rendered.diagnostics, rendered.evidence),
+                promptTrace: [...current.promptTrace, rendered.trace],
+                updatedAt: new Date().toISOString()
+              }
+            : current)
         }));
         throw new Error(rendered.diagnostics);
       }
+      ensureWorkflowCurrent(workflow);
       appendRunEvent(createRunEvent({
         role: "tool",
         title: tr("renderFinished"),
         content: `${rendered.diagnostics}\n${tr("compiledDraft")}`
       }));
       setProject((current) => ({
-        ...current,
-        currentCode: finalCode,
-        proposedCode: "",
-        review: null,
-        views: rendered.views,
-        stl: rendered.stl,
-        compilerOutput: `${rendered.diagnostics}\n${tr("compiledDraft")}`,
-        renderEvidence: rendered.evidence,
-        promptTrace: [...current.promptTrace, rendered.trace],
-        updatedAt: new Date().toISOString(),
-        iterations: [
-          ...current.iterations,
-          {
-            id: crypto.randomUUID(),
-            createdAt: new Date().toISOString(),
-            requirement: fixPrompt,
-            code,
-            modelId: current.codeModelId,
-            status: "compiled"
-          }
-        ]
+        ...(workflowIsCurrent(workflow, current)
+          ? {
+              ...current,
+              currentCode: finalCode,
+              proposedCode: "",
+              review: null,
+              views: rendered.views,
+              stl: rendered.stl,
+              compilerOutput: `${rendered.diagnostics}\n${tr("compiledDraft")}`,
+              renderEvidence: rendered.evidence,
+              promptTrace: [...current.promptTrace, rendered.trace],
+              updatedAt: new Date().toISOString(),
+              iterations: [
+                ...current.iterations,
+                {
+                  id: crypto.randomUUID(),
+                  createdAt: new Date().toISOString(),
+                  requirement: fixPrompt,
+                  code,
+                  modelId: current.codeModelId,
+                  status: "compiled"
+                }
+              ]
+            }
+          : current)
       }));
     });
   }
@@ -1919,6 +2184,12 @@ export default function App() {
       const originalRequirement = originalRequirementFor(project);
       const iterationPrompt = project.requirement.trim() || project.review.correctionPrompt;
       const codeEventId = crypto.randomUUID();
+      const workflow = beginWorkflow(projectRef.current.id);
+      const textStream = beginTextStream({
+        projectId: projectRef.current.id,
+        eventId: codeEventId,
+        submittedRequirement: iterationPrompt
+      });
       setProject((current) => ({
         ...current,
         currentCode: "",
@@ -1968,16 +2239,24 @@ export default function App() {
               return;
             }
             setProject((current) => ({
-              ...current,
-              currentCode: streamedCode,
-              compilerOutput: tr("streamingIteration"),
-              runEvents: current.runEvents.map((event) =>
-                event.id === codeEventId ? { ...event, code: streamedCode } : event
-              )
+              ...(workflowIsCurrent(workflow, current) && textStreamIsCurrent(textStream, current)
+                ? {
+                    ...current,
+                    currentCode: streamedCode,
+                    compilerOutput: tr("streamingIteration"),
+                    runEvents: current.runEvents.map((event) =>
+                      event.id === codeEventId ? { ...event, code: streamedCode } : event
+                    )
+                  }
+                : current)
             }));
-          }
+          },
+          onThinkingToken: (thinking) => updateRunEventThinking(textStream, thinking)
         });
       } catch (caught) {
+        if (!workflowIsCurrent(workflow) || !textStreamIsCurrent(textStream)) {
+          throw new StaleTextStreamError();
+        }
         if (shouldAutoRun) {
           ensureAutoRunCurrent(autoRunToken);
         }
@@ -1987,34 +2266,41 @@ export default function App() {
       if (shouldAutoRun) {
         ensureAutoRunCurrent(autoRunToken);
       }
+      ensureTextStreamCurrent(textStream);
+      ensureWorkflowCurrent(workflow);
       setProject((current) => ({
-        ...current,
-        currentCode: code,
-        proposedCode: "",
-        review: null,
-        views: emptyViews(),
-        stl: "",
-        renderEvidence: null,
-        compilerOutput: tr("renderingDraft"),
-        runEvents: current.runEvents.map((event) =>
-          event.id === codeEventId
-            ? { ...event, content: "", code, status: "complete" }
-            : event
-        ),
-        promptTrace: [...current.promptTrace, trace],
-        updatedAt: new Date().toISOString(),
-        iterations: [
-          ...current.iterations,
-          {
-            id: crypto.randomUUID(),
-            createdAt: new Date().toISOString(),
-            requirement: iterationPrompt,
-            code,
-            modelId: current.codeModelId,
-            status: "generated"
-          }
-        ]
+        ...(workflowIsCurrent(workflow, current) && textStreamIsCurrent(textStream, current)
+          ? {
+              ...current,
+              currentCode: code,
+              proposedCode: "",
+              review: null,
+              views: emptyViews(),
+              stl: "",
+              renderEvidence: null,
+              compilerOutput: tr("renderingDraft"),
+              runEvents: current.runEvents.map((event) =>
+                event.id === codeEventId
+                  ? collapseRunEventThinking({ ...event, content: "", code, status: "complete" })
+                  : event
+              ),
+              promptTrace: [...current.promptTrace, trace],
+              updatedAt: new Date().toISOString(),
+              iterations: [
+                ...current.iterations,
+                {
+                  id: crypto.randomUUID(),
+                  createdAt: new Date().toISOString(),
+                  requirement: iterationPrompt,
+                  code,
+                  modelId: current.codeModelId,
+                  status: "generated"
+                }
+              ]
+            }
+          : current)
       }));
+      ensureWorkflowCurrent(workflow);
       updateBusy("compiling");
       appendRunEvent(createRunEvent({
         role: "tool",
@@ -2022,35 +2308,48 @@ export default function App() {
         content: tr("renderStarted")
       }));
       let finalCode = code;
-      let rendered = await compileDraftCode(code, shouldAutoRun ? autoRunToken : undefined);
+      let rendered = await compileDraftCode(
+        code,
+        shouldAutoRun ? autoRunToken : undefined,
+        workflow
+      );
       if (shouldAutoRun) {
         ensureAutoRunCurrent(autoRunToken);
       }
+      ensureWorkflowCurrent(workflow);
       if (!rendered.ok || !rendered.views || !rendered.stl) {
         const repaired = await repairDraftCompileIfPossible({
           code,
           rendered,
           originalRequirement,
           sourceCodeEventId: codeEventId,
-          autoRunToken: shouldAutoRun ? autoRunToken : undefined
+          autoRunToken: shouldAutoRun ? autoRunToken : undefined,
+          workflow
         });
         finalCode = repaired.code;
         rendered = repaired.rendered;
         if (shouldAutoRun) {
           ensureAutoRunCurrent(autoRunToken);
         }
+        ensureWorkflowCurrent(workflow);
       }
       if (!rendered.ok || !rendered.views || !rendered.stl) {
         if (shouldAutoRun) {
           ensureAutoRunCurrent(autoRunToken);
         }
+        ensureWorkflowCurrent(workflow);
         setProject((current) => ({
-          ...current,
-          ...diagnosticFixPatch(current, rendered.diagnostics, rendered.evidence),
-          promptTrace: [...current.promptTrace, rendered.trace],
-          updatedAt: new Date().toISOString()
+          ...(workflowIsCurrent(workflow, current)
+            ? {
+                ...current,
+                ...diagnosticFixPatch(current, rendered.diagnostics, rendered.evidence),
+                promptTrace: [...current.promptTrace, rendered.trace],
+                updatedAt: new Date().toISOString()
+              }
+            : current)
         }));
         if (shouldAutoRun) {
+          ensureWorkflowCurrent(workflow);
           appendRunEvent(autoRunStopEvent(tr("autoRunCompileStopped")));
         }
         throw new Error(rendered.diagnostics);
@@ -2058,33 +2357,38 @@ export default function App() {
       if (shouldAutoRun) {
         ensureAutoRunCurrent(autoRunToken);
       }
+      ensureWorkflowCurrent(workflow);
       appendRunEvent(createRunEvent({
         role: "tool",
         title: tr("renderFinished"),
         content: `${rendered.diagnostics}\n${tr("compiledDraft")}`
       }));
       setProject((current) => ({
-        ...current,
-        currentCode: finalCode,
-        proposedCode: "",
-        review: null,
-        views: rendered.views,
-        stl: rendered.stl,
-        compilerOutput: `${rendered.diagnostics}\n${tr("compiledDraft")}`,
-        renderEvidence: rendered.evidence,
-        promptTrace: [...current.promptTrace, rendered.trace],
-        updatedAt: new Date().toISOString(),
-        iterations: [
-          ...current.iterations,
-          {
-            id: crypto.randomUUID(),
-            createdAt: new Date().toISOString(),
-            requirement: iterationPrompt,
-            code: finalCode,
-            modelId: current.codeModelId,
-            status: "compiled"
-          }
-        ]
+        ...(workflowIsCurrent(workflow, current)
+          ? {
+              ...current,
+              currentCode: finalCode,
+              proposedCode: "",
+              review: null,
+              views: rendered.views,
+              stl: rendered.stl,
+              compilerOutput: `${rendered.diagnostics}\n${tr("compiledDraft")}`,
+              renderEvidence: rendered.evidence,
+              promptTrace: [...current.promptTrace, rendered.trace],
+              updatedAt: new Date().toISOString(),
+              iterations: [
+                ...current.iterations,
+                {
+                  id: crypto.randomUUID(),
+                  createdAt: new Date().toISOString(),
+                  requirement: iterationPrompt,
+                  code: finalCode,
+                  modelId: current.codeModelId,
+                  status: "compiled"
+                }
+              ]
+            }
+          : current)
       }));
       if (shouldAutoRun) {
         ensureAutoRunCurrent(autoRunToken);
@@ -2173,52 +2477,66 @@ export default function App() {
     clearPromptFieldDraft();
     await runSafely("compiling", async () => {
       const accepted = acceptRevision(project);
+      const workflow = beginWorkflow(accepted.id);
       setProject(accepted);
       if (!accepted.currentCode.trim()) {
         throw new Error(tr("missingCode"));
       }
       const originalRequirement = originalRequirementFor(accepted);
       let finalCode = accepted.currentCode;
-      let rendered = await compileDraftCode(accepted.currentCode);
+      let rendered = await compileDraftCode(accepted.currentCode, undefined, workflow);
+      ensureWorkflowCurrent(workflow);
       if (!rendered.ok || !rendered.views || !rendered.stl) {
         const repaired = await repairDraftCompileIfPossible({
           code: accepted.currentCode,
           rendered,
-          originalRequirement
+          originalRequirement,
+          workflow
         });
         finalCode = repaired.code;
         rendered = repaired.rendered;
+        ensureWorkflowCurrent(workflow);
       }
       if (!rendered.ok || !rendered.views || !rendered.stl) {
+        ensureWorkflowCurrent(workflow);
         setProject((current) => ({
-          ...current,
-          ...diagnosticFixPatch(current, rendered.diagnostics, rendered.evidence),
-          promptTrace: [...current.promptTrace, rendered.trace],
-          updatedAt: new Date().toISOString()
+          ...(workflowIsCurrent(workflow, current)
+            ? {
+                ...current,
+                ...diagnosticFixPatch(current, rendered.diagnostics, rendered.evidence),
+                promptTrace: [...current.promptTrace, rendered.trace],
+                updatedAt: new Date().toISOString()
+              }
+            : current)
         }));
         throw new Error(rendered.diagnostics);
       }
+      ensureWorkflowCurrent(workflow);
       setProject((current) => ({
-        ...current,
-        currentCode: finalCode,
-        views: rendered.views,
-        stl: rendered.stl,
-        review: null,
-        compilerOutput: `${rendered.diagnostics}\n${tr("compiledDraft")}`,
-        renderEvidence: rendered.evidence,
-        promptTrace: [...current.promptTrace, rendered.trace],
-        updatedAt: new Date().toISOString(),
-        iterations: [
-          ...current.iterations,
-          {
-            id: crypto.randomUUID(),
-            createdAt: new Date().toISOString(),
-            requirement: current.requirement,
-            code: finalCode,
-            modelId: current.codeModelId,
-            status: "compiled"
-          }
-        ]
+        ...(workflowIsCurrent(workflow, current)
+          ? {
+              ...current,
+              currentCode: finalCode,
+              views: rendered.views,
+              stl: rendered.stl,
+              review: null,
+              compilerOutput: `${rendered.diagnostics}\n${tr("compiledDraft")}`,
+              renderEvidence: rendered.evidence,
+              promptTrace: [...current.promptTrace, rendered.trace],
+              updatedAt: new Date().toISOString(),
+              iterations: [
+                ...current.iterations,
+                {
+                  id: crypto.randomUUID(),
+                  createdAt: new Date().toISOString(),
+                  requirement: current.requirement,
+                  code: finalCode,
+                  modelId: current.codeModelId,
+                  status: "compiled"
+                }
+              ]
+            }
+          : current)
       }));
     });
   }
@@ -2230,6 +2548,7 @@ export default function App() {
 
   function handleNewModel() {
     cancelActiveAutoRun();
+    cancelWorkflows();
     clearReferenceImages();
     clearPromptFieldDraft();
     const next = createEmptyProject();
@@ -2242,6 +2561,7 @@ export default function App() {
 
   function handleSelectProject(projectId: string) {
     cancelActiveAutoRun();
+    cancelWorkflows();
     clearReferenceImages();
     clearPromptFieldDraft();
     const selected = projectList.find((item) => item.id === projectId);
@@ -2268,6 +2588,7 @@ export default function App() {
 
   function handleCodeEdit(code: string) {
     cancelActiveAutoRun();
+    cancelWorkflows();
     setProject((current) => ({
       ...current,
       currentCode: code,
@@ -2282,6 +2603,7 @@ export default function App() {
 
   function handleImport(event: ChangeEvent<HTMLInputElement>) {
     cancelActiveAutoRun();
+    cancelWorkflows();
     clearReferenceImages();
     clearPromptFieldDraft();
     const file = event.target.files?.[0];
@@ -2921,6 +3243,7 @@ function AgentRunPanel(props: {
   project: ProjectState;
 }) {
   const [openCodeEvents, setOpenCodeEvents] = useState<Record<string, boolean>>({});
+  const [openThinkingEvents, setOpenThinkingEvents] = useState<Record<string, boolean>>({});
   const events = props.project.runEvents;
   return (
     <section className="agentRun" aria-live="polite">
@@ -2944,6 +3267,8 @@ function AgentRunPanel(props: {
 
         {events.map((event) => {
           const codeOpen = Boolean(openCodeEvents[event.id]);
+          const thinkingOpen =
+            event.status === "active" ? true : Boolean(openThinkingEvents[event.id]);
           const eventReview =
             event.title === t(props.locale, "visualReview")
               ? event.review ?? props.project.review
@@ -2962,6 +3287,38 @@ function AgentRunPanel(props: {
               key={event.id}
             >
               <h3>{event.title}</h3>
+              {event.thinking ? (
+                <details
+                  className="thinkingDisclosure"
+                  open={thinkingOpen}
+                  onToggle={(toggleEvent) => {
+                    if (event.status === "active") {
+                      return;
+                    }
+                    const open = (toggleEvent.currentTarget as HTMLDetailsElement).open;
+                    setOpenThinkingEvents((current) => ({
+                      ...current,
+                      [event.id]: open
+                    }));
+                  }}
+                >
+                  <summary
+                    role="button"
+                    aria-expanded={thinkingOpen}
+                    onClick={(clickEvent) => {
+                      if (event.status === "active") {
+                        clickEvent.preventDefault();
+                      }
+                    }}
+                  >
+                    <span>{t(props.locale, "thinking")}</span>
+                    {!thinkingOpen ? (
+                      <small>{t(props.locale, "thinkingCollapsed")}</small>
+                    ) : null}
+                  </summary>
+                  <pre>{event.thinking}</pre>
+                </details>
+              ) : null}
               {showEventContent ? <p>{event.content}</p> : null}
               {eventReview ? (
                 <>

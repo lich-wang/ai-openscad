@@ -923,6 +923,58 @@ textarea {
   color: #5f3f16;
 }
 
+.thinkingDisclosure {
+  background: #ffffff;
+  border: 1px solid #d7dee8;
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.thinkingDisclosure:not([open]) {
+  height: 36px;
+}
+
+.thinkingDisclosure summary {
+  align-items: center;
+  color: #344054;
+  cursor: pointer;
+  display: flex;
+  justify-content: space-between;
+  list-style: none;
+  min-height: 34px;
+  padding: 0 10px;
+}
+
+.thinkingDisclosure summary::-webkit-details-marker {
+  display: none;
+}
+
+.thinkingDisclosure summary span {
+  font-size: 13px;
+  font-weight: 800;
+  line-height: 18px;
+}
+
+.thinkingDisclosure summary small {
+  color: #667085;
+  font-size: 12px;
+  line-height: 16px;
+}
+
+.thinkingDisclosure pre {
+  background: #f8fafc;
+  border-top: 1px solid #e4e9f0;
+  color: #475467;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+  line-height: 18px;
+  margin: 0;
+  max-height: 150px;
+  overflow: auto;
+  padding: 9px 10px;
+  white-space: pre-wrap;
+}
+
 .agentCodePreview {
   background: #0f172a;
   border-radius: 6px;

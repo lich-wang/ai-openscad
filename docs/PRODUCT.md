@@ -65,6 +65,9 @@ three columns:
    generated or optimized fields before continuing.
 3. User clicks **Generate**.
 4. The code model streams OpenSCAD into the center chat stream in real time.
+   When the provider also emits OpenAI-compatible reasoning/thinking deltas,
+   those deltas stream into the active Agent Run record immediately so the user
+   sees progress before final code text arrives.
 5. After the complete code arrives, the run stream collapses the code preview
    and the render adapter compiles the generated OpenSCAD in the browser.
    Compile failure, or a "successful" STL with unsafe OpenSCAD diagnostics that
@@ -238,8 +241,32 @@ three columns:
   duplicate review text, compiler logs, or history.
 - The center run stream uses chat-style records before and after each LLM
   interaction, similar to Codex desktop. User instructions, streaming assistant
-  output, renderer tool progress, render completion, review output, and iteration
-  events are visible as separate records.
+  output, streamed reasoning/thinking output when a provider supplies it,
+  renderer tool progress, render completion, review output, and iteration events
+  are visible as separate records or distinct sections inside the active
+  record.
+- For code-generation, revision, automatic compiler-repair, and automatic
+  confidence-run text LLM requests, reasoning/thinking deltas from DeepSeek,
+  MiMo, or any OpenAI-compatible provider must appear incrementally in the
+  active assistant record. The thinking section is expanded while the request is
+  active and automatically collapses after final assistant content completes.
+  If the provider emits no thinking deltas, the existing content/code streaming
+  behavior is unchanged.
+- Every in-flight text LLM stream, including ordinary **Generate** with zero
+  automatic iterations, is bound to the active project id, a request token, the
+  captured submitted requirement/original requirement, and the target assistant
+  run-event id. Streamed content and thinking chunks may update project state
+  only while that identity still matches. Late chunks or final responses after
+  project switch, import, new-model reset, or superseding request must be
+  ignored rather than updating another project's code, thinking, run events, or
+  render flow.
+- Clicking **Generate** accepts the current composer text immediately. The
+  composer input clears as soon as the request starts, while the submitted text
+  remains visible in the Agent Run user-request record, is saved as the
+  `originalRequirement`, and is the exact text sent to the code model. Clearing
+  the composer must not erase the in-flight request, the user-run record, or the
+  generated iteration history; the generated iteration entry must store the
+  submitted text, not the cleared composer value.
 - The primary composer action follows project state: generate before rendering,
   review after rendering, and iterate again after review.
 - The composer also provides a compact reference-image action before
@@ -368,6 +395,10 @@ Workbench acceptance criteria:
 - Streaming and stage status updates should use polite live-region behavior or
   equivalent accessible status text. Collapsed code controls expose expanded or
   collapsed state through accessible labels.
+- Streaming thinking updates should use the same polite live-region surface as
+  other Agent Run progress. The thinking disclosure exposes its expanded state,
+  is open while the LLM request is active, and is collapsed after the request
+  finishes so the final code and render progress remain easy to scan.
 - The right result panel contains only the interactive 3D preview, the fourteen
   named view tiles, and asset download controls. It must not contain compiler
   logs, review text, prompt trace, or iteration history. The interactive preview
@@ -614,7 +645,9 @@ Workbench acceptance criteria:
 - Detects Chinese vs English input and asks the model to use the same natural
   language for feedback and comments.
 - Streams OpenAI-compatible response chunks into the chat run stream and the
-  editable code state at the same time.
+  editable code state at the same time. Content deltas update code, while
+  provider reasoning/thinking deltas update a separate run-event thinking field
+  and are never appended to the generated OpenSCAD source.
 
 ### Rendering
 
@@ -995,6 +1028,11 @@ The core project state contains:
   latest successful reference-image draft, used only for visual review in the
   same browser project
 
+`runEvents` may include assistant `thinking` text and a collapsed/expanded
+presentation flag for OpenAI-compatible reasoning output. Thinking text is local
+run feedback and must stay separate from `currentCode`, `proposedCode`,
+`promptTrace.response`, and every provider prompt.
+
 Reference-image file selections and in-flight prompt draft state are local,
 request-scoped UI state only. Successful drafts replace the project's
 `referenceImages` context for later visual review; canceled, failed, and stale
@@ -1057,6 +1095,11 @@ The frontend calls:
 
 Both endpoints are Cloudflare Pages Functions that proxy OpenAI-compatible chat
 completion requests to configured providers.
+
+When `/api/llm` is called with streaming enabled, the frontend parser handles
+both content deltas and common reasoning/thinking delta fields such as
+`reasoning_content`, `reasoning`, and `thinking`. Unknown provider events and
+malformed keepalives are ignored without breaking the stream.
 
 Supported providers:
 
@@ -1157,7 +1200,17 @@ npm run preview
 The current test suite covers:
 
 - Browser-locale UI switching between Chinese and English.
-- Streaming code generation and automatic draft rendering.
+- Streaming code generation and automatic draft rendering, including provider
+  reasoning/thinking chunks that appear while the request is active, collapse
+  after completion, and never enter the OpenSCAD source.
+- Generate-click feedback: the composer clears immediately after **Generate**,
+  while the submitted prompt remains in the user-request record and outbound
+  `/api/llm` payload, is saved as `originalRequirement`, and is recorded on the
+  generated iteration entry.
+- Text-stream stale-response coverage: tests verify that normal generation and
+  revision streams update only the project and run event captured when the
+  request started, and that late content/thinking chunks after a project switch
+  or superseding request are ignored.
 - Vision review requests with rendered images.
 - Review-driven iteration with manual control by default and optional bounded
   confidence-target auto-iteration after **Generate** or **Iterate Again**.

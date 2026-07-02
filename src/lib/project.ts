@@ -41,6 +41,8 @@ export interface RunEvent {
   content: string;
   status: RunEventStatus;
   code?: string;
+  thinking?: string;
+  thinkingCollapsed?: boolean;
   review?: VisionReview;
 }
 

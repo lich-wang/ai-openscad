@@ -4,6 +4,7 @@ import {
   buildGenerationRequest,
   buildRevisionRequest,
   estimateTokenUsage,
+  generateOpenScad,
   optimizePrompt,
   reviewViews
 } from "./apiClient";
@@ -73,6 +74,57 @@ describe("apiClient prompt assembly", () => {
 
     expect(String(request.body.messages[0].content)).toContain("中文");
     expect(request.body.stream).toBe(true);
+  });
+
+  it("streams LLM thinking separately from generated OpenSCAD source", async () => {
+    const encoder = new TextEncoder();
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      body: new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(
+            encoder.encode(
+              [
+                'data: {"choices":[{"delta":{"reasoning_content":"Analyze cup proportions. "}}]}',
+                "",
+                'data: {"choices":[{"delta":{"content":"cube"}}]}',
+                "",
+                'data: {"choices":[{"delta":{"thinking":"Keep draft geometry simple."}}]}',
+                "",
+                'data: {"choices":[{"delta":{"content":"(10);"}}]}',
+                "",
+                "data: [DONE]",
+                ""
+              ].join("\n")
+            )
+          );
+          controller.close();
+        }
+      })
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const codeUpdates: string[] = [];
+    const thinkingUpdates: string[] = [];
+
+    const result = await generateOpenScad({
+      apiKey: "sk-user",
+      modelId: "mimo-v2.5",
+      requirement: "生成一个30ML的杯子模型",
+      precision: "draft",
+      onToken: (code) => codeUpdates.push(code),
+      onThinkingToken: (thinking) => thinkingUpdates.push(thinking)
+    });
+
+    expect(codeUpdates).toEqual(["cube", "cube(10);"]);
+    expect(thinkingUpdates).toEqual([
+      "Analyze cup proportions. ",
+      "Analyze cup proportions. Keep draft geometry simple."
+    ]);
+    expect(result.code).toBe("cube(10);");
+    expect(result.trace.response).toBe("cube(10);");
+    expect(result.trace.response).not.toContain("Analyze cup proportions");
+    expect(result.trace.response).not.toContain("Keep draft geometry simple");
+    vi.unstubAllGlobals();
   });
 
   it("injects the lich printable modeling skill into generation prompts", () => {

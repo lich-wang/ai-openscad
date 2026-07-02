@@ -34,6 +34,7 @@ export async function generateOpenScad(input: {
   requirement: string;
   precision?: RenderPrecision;
   onToken?: (code: string) => void;
+  onThinkingToken?: (thinking: string) => void;
 }): Promise<{ code: string; trace: PromptTraceEntry }> {
   const request = buildGenerationRequest({
     apiKey: input.apiKey,
@@ -43,7 +44,7 @@ export async function generateOpenScad(input: {
     stream: Boolean(input.onToken)
   });
   const response = input.onToken
-    ? await sendGatewayStream(request, input.onToken)
+    ? await sendGatewayStream(request, input.onToken, input.onThinkingToken)
     : await sendGatewayRequest(request);
   const code = stripCodeFence(response);
   return {
@@ -193,6 +194,7 @@ export async function proposeRevision(input: {
   precision?: RenderPrecision;
   renderEvidence?: RenderEvidence | null;
   onToken?: (code: string) => void;
+  onThinkingToken?: (thinking: string) => void;
 }): Promise<{ code: string; trace: PromptTraceEntry }> {
   const request = buildRevisionRequest({
     apiKey: input.apiKey,
@@ -206,7 +208,7 @@ export async function proposeRevision(input: {
     stream: Boolean(input.onToken)
   });
   const response = input.onToken
-    ? await sendGatewayStream(request, input.onToken)
+    ? await sendGatewayStream(request, input.onToken, input.onThinkingToken)
     : await sendGatewayRequest(request);
   const code = stripCodeFence(response);
   return {
@@ -368,7 +370,8 @@ async function sendGatewayRequest(request: ReturnType<typeof createModelRequest>
 
 async function sendGatewayStream(
   request: ReturnType<typeof createModelRequest>,
-  onToken: (code: string) => void
+  onToken: (code: string) => void,
+  onThinkingToken?: (thinking: string) => void
 ) {
   const response = await fetch(request.endpoint, {
     method: "POST",
@@ -383,10 +386,18 @@ async function sendGatewayStream(
     return "";
   }
   let accumulated = "";
-  return readOpenAiStream(response.body, (delta) => {
-    accumulated += delta;
-    onToken(stripCodeFence(accumulated));
-  });
+  let thinking = "";
+  return readOpenAiStream(
+    response.body,
+    (delta) => {
+      accumulated += delta;
+      onToken(stripCodeFence(accumulated));
+    },
+    (delta) => {
+      thinking += delta;
+      onThinkingToken?.(thinking);
+    }
+  );
 }
 
 function stripCodeFence(content: string): string {

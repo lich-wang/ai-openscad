@@ -260,6 +260,43 @@ function promptField(page: Page, field: string, index = 0): Locator {
   return page.locator(`[data-prompt-field="${field}"]`).nth(index);
 }
 
+async function invokeReactClick(locator: Locator) {
+  await locator.evaluate((node) => {
+    const propsKey = Object.keys(node).find((key) => key.startsWith("__reactProps$"));
+    const onClick = propsKey
+      ? (node as unknown as Record<string, { onClick?: () => void }>)[propsKey]?.onClick
+      : undefined;
+    if (typeof onClick !== "function") {
+      throw new Error("React onClick handler not found.");
+    }
+    onClick();
+  });
+}
+
+async function setReactTextareaValue(locator: Locator, value: string) {
+  await locator.evaluate((node, nextValue) => {
+    const input = node as HTMLTextAreaElement;
+    const valueSetter = Object.getOwnPropertyDescriptor(
+      HTMLTextAreaElement.prototype,
+      "value"
+    )?.set;
+    valueSetter?.call(input, nextValue as string);
+    const propsKey = Object.keys(input).find((key) => key.startsWith("__reactProps$"));
+    const onChange = propsKey
+      ? (
+          input as unknown as Record<
+            string,
+            { onChange?: (event: { target: { value: string } }) => void }
+          >
+        )[propsKey]?.onChange
+      : undefined;
+    if (typeof onChange !== "function") {
+      throw new Error("React onChange handler not found.");
+    }
+    onChange({ target: { value: nextValue as string } });
+  }, value);
+}
+
 async function expectPromptFieldLabels(page: Page, labels: RegExp[]) {
   for (const label of labels) {
     await expect(page.getByLabel(label).first()).toBeVisible();
@@ -1882,7 +1919,9 @@ test("reference image draft failure preserves request-start text without selecte
   await expect(page.getByText("failed-front.png")).toHaveCount(0);
 });
 
-test("generation streams code and automatically renders draft views", async ({ page }) => {
+test("generation streams code and automatically renders draft views", async ({
+  page
+}, testInfo) => {
   await page.addInitScript((storedProject) => {
     localStorage.setItem("ai-openscad.llm-api-key", "sk-llm");
     localStorage.setItem("ai-openscad.vision-api-key", "sk-vision");
@@ -1900,26 +1939,75 @@ test("generation streams code and automatically renders draft views", async ({ p
 
   }, project);
 
-  let streamRequested = false;
+  await page.addInitScript(() => {
+    const originalFetch = window.fetch.bind(window);
+    (
+      window as typeof window & {
+        __llmRequests?: Array<{ stream?: boolean; serialized: string }>;
+      }
+    ).__llmRequests = [];
+    window.fetch = async (input, init) => {
+      const url = typeof input === "string" ? input : input instanceof Request ? input.url : "";
+      if (url.includes("/api/llm")) {
+        const requestBody =
+          typeof init?.body === "string"
+            ? init.body
+            : input instanceof Request
+              ? await input.clone().text()
+              : "";
+        const parsed = requestBody ? JSON.parse(requestBody) : {};
+        (
+          window as typeof window & {
+            __llmRequests: Array<{ stream?: boolean; serialized: string }>;
+          }
+        ).__llmRequests.push({
+          stream: Boolean(parsed.stream),
+          serialized: JSON.stringify(parsed)
+        });
+        const encoder = new TextEncoder();
+        const event = (delta: Record<string, string>) =>
+          `data: ${JSON.stringify({ choices: [{ delta }] })}\n\n`;
+        return new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              controller.enqueue(
+                encoder.encode(
+                  event({
+                    reasoning_content:
+                      "Thinking through the cup proportions before writing code. "
+                  })
+                )
+              );
+              window.setTimeout(() => {
+                controller.enqueue(encoder.encode(event({ content: "cube" })));
+              }, 350);
+              window.setTimeout(() => {
+                controller.enqueue(
+                  encoder.encode(
+                    event({
+                      thinking: "Keeping the draft geometry simple for browser render."
+                    })
+                  )
+                );
+              }, 500);
+              window.setTimeout(() => {
+                controller.enqueue(encoder.encode(event({ content: "(10);" })));
+                controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+                controller.close();
+              }, 700);
+            }
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "text/event-stream" }
+          }
+        );
+      }
+      return originalFetch(input, init);
+    };
+  });
   let reviewRequirement = "";
   let reviewImageUrls: string[] = [];
-  await page.route("**/api/llm", async (route) => {
-    const body = route.request().postDataJSON() as { stream?: boolean };
-    streamRequested = body.stream === true;
-    await delay(250);
-    await route.fulfill({
-      status: 200,
-      contentType: "text/event-stream",
-      body: [
-        'data: {"choices":[{"delta":{"content":"cube"}}]}',
-        "",
-        'data: {"choices":[{"delta":{"content":"(10);"}}]}',
-        "",
-        "data: [DONE]",
-        ""
-      ].join("\n")
-    });
-  });
   await page.route("**/api/vision", async (route) => {
     const body = route.request().postDataJSON() as {
       messages: Array<{ content: unknown }>;
@@ -1942,14 +2030,32 @@ test("generation streams code and automatically renders draft views", async ({ p
   });
 
   await page.goto("/");
-  const requestPromise = page.waitForRequest("**/api/llm");
   const generateButton = page.getByRole("button", { name: /^Generate$/i });
   await generateButton.click();
   await expect(generateButton).toBeDisabled();
+  await page.waitForFunction(
+    () =>
+      (
+        window as typeof window & {
+          __llmRequests?: Array<{ stream?: boolean; serialized: string }>;
+        }
+      ).__llmRequests?.length === 1
+  );
+  await expect(page.locator(".agentInput")).toHaveValue("");
+  await expect(page.locator(".agentRun")).toContainText("生成一个30ML的杯子模型");
+  const thinkingDisclosure = page.locator(".thinkingDisclosure").first();
+  await expect(thinkingDisclosure).toContainText("Thinking through the cup proportions");
+  await expect(thinkingDisclosure).toHaveAttribute("open", "");
+  await page.locator(".workspace").screenshot({
+    path: testInfo.outputPath("llm-thinking-active.png")
+  });
   await expect(page.locator('.workflowStage[data-stage="code"]')).toContainText("Active");
-  await requestPromise;
 
   await expect(page.locator(".codeEditor").first()).toHaveValue(/cube\(10\);/);
+  await expect(page.locator(".codeEditor").first()).not.toHaveValue(/Thinking through/);
+  await expect(thinkingDisclosure).toContainText(
+    "Keeping the draft geometry simple for browser render."
+  );
   await expect(page.locator(".agentRun").getByText("Generated OpenSCAD code")).toBeVisible();
   await expect(page.locator('.workflowStage[data-stage="render"]')).toContainText("Active", {
     timeout: 10000
@@ -2058,10 +2164,10 @@ test("generation streams code and automatically renders draft views", async ({ p
     "Render started",
     "Render finished"
   ]);
-  await expect(page.locator(".chatCodeDisclosure")).toBeVisible();
-  await expect(page.locator(".chatCodeDisclosure")).not.toHaveAttribute("open", "");
-  await expect(page.locator(".agentCodePreview")).toHaveCount(0);
+  await expect(page.locator(".chatCodeDisclosure").first()).toBeVisible();
   const generatedCodeDisclosure = page.locator(".chatCodeDisclosure").first();
+  await expect(generatedCodeDisclosure).not.toHaveAttribute("open", "");
+  await expect(page.locator(".agentCodePreview")).toHaveCount(0);
   const codeToggle = page.getByRole("button", { name: /OpenSCAD/i }).first();
   await expect(codeToggle).toBeVisible();
   await codeToggle.focus();
@@ -2104,17 +2210,372 @@ test("generation streams code and automatically renders draft views", async ({ p
       })
     ])
   );
-  expect(streamRequested).toBe(true);
+  const llmRequests = await page.evaluate(
+    () =>
+      (
+        window as typeof window & {
+          __llmRequests?: Array<{ stream?: boolean; serialized: string }>;
+        }
+      ).__llmRequests ?? []
+  );
+  expect(llmRequests[0]?.stream).toBe(true);
+  expect(llmRequests[0]?.serialized).toContain("生成一个30ML的杯子模型");
+  expect(storedAfterGenerate.requirement).toBe("");
+  expect(storedAfterGenerate.originalRequirement).toBe("生成一个30ML的杯子模型");
+  expect(storedAfterGenerate.iterations).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({
+        requirement: "生成一个30ML的杯子模型",
+        status: "generated"
+      })
+    ])
+  );
+  expect(storedAfterGenerate.runEvents).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({
+        title: "Generated OpenSCAD code",
+        thinking: expect.stringContaining("Thinking through the cup proportions"),
+        thinkingCollapsed: true
+      })
+    ])
+  );
+  expect(JSON.stringify(storedAfterGenerate.promptTrace)).not.toContain(
+    "Thinking through the cup proportions"
+  );
+  expect(JSON.stringify(storedAfterGenerate.promptTrace)).not.toContain(
+    "Keeping the draft geometry simple"
+  );
+  await expect(thinkingDisclosure).not.toHaveAttribute("open", "");
+  await page.locator(".agentTimeline").screenshot({
+    path: testInfo.outputPath("llm-thinking-collapsed.png")
+  });
   await page.getByRole("button", { name: /^Review$/i }).click();
   await expect(page.locator(".agentInput")).toHaveValue(/增加杯口倒角/);
   const storedAfterFirstReview = await page.evaluate(() =>
     JSON.parse(localStorage.getItem("ai-openscad.project") ?? "{}")
   );
   expect(reviewRequirement).toContain("生成一个30ML的杯子模型");
+  expect(reviewRequirement).not.toContain("Thinking through the cup proportions");
+  expect(reviewRequirement).not.toContain("Keeping the draft geometry simple");
   expect(reviewImageUrls).toHaveLength(14);
   expect(reviewImageUrls).toEqual(renderedImageUrlsBeforePreviewDrag);
   expect(storedAfterFirstReview.originalRequirement).toBe("生成一个30ML的杯子模型");
   expect(storedAfterFirstReview.requirement).toContain("增加杯口倒角");
+  expect(JSON.stringify(storedAfterFirstReview.promptTrace)).not.toContain(
+    "Thinking through the cup proportions"
+  );
+  await page.getByRole("button", { name: /^Iterate Again$/i }).click();
+  await page.waitForFunction(
+    () =>
+      (
+        window as typeof window & {
+          __llmRequests?: Array<{ stream?: boolean; serialized: string }>;
+        }
+      ).__llmRequests?.length === 2
+  );
+  const llmRequestsAfterIteration = await page.evaluate(
+    () =>
+      (
+        window as typeof window & {
+          __llmRequests?: Array<{ stream?: boolean; serialized: string }>;
+        }
+      ).__llmRequests ?? []
+  );
+  expect(llmRequestsAfterIteration[1]?.serialized).not.toContain(
+    "Thinking through the cup proportions"
+  );
+  expect(llmRequestsAfterIteration[1]?.serialized).not.toContain(
+    "Keeping the draft geometry simple"
+  );
+});
+
+test("late generation stream chunks after project switch are ignored", async ({ page }) => {
+  await page.addInitScript((storedProject) => {
+    localStorage.setItem("ai-openscad.llm-api-key", "sk-llm");
+    localStorage.setItem("ai-openscad.vision-api-key", "sk-vision");
+    const blankViews = Object.fromEntries(
+      Object.keys(storedProject.views).map((key) => [key, ""])
+    );
+    const firstProject = {
+      ...storedProject,
+      id: "project-stream-a",
+      title: "Streaming Project",
+      requirement: "生成一个30ML的杯子模型",
+      originalRequirement: "",
+      currentCode: "",
+      compilerOutput: "",
+      views: { ...storedProject.views, ...blankViews },
+      stl: "",
+      renderEvidence: null,
+      review: null,
+      iterations: [],
+      runEvents: [],
+      promptTrace: [],
+      updatedAt: "2026-07-02T00:00:02.000Z"
+    };
+    const secondProject = {
+      ...storedProject,
+      id: "project-stream-b",
+      title: "Second Project",
+      requirement: "第二个模型保持空白",
+      originalRequirement: "",
+      currentCode: "",
+      compilerOutput: "",
+      views: { ...firstProject.views },
+      stl: "",
+      renderEvidence: null,
+      review: null,
+      iterations: [],
+      runEvents: [],
+      promptTrace: [],
+      updatedAt: "2026-07-02T00:00:01.000Z"
+    };
+    localStorage.setItem("ai-openscad.project", JSON.stringify(firstProject));
+    localStorage.setItem("ai-openscad.projects", JSON.stringify([firstProject, secondProject]));
+    localStorage.setItem("ai-openscad.active-project-id", firstProject.id);
+  }, project);
+  await page.addInitScript(() => {
+    const originalFetch = window.fetch.bind(window);
+    (
+      window as typeof window & {
+        __llmRequests?: Array<{ stream?: boolean; serialized: string }>;
+      }
+    ).__llmRequests = [];
+    window.fetch = async (input, init) => {
+      const url = typeof input === "string" ? input : input instanceof Request ? input.url : "";
+      if (url.includes("/api/llm")) {
+        const requestBody =
+          typeof init?.body === "string"
+            ? init.body
+            : input instanceof Request
+              ? await input.clone().text()
+              : "";
+        const parsed = requestBody ? JSON.parse(requestBody) : {};
+        (
+          window as typeof window & {
+            __llmRequests: Array<{ stream?: boolean; serialized: string }>;
+          }
+        ).__llmRequests.push({
+          stream: Boolean(parsed.stream),
+          serialized: JSON.stringify(parsed)
+        });
+        const encoder = new TextEncoder();
+        const event = (delta: Record<string, string>) =>
+          `data: ${JSON.stringify({ choices: [{ delta }] })}\n\n`;
+        return new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              controller.enqueue(
+                encoder.encode(event({ reasoning_content: "Starting stale stream test. " }))
+              );
+              window.setTimeout(() => {
+                controller.enqueue(encoder.encode(event({ content: "cube" })));
+              }, 500);
+              window.setTimeout(() => {
+                controller.enqueue(encoder.encode(event({ thinking: "This chunk is late." })));
+              }, 650);
+              window.setTimeout(() => {
+                controller.enqueue(encoder.encode(event({ content: "(10);" })));
+                controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+                controller.close();
+              }, 900);
+            }
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "text/event-stream" }
+          }
+        );
+      }
+      return originalFetch(input, init);
+    };
+  });
+
+  await page.goto("/");
+  await page.getByRole("button", { name: /^Generate$/i }).click();
+  await page.waitForFunction(
+    () =>
+      (
+        window as typeof window & {
+          __llmRequests?: Array<{ stream?: boolean; serialized: string }>;
+        }
+      ).__llmRequests?.length === 1
+  );
+  const secondProjectButton = page
+    .locator(".modelList button")
+    .filter({ hasText: "第二个模型保持空白" })
+    .first();
+  await expect(secondProjectButton).toBeVisible();
+  await invokeReactClick(secondProjectButton);
+  await expect(page.locator(".agentInput")).toHaveValue("第二个模型保持空白");
+  await page.waitForTimeout(1100);
+
+  const selectedProject = await page.evaluate(() =>
+    JSON.parse(localStorage.getItem("ai-openscad.project") ?? "{}")
+  );
+  const storedProjects = await page.evaluate(() =>
+    JSON.parse(localStorage.getItem("ai-openscad.projects") ?? "[]")
+  );
+  const originalProject = storedProjects.find(
+    (storedProject: { id?: string }) => storedProject.id === "project-stream-a"
+  );
+  expect(selectedProject.id).toBe("project-stream-b");
+  expect(selectedProject.currentCode).toBe("");
+  expect(selectedProject.originalRequirement).toBe("");
+  expect(JSON.stringify(selectedProject.runEvents ?? [])).not.toContain(
+    "Starting stale stream test"
+  );
+  expect(JSON.stringify(selectedProject.runEvents ?? [])).not.toContain("cube(10)");
+  expect(originalProject.currentCode).toBe("");
+  expect(JSON.stringify(originalProject.runEvents ?? [])).not.toContain("This chunk is late");
+  expect(JSON.stringify(originalProject.runEvents ?? [])).not.toContain("cube(10)");
+});
+
+test("late generation stream chunks after a superseding request are ignored", async ({
+  page
+}) => {
+  await page.addInitScript((storedProject) => {
+    localStorage.setItem("ai-openscad.llm-api-key", "sk-llm");
+    localStorage.setItem("ai-openscad.vision-api-key", "sk-vision");
+    const blankViews = Object.fromEntries(
+      Object.keys(storedProject.views).map((key) => [key, ""])
+    );
+    const activeProject = {
+      ...storedProject,
+      id: "project-supersede",
+      title: "Supersede Project",
+      requirement: "生成一个旧杯子模型",
+      originalRequirement: "",
+      currentCode: "",
+      compilerOutput: "",
+      views: { ...storedProject.views, ...blankViews },
+      stl: "",
+      renderEvidence: null,
+      review: null,
+      iterations: [],
+      runEvents: [],
+      promptTrace: [],
+      updatedAt: "2026-07-02T00:00:03.000Z"
+    };
+    localStorage.setItem("ai-openscad.project", JSON.stringify(activeProject));
+    localStorage.setItem("ai-openscad.projects", JSON.stringify([activeProject]));
+    localStorage.setItem("ai-openscad.active-project-id", activeProject.id);
+  }, project);
+  await page.addInitScript(() => {
+    const originalFetch = window.fetch.bind(window);
+    (
+      window as typeof window & {
+        __llmRequests?: Array<{ stream?: boolean; serialized: string }>;
+      }
+    ).__llmRequests = [];
+    window.fetch = async (input, init) => {
+      const url = typeof input === "string" ? input : input instanceof Request ? input.url : "";
+      if (url.includes("/api/llm")) {
+        const requestBody =
+          typeof init?.body === "string"
+            ? init.body
+            : input instanceof Request
+              ? await input.clone().text()
+              : "";
+        const parsed = requestBody ? JSON.parse(requestBody) : {};
+        const requests = (
+          window as typeof window & {
+            __llmRequests: Array<{ stream?: boolean; serialized: string }>;
+          }
+        ).__llmRequests;
+        requests.push({
+          stream: Boolean(parsed.stream),
+          serialized: JSON.stringify(parsed)
+        });
+        const requestIndex = requests.length;
+        const encoder = new TextEncoder();
+        const event = (delta: Record<string, string>) =>
+          `data: ${JSON.stringify({ choices: [{ delta }] })}\n\n`;
+        return new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              if (requestIndex === 1) {
+                controller.enqueue(
+                  encoder.encode(event({ reasoning_content: "Old request thinking. " }))
+                );
+                window.setTimeout(() => {
+                  controller.enqueue(encoder.encode(event({ content: "cube" })));
+                }, 850);
+                window.setTimeout(() => {
+                  controller.enqueue(encoder.encode(event({ thinking: "Old late chunk." })));
+                }, 950);
+                window.setTimeout(() => {
+                  controller.enqueue(encoder.encode(event({ content: "(10);" })));
+                  controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+                  controller.close();
+                }, 1100);
+                return;
+              }
+              controller.enqueue(
+                encoder.encode(event({ reasoning_content: "Fresh request thinking. " }))
+              );
+              window.setTimeout(() => {
+                controller.enqueue(encoder.encode(event({ content: "sphere" })));
+              }, 120);
+              window.setTimeout(() => {
+                controller.enqueue(encoder.encode(event({ content: "(5);" })));
+                controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+                controller.close();
+              }, 240);
+            }
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "text/event-stream" }
+          }
+        );
+      }
+      return originalFetch(input, init);
+    };
+  });
+
+  await page.goto("/");
+  await page.getByRole("button", { name: /^Generate$/i }).click();
+  await page.waitForFunction(
+    () =>
+      (
+        window as typeof window & {
+          __llmRequests?: Array<{ stream?: boolean; serialized: string }>;
+        }
+      ).__llmRequests?.length === 1
+  );
+  await setReactTextareaValue(page.locator(".agentInput"), "生成一个新的球体模型");
+  await expect(page.locator(".agentInput")).toHaveValue("生成一个新的球体模型");
+  const generateButton = page.getByRole("button", { name: /^Generate$/i });
+  await invokeReactClick(generateButton);
+  await page.waitForFunction(
+    () =>
+      (
+        window as typeof window & {
+          __llmRequests?: Array<{ stream?: boolean; serialized: string }>;
+        }
+      ).__llmRequests?.length === 2
+  );
+  await page.waitForTimeout(1300);
+
+  const stored = await page.evaluate(() =>
+    JSON.parse(localStorage.getItem("ai-openscad.project") ?? "{}")
+  );
+  expect(stored.currentCode).toContain("sphere(5);");
+  expect(stored.currentCode).not.toContain("cube(10)");
+  expect(stored.originalRequirement).toBe("生成一个新的球体模型");
+  expect(JSON.stringify(stored.runEvents ?? [])).toContain("Fresh request thinking");
+  expect(JSON.stringify(stored.runEvents ?? [])).not.toContain("Old request thinking");
+  expect(JSON.stringify(stored.runEvents ?? [])).not.toContain("Old late chunk");
+  expect(JSON.stringify(stored.runEvents ?? [])).not.toContain("cube(10)");
+  expect(stored.iterations).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({
+        requirement: "生成一个新的球体模型",
+        code: expect.stringContaining("sphere(5);")
+      })
+    ])
+  );
 });
 
 test("bounded confidence run locks controls while a generation is active", async ({
@@ -3784,7 +4245,7 @@ test("iterate again uses the editable correction prompt then renders a new model
   });
   await expect(page.getByRole("heading", { name: "Proposed Revision" })).toHaveCount(0);
   await expect(page.locator(".codeEditor").first()).toHaveValue(/revised/);
-  await expect(page.locator(".chatCodeDisclosure")).toBeVisible();
+  await expect(page.locator(".chatCodeDisclosure").first()).toBeVisible();
   await expect(page.locator(".agentCodePreview")).toHaveCount(0);
   await expect(page.locator(".viewTile img")).toHaveCount(14, { timeout: 30000 });
   await expect(page.getByRole("button", { name: /Review/i })).toBeVisible();
