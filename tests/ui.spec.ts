@@ -41,6 +41,24 @@ const viewKeys = [
 ] as const;
 const renderedViews = Object.fromEntries(viewKeys.map((key) => [key, pixel]));
 const emptyViews = Object.fromEntries(viewKeys.map((key) => [key, ""]));
+const promptFieldKeys = [
+  "objectTarget",
+  "useCase",
+  "knownDetails",
+  "geometry",
+  "keyDimensions",
+  "printabilityConstraints",
+  "detailsToConfirm"
+];
+const promptFieldLabelPatterns = [
+  /Object|目标对象/,
+  /Use case|使用场景/,
+  /Known details|已知细节/,
+  /Geometry|几何结构/,
+  /Key dimensions|关键尺寸/,
+  /Printability|打印约束/,
+  /Details to confirm|待确认细节/
+];
 
 function referenceImageFile(name: string) {
   return {
@@ -52,6 +70,43 @@ function referenceImageFile(name: string) {
 
 function delay(milliseconds: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+function promptField(page: Page, field: string, index = 0) {
+  return page.locator(`[data-prompt-field="${field}"]`).nth(index);
+}
+
+function expectPromptFieldSchemaPayload(payload: string) {
+  expect(payload).toMatch(/JSON-only|JSON only/i);
+  for (const key of promptFieldKeys) {
+    expect(payload).toContain(key);
+  }
+  expect(payload).toContain("objectTarget: string");
+  expect(payload).toContain("useCase: string");
+  expect(payload).toContain("knownDetails: string[]");
+  expect(payload).toContain("geometry: string[]");
+  expect(payload).toContain("keyDimensions: string[]");
+  expect(payload).toContain("printabilityConstraints: string[]");
+  expect(payload).toContain("detailsToConfirm: string[]");
+}
+
+async function expectPromptFieldLabels(page: Page) {
+  for (const label of promptFieldLabelPatterns) {
+    await expect(page.getByLabel(label).first()).toBeVisible();
+  }
+}
+
+async function expectComposerActionsSameRow(page: Page) {
+  const referenceBox = await page.getByRole("button", { name: /^Reference images$/ }).boundingBox();
+  const optimizeBox = await page.getByRole("button", { name: /^Optimize prompt$/ }).boundingBox();
+  const generateBox = await page.getByRole("button", { name: /^Generate$/i }).boundingBox();
+  expect(referenceBox).not.toBeNull();
+  expect(optimizeBox).not.toBeNull();
+  expect(generateBox).not.toBeNull();
+  expect(referenceBox!.x).toBeLessThan(optimizeBox!.x);
+  expect(optimizeBox!.x).toBeLessThan(generateBox!.x);
+  expect(Math.abs(referenceBox!.y - generateBox!.y)).toBeLessThanOrEqual(2);
+  expect(Math.abs(referenceBox!.y - optimizeBox!.y)).toBeLessThanOrEqual(2);
 }
 
 const validStl = `solid ui-test
@@ -854,6 +909,7 @@ test("reference image action opens a compact multi-image picker", async ({
     const payload = JSON.stringify(route.request().postDataJSON());
     expect(payload).toContain(pixel.split(",")[1]);
     expect(payload).toContain("target model prompt");
+    expectPromptFieldSchemaPayload(payload);
     expect(payload).not.toContain("front-reference.png");
     expect(payload).not.toContain("side-reference.png");
     visionStarted();
@@ -863,7 +919,13 @@ test("reference image action opens a compact multi-image picker", async ({
       contentType: "application/json",
       body: JSON.stringify({
         content: JSON.stringify({
-          prompt: "A compact printable reference-image prompt."
+          objectTarget: "compact printable reference-image stand",
+          useCase: "desktop display",
+          knownDetails: ["two rounded support fins", "shallow front lip"],
+          geometry: ["compact stand body", "two support fins", "front lip"],
+          keyDimensions: [],
+          printabilityConstraints: ["3D printable", "avoid unsupported overhangs"],
+          detailsToConfirm: []
         })
       })
     });
@@ -893,16 +955,7 @@ test("reference image action opens a compact multi-image picker", async ({
   await expect(page.locator(".referenceImageLabel")).toHaveCount(0);
   await expect(page.getByText("front-reference.png")).toHaveCount(0);
 
-  const initialReferenceBox = await describeButton.boundingBox();
-  const initialOptimizeBox = await optimizeButton.boundingBox();
-  const initialGenerateBox = await generateButton.boundingBox();
-  expect(initialReferenceBox).not.toBeNull();
-  expect(initialOptimizeBox).not.toBeNull();
-  expect(initialGenerateBox).not.toBeNull();
-  expect(initialReferenceBox!.x).toBeLessThan(initialOptimizeBox!.x);
-  expect(initialOptimizeBox!.x).toBeLessThan(initialGenerateBox!.x);
-  expect(Math.abs(initialReferenceBox!.y - initialGenerateBox!.y)).toBeLessThanOrEqual(2);
-  expect(Math.abs(initialReferenceBox!.y - initialOptimizeBox!.y)).toBeLessThanOrEqual(2);
+  await expectComposerActionsSameRow(page);
 
   const canceledChooserPromise = page.waitForEvent("filechooser");
   await describeButton.click();
@@ -940,10 +993,24 @@ test("reference image action opens a compact multi-image picker", async ({
   });
 
   releaseVision();
-  await expect(page.locator(".agentInput")).toHaveValue(
-    "A compact printable reference-image prompt.",
-    { timeout: 30_000 }
-  );
+  await expect(page.locator(".promptFieldEditor")).toBeVisible({ timeout: 30_000 });
+  await expectPromptFieldLabels(page);
+  await expectComposerActionsSameRow(page);
+  await expect(promptField(page, "objectTarget")).toHaveValue(/reference-image stand/);
+  await expect(promptField(page, "useCase")).toHaveValue(/desktop display/);
+  await expect(promptField(page, "knownDetails", 0)).toHaveValue(/support fins/);
+  await expect(promptField(page, "geometry", 0)).toHaveValue(/stand body/);
+  await expect(promptField(page, "keyDimensions", 0)).toHaveValue(/\[fill in/);
+  await expect(promptField(page, "printabilityConstraints", 0)).toHaveValue(/3D printable/);
+  await expect(promptField(page, "detailsToConfirm", 0)).toHaveValue(/\[fill in/);
+  const pageWidthAfterDraft = await page.evaluate(() => ({
+    clientWidth: document.documentElement.clientWidth,
+    scrollWidth: document.documentElement.scrollWidth
+  }));
+  expect(pageWidthAfterDraft.scrollWidth).toBeLessThanOrEqual(pageWidthAfterDraft.clientWidth);
+  await page.locator(".agentComposer").screenshot({
+    path: testInfo.outputPath("reference-image-fields-narrow.png")
+  });
   expect(visionRequests).toBe(1);
   await expect(describeButton).toBeEnabled();
   await expect(page.getByText("front-reference.png")).toHaveCount(0);
@@ -967,6 +1034,61 @@ test("prompt optimization is unavailable after the model is ready for review", a
   await expect(page.getByRole("button", { name: /^Review$/i })).toBeEnabled();
   await expect(page.getByRole("button", { name: /^Generate$/i })).toHaveCount(0);
   await expect(page.getByRole("button", { name: /^Optimize prompt$/ })).toHaveCount(0);
+});
+
+test("prompt optimization renders editable fields in narrow layout", async ({
+  page
+}, testInfo) => {
+  await page.setViewportSize({ width: 390, height: 920 });
+  await page.addInitScript((storedProject) => {
+    localStorage.setItem("ai-openscad.llm-api-key", "sk-llm");
+    localStorage.setItem("ai-openscad.project", JSON.stringify(storedProject));
+  }, emptyProject);
+
+  await page.route("**/api/llm", async (route) => {
+    const payload = JSON.stringify(route.request().postDataJSON());
+    expect(payload).toContain("Make a compact printable wall hook");
+    expectPromptFieldSchemaPayload(payload);
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        content: JSON.stringify({
+          objectTarget: "compact printable wall hook",
+          useCase: "",
+          knownDetails: [],
+          geometry: ["base plate", "curved hook", "two screw holes"],
+          keyDimensions: [],
+          printabilityConstraints: ["3D printable", "avoid unsupported overhangs"],
+          detailsToConfirm: []
+        })
+      })
+    });
+  });
+
+  await page.goto("/");
+  await page.locator(".agentInput").fill("Make a compact printable wall hook");
+  await page.getByRole("button", { name: /^Optimize prompt$/ }).click();
+  await expect(page.locator(".promptFieldEditor")).toBeVisible({ timeout: 30_000 });
+  await expectPromptFieldLabels(page);
+  await expectComposerActionsSameRow(page);
+  await expect(promptField(page, "objectTarget")).toHaveValue(/wall hook/);
+  await expect(promptField(page, "useCase")).toHaveValue(/\[fill in/);
+  await expect(promptField(page, "knownDetails", 0)).toHaveValue(/\[fill in/);
+  await expect(promptField(page, "geometry", 0)).toHaveValue(/base plate/);
+  await expect(promptField(page, "keyDimensions", 0)).toHaveValue(/\[fill in/);
+  await expect(promptField(page, "printabilityConstraints", 0)).toHaveValue(/3D printable/);
+  await expect(promptField(page, "detailsToConfirm", 0)).toHaveValue(/\[fill in/);
+  const pageWidthAfterOptimize = await page.evaluate(() => ({
+    clientWidth: document.documentElement.clientWidth,
+    scrollWidth: document.documentElement.scrollWidth
+  }));
+  expect(pageWidthAfterOptimize.scrollWidth).toBeLessThanOrEqual(
+    pageWidthAfterOptimize.clientWidth
+  );
+  await page.locator(".agentComposer").screenshot({
+    path: testInfo.outputPath("prompt-optimization-fields-narrow.png")
+  });
 });
 
 test("invalid STL keeps a labelled preview and leaves the workbench usable", async ({

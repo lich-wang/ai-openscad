@@ -59,6 +59,24 @@ const pixel =
   "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADElEQVR42mP8z8AARQAFAAH/AnH9zAAAAABJRU5ErkJggg==";
 const referenceImagePayload = pixel.split(",")[1];
 const previouslyRetainedReferenceImage = "data:image/png;base64,previous-retained-reference";
+const promptFieldKeys = [
+  "objectTarget",
+  "useCase",
+  "knownDetails",
+  "geometry",
+  "keyDimensions",
+  "printabilityConstraints",
+  "detailsToConfirm"
+];
+const chinesePromptTemplateLabels = [
+  "目标对象：",
+  "使用场景：",
+  "已知细节：",
+  "几何结构：",
+  "关键尺寸：",
+  "打印约束：",
+  "待确认细节："
+];
 
 const project = {
   id: "project-review-test",
@@ -236,6 +254,48 @@ async function setNumericControl(locator: Locator, value: string) {
     input.dispatchEvent(new Event("input", { bubbles: true }));
     input.dispatchEvent(new Event("change", { bubbles: true }));
   }, value);
+}
+
+function promptField(page: Page, field: string, index = 0): Locator {
+  return page.locator(`[data-prompt-field="${field}"]`).nth(index);
+}
+
+async function expectPromptFieldLabels(page: Page, labels: RegExp[]) {
+  for (const label of labels) {
+    await expect(page.getByLabel(label).first()).toBeVisible();
+  }
+}
+
+function expectPromptFieldSchemaPayload(payload: string) {
+  expect(payload).toMatch(/JSON-only|JSON only/i);
+  for (const key of promptFieldKeys) {
+    expect(payload).toContain(key);
+  }
+  expect(payload).toContain("objectTarget: string");
+  expect(payload).toContain("useCase: string");
+  expect(payload).toContain("knownDetails: string[]");
+  expect(payload).toContain("geometry: string[]");
+  expect(payload).toContain("keyDimensions: string[]");
+  expect(payload).toContain("printabilityConstraints: string[]");
+  expect(payload).toContain("detailsToConfirm: string[]");
+}
+
+function expectNoPromptFieldState(projectLike: Record<string, unknown>) {
+  expect(projectLike.promptFieldEditor).toBeUndefined();
+  expect(projectLike.promptFields).toBeUndefined();
+  expect(projectLike.promptFieldDraft).toBeUndefined();
+  for (const key of promptFieldKeys) {
+    expect(Object.prototype.hasOwnProperty.call(projectLike, key)).toBe(false);
+  }
+}
+
+function expectPromptTemplateLabels(text: string, labels: string[]) {
+  let previousIndex = -1;
+  for (const label of labels) {
+    const index = text.indexOf(label);
+    expect(index, label).toBeGreaterThan(previousIndex);
+    previousIndex = index;
+  }
 }
 
 async function configureBoundedAutoRun(
@@ -609,10 +669,12 @@ test("reference images draft an editable requirement before generation", async (
     const body = route.request().postDataJSON() as {
       messages: Array<{ content: unknown }>;
     };
+    const payload = JSON.stringify(body);
     visionPayload = JSON.stringify(body.messages[1].content);
     expect(imageUrlsFromVisionContent(body.messages[1].content)).toHaveLength(2);
     expect(visionPayload).toContain(referenceImagePayload);
     expect(visionPayload).toContain("target model prompt");
+    expectPromptFieldSchemaPayload(payload);
     expect(visionPayload).not.toContain("reference-front.png");
     expect(visionPayload).not.toContain("reference-side.png");
     expect(visionPayload).not.toContain("cube(10)");
@@ -625,8 +687,13 @@ test("reference images draft an editable requirement before generation", async (
       contentType: "application/json",
       body: JSON.stringify({
         content: JSON.stringify({
-          prompt:
-            "生成一个可3D打印的壁挂杯架，包含圆弧托杯槽、两个沉头螺丝孔和加强筋。"
+          objectTarget: "可3D打印的壁挂杯架",
+          useCase: "墙面收纳杯子",
+          knownDetails: ["圆弧托杯槽", "两个沉头螺丝孔", "加强筋"],
+          geometry: ["圆弧托杯槽", "背板", "两个沉头螺丝孔", "加强筋"],
+          keyDimensions: ["高度 [请填写]", "托杯槽直径 [请填写]"],
+          printabilityConstraints: ["壁厚 [请填写]", "避免大悬垂"],
+          detailsToConfirm: ["[请填写螺丝孔直径]", "[请填写杯子直径]"]
         })
       })
     });
@@ -655,8 +722,31 @@ test("reference images draft an editable requirement before generation", async (
   await expect(page.getByRole("button", { name: "Clear reference images" })).toHaveCount(0);
   await expect(page.getByRole("button", { name: /Remove reference-front\.png/i })).toHaveCount(0);
 
-  await expect(page.locator(".agentInput")).toHaveValue(/壁挂杯架/, { timeout: 30_000 });
-  await expect(page.locator(".agentInput")).toBeEnabled();
+  const fieldEditor = page.locator(".promptFieldEditor");
+  await expect(fieldEditor).toBeVisible({ timeout: 30_000 });
+  await expect(promptField(page, "objectTarget")).toHaveValue(/壁挂杯架/);
+  await expectPromptFieldLabels(page, [
+    /目标对象/,
+    /使用场景/,
+    /已知细节/,
+    /几何结构/,
+    /关键尺寸/,
+    /打印约束/,
+    /待确认细节/
+  ]);
+  await expect(promptField(page, "useCase")).toHaveValue(/墙面收纳杯子/);
+  await expect(promptField(page, "knownDetails", 0)).toHaveValue(/圆弧托杯槽/);
+  await expect(promptField(page, "geometry", 0)).toHaveValue(/圆弧托杯槽/);
+  await expect(promptField(page, "keyDimensions", 0)).toHaveValue(/请填写/);
+  await expect(promptField(page, "printabilityConstraints", 0)).toHaveValue(/壁厚/);
+  await expect(promptField(page, "detailsToConfirm", 0)).toHaveValue(/请填写螺丝孔直径/);
+  await promptField(page, "objectTarget").fill("可3D打印的壁挂双杯架");
+  await promptField(page, "useCase").fill("厨房墙面收纳两个杯子");
+  await promptField(page, "knownDetails", 1).fill("两个沉头螺丝孔");
+  await promptField(page, "geometry", 1).fill("加厚背板");
+  await promptField(page, "keyDimensions", 0).fill("高度80mm");
+  await promptField(page, "printabilityConstraints", 0).fill("壁厚3mm");
+  await promptField(page, "detailsToConfirm", 0).fill("螺丝孔直径4mm");
   await expect(describeButton).toBeEnabled();
   expect(visionRequests).toBe(1);
   expect(llmRequests).toBe(0);
@@ -669,7 +759,14 @@ test("reference images draft an editable requirement before generation", async (
   const storedAfterDraft = await page.evaluate(() =>
     JSON.parse(localStorage.getItem("ai-openscad.project") ?? "{}")
   );
-  expect(storedAfterDraft.requirement).toContain("壁挂杯架");
+  expectPromptTemplateLabels(storedAfterDraft.requirement, chinesePromptTemplateLabels);
+  expect(storedAfterDraft.requirement).toContain("可3D打印的壁挂双杯架");
+  expect(storedAfterDraft.requirement).toContain("厨房墙面收纳两个杯子");
+  expect(storedAfterDraft.requirement).toContain("两个沉头螺丝孔");
+  expect(storedAfterDraft.requirement).toContain("加厚背板");
+  expect(storedAfterDraft.requirement).toContain("高度80mm");
+  expect(storedAfterDraft.requirement).toContain("壁厚3mm");
+  expect(storedAfterDraft.requirement).toContain("螺丝孔直径4mm");
   expect(storedAfterDraft.originalRequirement).toBe("");
   expect(storedAfterDraft.currentCode).toBe("");
   expect(storedAfterDraft.proposedCode).toBe("");
@@ -680,6 +777,13 @@ test("reference images draft an editable requirement before generation", async (
   expect(storedAfterDraft.referenceImages).toHaveLength(2);
   expect(JSON.stringify(storedAfterDraft.referenceImages)).toContain(referenceImagePayload);
   const serializedStoredAfterDraft = JSON.stringify(storedAfterDraft);
+  expectNoPromptFieldState(storedAfterDraft);
+  const storedProjectsAfterDraft = await page.evaluate(() =>
+    JSON.parse(localStorage.getItem("ai-openscad.projects") ?? "[]")
+  );
+  for (const storedProject of storedProjectsAfterDraft) {
+    expectNoPromptFieldState(storedProject);
+  }
   expect(serializedStoredAfterDraft).not.toContain("reference-front");
   expect(serializedStoredAfterDraft).toContain("data:image/png;base64");
   expect(serializedStoredAfterDraft).toContain(referenceImagePayload);
@@ -741,7 +845,13 @@ test("reference images draft an editable requirement before generation", async (
       }).__exportedProject
   );
   expect(exportedProject.filename).toBe("ai-openscad-project.json");
-  expect(exportedProject.content).toContain("壁挂杯架");
+  expect(exportedProject.content).toContain("可3D打印的壁挂双杯架");
+  expect(exportedProject.content).toContain("厨房墙面收纳两个杯子");
+  expect(exportedProject.content).toContain("两个沉头螺丝孔");
+  expect(exportedProject.content).toContain("加厚背板");
+  expect(exportedProject.content).toContain("高度80mm");
+  expect(exportedProject.content).toContain("壁厚3mm");
+  expectNoPromptFieldState(JSON.parse(exportedProject.content));
   expect(exportedProject.content).not.toContain("reference-front");
   expect(exportedProject.content).not.toContain("reference-side");
   expect(exportedProject.content).not.toContain("data:image");
@@ -757,13 +867,15 @@ test("reference images draft an editable requirement before generation", async (
     renderEvidence: null
   });
 
-  await page.locator(".agentInput").fill(
-    "生成一个可3D打印的壁挂杯架，包含圆弧托杯槽、两个沉头螺丝孔和加强筋，高度80mm。"
-  );
   await page.getByRole("button", { name: /^Generate$/i }).click();
   await expect.poll(() => llmRequests, { timeout: 30_000 }).toBe(1);
+  expectPromptTemplateLabels(generationPayload, chinesePromptTemplateLabels);
   expect(generationPayload).toContain("高度80mm");
-  expect(generationPayload).toContain("壁挂杯架");
+  expect(generationPayload).toContain("加厚背板");
+  expect(generationPayload).toContain("壁厚3mm");
+  expect(generationPayload).toContain("可3D打印的壁挂双杯架");
+  expect(generationPayload).toContain("厨房墙面收纳两个杯子");
+  expect(generationPayload).toContain("两个沉头螺丝孔");
   expect(generationPayload).not.toContain("reference-front");
   expect(generationPayload).not.toContain("data:image");
   expect(generationPayload).not.toContain(referenceImagePayload);
@@ -833,7 +945,7 @@ test("prompt optimization rewrites editable requirement before generation", asyn
       optimizePayload = payload;
       expect(body.stream).not.toBe(true);
       expect(payload).toContain("做一个30ml杯子");
-      expect(payload).toMatch(/structured|CAD-ready|text-to-CAD|Details to confirm/i);
+      expectPromptFieldSchemaPayload(payload);
       expect(payload).not.toContain("data:image");
       expect(payload).not.toContain("cube(10)");
       expect(payload).not.toContain("solid stale");
@@ -845,16 +957,18 @@ test("prompt optimization rewrites editable requirement before generation", asyn
       await route.fulfill({
         status: 200,
         contentType: "application/json",
-        body: JSON.stringify({
-          content: JSON.stringify({
-            prompt: [
-              "目标模型：一个可3D打印的30ml杯子。",
-              "已知结构：圆柱杯身、圆滑杯口、可握持把手。",
-              "待确认细节：精确高度、壁厚、把手间隙、杯底倒角。"
-            ].join("\n")
-          })
+      body: JSON.stringify({
+        content: JSON.stringify({
+          objectTarget: "可3D打印的30ml杯子",
+          useCase: "[请填写使用场景]",
+          knownDetails: ["圆柱杯身", "圆滑杯口", "可握持把手"],
+          geometry: ["圆柱杯身", "圆滑杯口", "侧面把手"],
+          keyDimensions: ["容量30ml", "高度 [请填写]", "壁厚 [请填写]"],
+          printabilityConstraints: ["可3D打印", "杯底倒角 [请填写]"],
+          detailsToConfirm: ["[请填写精确高度]", "[请填写把手间隙]"]
         })
-      });
+      })
+    });
       return;
     }
     generationPayload = payload;
@@ -888,10 +1002,31 @@ test("prompt optimization rewrites editable requirement before generation", asyn
   await expect(generateButton).toBeDisabled();
   await expect(page.locator(".agentRun")).toContainText(/Optimizing prompt/i);
   releaseOptimize();
-  await expect(page.locator(".agentInput")).toHaveValue(/待确认细节/, {
-    timeout: 30_000
-  });
-  await expect(page.locator(".agentInput")).toBeEnabled();
+  await expect(page.locator(".promptFieldEditor")).toBeVisible({ timeout: 30_000 });
+  await expectPromptFieldLabels(page, [
+    /目标对象/,
+    /使用场景/,
+    /已知细节/,
+    /几何结构/,
+    /关键尺寸/,
+    /打印约束/,
+    /待确认细节/
+  ]);
+  await expect(promptField(page, "objectTarget")).toHaveValue(/30ml杯子/);
+  await expect(promptField(page, "useCase")).toHaveValue(/\[请填写/);
+  await expect(promptField(page, "knownDetails", 0)).toHaveValue(/圆柱杯身/);
+  await expect(promptField(page, "geometry", 2)).toHaveValue(/把手/);
+  await expect(promptField(page, "keyDimensions", 1)).toHaveValue(/请填写/);
+  await expect(promptField(page, "printabilityConstraints", 0)).toHaveValue(/可3D打印/);
+  await expect(promptField(page, "detailsToConfirm", 0)).toHaveValue(/请填写精确高度/);
+  await promptField(page, "objectTarget").fill("可3D打印的30ml带把手小杯");
+  await promptField(page, "useCase").fill("桌面试饮样品杯");
+  await promptField(page, "knownDetails", 1).fill("圆滑外翻杯口");
+  await promptField(page, "geometry", 1).fill("加厚圆滑杯口");
+  await promptField(page, "keyDimensions", 1).fill("高度55mm");
+  await promptField(page, "keyDimensions", 2).fill("壁厚2mm");
+  await promptField(page, "printabilityConstraints", 1).fill("杯底倒角2mm");
+  await promptField(page, "detailsToConfirm", 1).fill("把手间隙18mm");
   await expect(optimizeButton).toBeEnabled();
   await expect(page.locator(".agentRun")).toContainText(/Prompt optimized/i);
   await page.locator(".workspace").screenshot({
@@ -901,8 +1036,27 @@ test("prompt optimization rewrites editable requirement before generation", asyn
   const storedAfterOptimize = await page.evaluate(() =>
     JSON.parse(localStorage.getItem("ai-openscad.project") ?? "{}")
   );
+  expectNoPromptFieldState(storedAfterOptimize);
+  const storedProjectsAfterOptimize = await page.evaluate(() =>
+    JSON.parse(localStorage.getItem("ai-openscad.projects") ?? "[]")
+  );
+  for (const storedProject of storedProjectsAfterOptimize) {
+    expectNoPromptFieldState(storedProject);
+  }
+  expect(storedAfterOptimize.requirement).toContain("目标对象");
+  expect(storedAfterOptimize.requirement).toContain("使用场景");
+  expect(storedAfterOptimize.requirement).toContain("关键尺寸");
   expect(storedAfterOptimize.requirement).toContain("待确认细节");
+  expectPromptTemplateLabels(storedAfterOptimize.requirement, chinesePromptTemplateLabels);
   expect(storedAfterOptimize.originalRequirement).toBe("");
+  expect(storedAfterOptimize.requirement).toContain("可3D打印的30ml带把手小杯");
+  expect(storedAfterOptimize.requirement).toContain("桌面试饮样品杯");
+  expect(storedAfterOptimize.requirement).toContain("圆滑外翻杯口");
+  expect(storedAfterOptimize.requirement).toContain("加厚圆滑杯口");
+  expect(storedAfterOptimize.requirement).toContain("高度55mm");
+  expect(storedAfterOptimize.requirement).toContain("壁厚2mm");
+  expect(storedAfterOptimize.requirement).toContain("杯底倒角2mm");
+  expect(storedAfterOptimize.requirement).toContain("把手间隙18mm");
   expect(storedAfterOptimize.currentCode).toBe("");
   expect(storedAfterOptimize.proposedCode).toBe("");
   expect(storedAfterOptimize.review).toBeNull();
@@ -921,14 +1075,69 @@ test("prompt optimization rewrites editable requirement before generation", asyn
   expect(latestTrace).not.toContain("cube(10)");
   expect(latestTrace).not.toContain("solid stale");
   expect(latestTrace).not.toContain("OLD_TRACE");
-
-  await page.locator(".agentInput").fill(
-    "目标模型：一个可3D打印的30ml杯子。\n已知结构：圆柱杯身、圆滑杯口、可握持把手。\n待确认细节：高度55mm，壁厚2mm，把手间隙18mm，杯底倒角2mm。"
+  await page.evaluate(() => {
+    (window as typeof window & {
+      __optimizedExportedProject?: { filename: string; content: string };
+    }).__optimizedExportedProject = undefined;
+    const originalCreateObjectUrl = URL.createObjectURL.bind(URL);
+    const blobTextByUrl: Record<string, Promise<string>> = {};
+    URL.createObjectURL = ((blob: Blob | MediaSource) => {
+      const url = originalCreateObjectUrl(blob);
+      if (blob instanceof Blob) {
+        blobTextByUrl[url] = blob.text();
+      }
+      return url;
+    }) as typeof URL.createObjectURL;
+    HTMLAnchorElement.prototype.click = function captureOptimizedProjectExport() {
+      const blobText = blobTextByUrl[this.href];
+      if (!blobText) {
+        return;
+      }
+      void blobText.then((content) => {
+        (
+          window as typeof window & {
+            __optimizedExportedProject?: { filename: string; content: string };
+          }
+        ).__optimizedExportedProject = { filename: this.download, content };
+      });
+    };
+  });
+  await page.locator(".projectTools").getByRole("button", { name: /Export/i }).click();
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          Boolean(
+            (window as typeof window & {
+              __optimizedExportedProject?: { filename: string; content: string };
+            }).__optimizedExportedProject
+          )
+      )
+    )
+    .toBe(true);
+  const optimizedExport = await page.evaluate(
+    () =>
+      (window as typeof window & {
+        __optimizedExportedProject: { filename: string; content: string };
+      }).__optimizedExportedProject
   );
+  expect(optimizedExport.content).toContain("高度55mm");
+  expect(optimizedExport.content).toContain("杯底倒角2mm");
+  expect(optimizedExport.content).toContain("可3D打印的30ml带把手小杯");
+  expect(optimizedExport.content).toContain("桌面试饮样品杯");
+  expect(optimizedExport.content).toContain("圆滑外翻杯口");
+  expectNoPromptFieldState(JSON.parse(optimizedExport.content));
+
   await page.getByRole("button", { name: /^Generate$/i }).click();
   await expect.poll(() => llmRequests, { timeout: 30_000 }).toBe(2);
+  expectPromptTemplateLabels(generationPayload, chinesePromptTemplateLabels);
   expect(generationPayload).toContain("高度55mm");
   expect(generationPayload).toContain("壁厚2mm");
+  expect(generationPayload).toContain("加厚圆滑杯口");
+  expect(generationPayload).toContain("杯底倒角2mm");
+  expect(generationPayload).toContain("可3D打印的30ml带把手小杯");
+  expect(generationPayload).toContain("桌面试饮样品杯");
+  expect(generationPayload).toContain("圆滑外翻杯口");
   expect(generationPayload).not.toContain("data:image");
   expect(generationPayload).not.toContain("OLD_TRACE");
   expect(optimizePayload).toContain("做一个30ml杯子");
@@ -1063,6 +1272,7 @@ test("late prompt optimization responses do not overwrite newer composer state",
   await page.goto("/");
   await page.getByRole("button", { name: /^Optimize prompt$/ }).click();
   await firstStartedPromise;
+  const staleResponsePromise = page.waitForResponse("**/api/llm");
   await page.locator(".agentInput").evaluate((node) => {
     const textarea = node as HTMLTextAreaElement;
     textarea.disabled = false;
@@ -1071,8 +1281,8 @@ test("late prompt optimization responses do not overwrite newer composer state",
     textarea.dispatchEvent(new Event("change", { bubbles: true }));
   });
   releaseFirst();
-
-  await delay(500);
+  await staleResponsePromise;
+  await expect(page.getByRole("button", { name: /^Optimize prompt$/ })).toBeEnabled();
   await expect(page.locator(".agentInput")).toHaveValue("用户在旧优化返回前写的新需求");
   await expect(page.locator(".agentRun")).not.toContainText("过期优化响应");
   const stored = await page.evaluate(() =>
@@ -1149,9 +1359,8 @@ test("prompt optimization locks project navigation while in flight", async ({
   }
   releaseFirst();
 
-  await expect(page.locator(".agentInput")).toHaveValue(/优化中的项目需求已完成结构化/, {
-    timeout: 30_000
-  });
+  await expect(page.locator(".promptFieldEditor")).toBeVisible({ timeout: 30_000 });
+  await expect(promptField(page, "objectTarget")).toHaveValue(/优化中的项目需求已完成结构化/);
   const stored = await page.evaluate(() =>
     JSON.parse(localStorage.getItem("ai-openscad.project") ?? "{}")
   );
@@ -1168,6 +1377,91 @@ test("prompt optimization locks project navigation while in flight", async ({
   );
   expect(optimizingProject.requirement).toContain("优化中的项目需求已完成结构化");
   expect(targetProject.requirement).toBe("切换后的项目需求");
+});
+
+test("prompt field editor clears across new model and project switch", async ({
+  page
+}) => {
+  await page.addInitScript(({ storedProject, blankViews }) => {
+    localStorage.setItem("ai-openscad.llm-api-key", "sk-llm");
+    const firstProject = {
+      ...storedProject,
+      id: "project-field-editor-source",
+      title: "Field editor source",
+      requirement: "做一个桌面挂钩",
+      currentCode: "",
+      proposedCode: "",
+      compilerOutput: "",
+      renderEvidence: null,
+      stl: "",
+      views: blankViews,
+      referenceImages: [],
+      review: null,
+      promptTrace: [],
+      runEvents: [],
+      updatedAt: "2026-06-26T00:00:00.000Z"
+    };
+    const secondProject = {
+      ...storedProject,
+      id: "project-field-editor-other",
+      title: "Other model",
+      requirement: "另一个模型需求",
+      currentCode: "",
+      proposedCode: "",
+      compilerOutput: "",
+      renderEvidence: null,
+      stl: "",
+      views: blankViews,
+      referenceImages: [],
+      review: null,
+      promptTrace: [],
+      runEvents: [],
+      updatedAt: "2026-06-26T01:00:00.000Z"
+    };
+    localStorage.setItem("ai-openscad.project", JSON.stringify(firstProject));
+    localStorage.setItem(
+      "ai-openscad.projects",
+      JSON.stringify([secondProject, firstProject])
+    );
+    localStorage.setItem("ai-openscad.active-project-id", firstProject.id);
+  }, { storedProject: project, blankViews: emptyViews });
+
+  await page.route("**/api/llm", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        content: JSON.stringify({
+          objectTarget: "可3D打印的桌面挂钩",
+          useCase: "[请填写使用场景]",
+          knownDetails: ["桌面夹持"],
+          geometry: ["夹持底座", "弯曲挂钩"],
+          keyDimensions: ["夹口厚度 [请填写]"],
+          printabilityConstraints: ["可3D打印"],
+          detailsToConfirm: ["[请填写承重目标]"]
+        })
+      })
+    });
+  });
+
+  await page.goto("/");
+  await page.getByRole("button", { name: /^Optimize prompt$/ }).click();
+  await expect(page.locator(".promptFieldEditor")).toBeVisible({ timeout: 10_000 });
+  await promptField(page, "objectTarget").fill("可3D打印的桌面耳机挂钩");
+  await page.locator(".controlPanel").getByRole("button", { name: "New model" }).click();
+  await expect(page.locator(".promptFieldEditor")).toHaveCount(0);
+  await expect(page.locator(".agentInput")).toHaveValue("");
+
+  await page.locator(".modelHistory button", { hasText: "桌面耳机挂钩" }).click();
+  await expect(page.locator(".promptFieldEditor")).toHaveCount(0);
+  await expect(page.locator(".agentInput")).toHaveValue(/桌面耳机挂钩/);
+  await page.locator(".agentInput").fill("手动改写后的纯文本需求");
+  await expect(page.locator(".promptFieldEditor")).toHaveCount(0);
+  const stored = await page.evaluate(() =>
+    JSON.parse(localStorage.getItem("ai-openscad.project") ?? "{}")
+  );
+  expect(stored.requirement).toBe("手动改写后的纯文本需求");
+  expectNoPromptFieldState(stored);
 });
 
 test("pending revision blocks pre-generation prompt helpers", async ({ page }) => {
@@ -1366,6 +1660,7 @@ test("late reference image draft responses do not overwrite newer composer state
   ]);
   await firstStartedPromise;
   await expect(page.getByText("late-reference.png")).toHaveCount(0);
+  const staleResponsePromise = page.waitForResponse("**/api/vision");
   await page.locator(".agentInput").evaluate((node) => {
     const textarea = node as HTMLTextAreaElement;
     textarea.disabled = false;
@@ -1374,15 +1669,16 @@ test("late reference image draft responses do not overwrite newer composer state
     textarea.dispatchEvent(new Event("change", { bubbles: true }));
   });
   releaseFirst();
-
-  await delay(500);
+  await staleResponsePromise;
   await expect(page.locator(".agentInput")).toHaveValue("用户在旧请求返回前写的新需求");
+  await expect(page.locator(".promptFieldEditor")).toHaveCount(0);
   await expect(page.locator(".agentRun")).not.toContainText("过期响应不应该覆盖");
   const stored = await page.evaluate(() =>
     JSON.parse(localStorage.getItem("ai-openscad.project") ?? "{}")
   );
   expect(stored.requirement).toBe("用户在旧请求返回前写的新需求");
   expect(stored.referenceImages).toEqual([previouslyRetainedReferenceImage]);
+  expect(JSON.stringify(stored.referenceImages)).not.toContain(referenceImagePayload);
   expect(JSON.stringify(stored.promptTrace ?? [])).not.toContain("过期响应不应该覆盖");
 });
 

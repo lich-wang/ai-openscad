@@ -501,6 +501,53 @@ textarea {
   min-height: 140px;
 }
 
+.promptFieldEditor {
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  display: grid;
+  gap: 8px;
+  max-height: 340px;
+  min-width: 0;
+  overflow: auto;
+  padding: 10px;
+}
+
+.promptField {
+  border: 0;
+  display: grid;
+  gap: 5px;
+  margin: 0;
+  min-width: 0;
+  padding: 0;
+}
+
+.promptField span,
+.promptField legend {
+  color: #0f2942;
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1.25;
+  padding: 0;
+}
+
+.promptFieldInput {
+  background: #ffffff;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  color: #12263f;
+  font: inherit;
+  line-height: 1.35;
+  min-height: 38px;
+  min-width: 0;
+  padding: 8px 10px;
+  resize: vertical;
+  width: 100%;
+}
+
+.promptFieldWide .promptFieldInput {
+  min-height: 44px;
+}
+
 .tokenPanel {
   background: #f8fafc;
   border: 1px solid #e4e9f0;

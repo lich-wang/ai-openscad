@@ -32,6 +32,12 @@ import {
 } from "./lib/models";
 import { createPromptTraceEntry } from "./lib/promptTrace";
 import {
+  promptFieldLabels,
+  promptFieldsToText,
+  type PromptFieldArrayKey,
+  type PromptFields
+} from "./lib/promptFields";
+import {
   createEmptyProject,
   exportProject,
   importProject,
@@ -108,6 +114,10 @@ type AutoRunCheckpoint = {
   stl: string;
   renderEvidence: RenderEvidence;
   review: NonNullable<ProjectState["review"]>;
+};
+type PromptFieldDraft = {
+  fields: PromptFields;
+  language: Locale;
 };
 
 const MAX_COMPILER_REPAIR_ATTEMPTS = 2;
@@ -289,6 +299,7 @@ export default function App() {
   const [errorStage, setErrorStage] = useState<WorkflowStage | "">("");
   const [renderStatus, setRenderStatus] = useState("");
   const [autoRunActive, setAutoRunActive] = useState(false);
+  const [promptFieldDraft, setPromptFieldDraft] = useState<PromptFieldDraft | null>(null);
   const busyRef = useRef<BusyState>("idle");
   const operationTokenRef = useRef(0);
   const referenceDraftTokenRef = useRef(0);
@@ -420,6 +431,65 @@ export default function App() {
     if (referenceFileInputRef.current) {
       referenceFileInputRef.current.value = "";
     }
+  }
+
+  function clearPromptFieldDraft() {
+    setPromptFieldDraft(null);
+  }
+
+  function updatePromptFieldDraft(
+    updater: (fields: PromptFields) => PromptFields
+  ) {
+    setPromptFieldDraft((current) => {
+      if (!current) {
+        return current;
+      }
+      const nextDraft = {
+        ...current,
+        fields: updater(current.fields)
+      };
+      const prompt = promptFieldsToText(nextDraft.fields, nextDraft.language);
+      setProject((activeProject) => {
+        const nextProject = {
+          ...activeProject,
+          requirement: prompt,
+          updatedAt: new Date().toISOString()
+        };
+        projectRef.current = nextProject;
+        return nextProject;
+      });
+      return nextDraft;
+    });
+  }
+
+  function updatePromptStringField(
+    field: "objectTarget" | "useCase",
+    value: string
+  ) {
+    updatePromptFieldDraft((fields) => ({
+      ...fields,
+      [field]: value
+    }));
+  }
+
+  function updatePromptArrayField(
+    field: PromptFieldArrayKey,
+    index: number,
+    value: string
+  ) {
+    updatePromptFieldDraft((fields) => {
+      const values = [...fields[field]];
+      values[index] = value;
+      return {
+        ...fields,
+        [field]: values
+      };
+    });
+  }
+
+  function handleRequirementInput(value: string) {
+    clearPromptFieldDraft();
+    updateProject({ requirement: value });
   }
 
   function updateTargetConfidence(value: number) {
@@ -655,6 +725,7 @@ export default function App() {
   }
 
   async function draftReferenceImages(files: File[]) {
+    clearPromptFieldDraft();
     await runSafely("draftingReference", async () => {
       requireVisionApiKey();
       const imagesAtStart = await buildReferenceImagesFromFiles(files);
@@ -675,7 +746,7 @@ export default function App() {
       referenceDraftTokenRef.current = requestToken;
       referenceDraftFingerprintRef.current = imageSetFingerprint;
       try {
-        const { prompt, trace } = await describeReferenceImages({
+        const { fields, language, prompt, trace } = await describeReferenceImages({
           apiKey: visionApiKey,
           modelId: activeProject.visionModelId,
           images: imagesAtStart.map((image) => image.dataUrl)
@@ -690,6 +761,7 @@ export default function App() {
         if (!stillCurrent) {
           return;
         }
+        setPromptFieldDraft({ fields, language });
         setProject((current) => {
           if (
             current.id !== activeProjectId ||
@@ -746,6 +818,7 @@ export default function App() {
     if (optimizePromptDisabled) {
       return;
     }
+    clearPromptFieldDraft();
     await runSafely("optimizingPrompt", async () => {
       requireLlmApiKey();
       const activeProject = projectRef.current;
@@ -766,7 +839,7 @@ export default function App() {
       const activeProjectId = activeProject.id;
       const requestToken = promptOptimizationTokenRef.current + 1;
       promptOptimizationTokenRef.current = requestToken;
-      const { prompt, trace } = await optimizePrompt({
+      const { fields, language, prompt, trace } = await optimizePrompt({
         apiKey: llmApiKey,
         modelId: activeProject.codeModelId,
         requirement: baselineRequirement
@@ -780,6 +853,7 @@ export default function App() {
       if (!stillCurrent) {
         return;
       }
+      setPromptFieldDraft({ fields, language });
       setProject((current) => {
         if (
           current.id !== activeProjectId ||
@@ -818,6 +892,7 @@ export default function App() {
   }
 
   async function handleGenerate() {
+    clearPromptFieldDraft();
     const shouldAutoRun = autoIterationLimitRef.current > 0;
     const autoRunToken = shouldAutoRun ? beginAutoRun() : 0;
     await runSafely("generating", async () => {
@@ -1673,6 +1748,7 @@ export default function App() {
   }
 
   async function handleDiagnosticFix() {
+    clearPromptFieldDraft();
     await runSafely("generating", async () => {
       requireLlmApiKey();
       if (!project.currentCode.trim()) {
@@ -1829,6 +1905,7 @@ export default function App() {
   }
 
   async function handleIterateAgain() {
+    clearPromptFieldDraft();
     const shouldAutoRun = autoIterationLimitRef.current > 0;
     const autoRunToken = shouldAutoRun ? beginAutoRun() : 0;
     await runSafely("generating", async () => {
@@ -2093,6 +2170,7 @@ export default function App() {
   }
 
   async function handleAcceptRevision() {
+    clearPromptFieldDraft();
     await runSafely("compiling", async () => {
       const accepted = acceptRevision(project);
       setProject(accepted);
@@ -2145,9 +2223,15 @@ export default function App() {
     });
   }
 
+  function handleRejectRevision() {
+    clearPromptFieldDraft();
+    setProject((current) => rejectRevision(current));
+  }
+
   function handleNewModel() {
     cancelActiveAutoRun();
     clearReferenceImages();
+    clearPromptFieldDraft();
     const next = createEmptyProject();
     setProjectList((current) => upsertProjectList(current, next));
     projectRef.current = next;
@@ -2159,6 +2243,7 @@ export default function App() {
   function handleSelectProject(projectId: string) {
     cancelActiveAutoRun();
     clearReferenceImages();
+    clearPromptFieldDraft();
     const selected = projectList.find((item) => item.id === projectId);
     if (!selected) {
       return;
@@ -2198,6 +2283,7 @@ export default function App() {
   function handleImport(event: ChangeEvent<HTMLInputElement>) {
     cancelActiveAutoRun();
     clearReferenceImages();
+    clearPromptFieldDraft();
     const file = event.target.files?.[0];
     if (!file) {
       return;
@@ -2395,15 +2481,24 @@ export default function App() {
               <h2>{tr("agentComposer")}</h2>
               <span>{tr("draftPrecision")}</span>
             </div>
-            <textarea
-              className="agentInput requirementInput"
-              disabled={busy === "draftingReference" || busy === "optimizingPrompt"}
-              ref={requirementInputRef}
-              value={project.requirement}
-              onChange={(event) => updateProject({ requirement: event.target.value })}
-              onInput={(event) => updateProject({ requirement: event.currentTarget.value })}
-              placeholder={tr("requirementPlaceholder")}
-            />
+            {promptFieldDraft ? (
+              <PromptFieldEditor
+                disabled={busy === "draftingReference" || busy === "optimizingPrompt"}
+                draft={promptFieldDraft}
+                onArrayChange={updatePromptArrayField}
+                onStringChange={updatePromptStringField}
+              />
+            ) : (
+              <textarea
+                className="agentInput requirementInput"
+                disabled={busy === "draftingReference" || busy === "optimizingPrompt"}
+                ref={requirementInputRef}
+                value={project.requirement}
+                onChange={(event) => handleRequirementInput(event.target.value)}
+                onInput={(event) => handleRequirementInput(event.currentTarget.value)}
+                placeholder={tr("requirementPlaceholder")}
+              />
+            )}
             <input
               accept="image/*"
               aria-hidden="true"
@@ -2533,7 +2628,7 @@ export default function App() {
                   <button
                     className="smallButton"
                     disabled={isBusy || controlsLocked}
-                    onClick={() => setProject((current) => rejectRevision(current))}
+                    onClick={handleRejectRevision}
                   >
                     <X size={15} />
                     {tr("reject")}
@@ -2691,6 +2786,101 @@ function ModelPicker(props: {
         ))}
       </div>
     </div>
+  );
+}
+
+function PromptFieldEditor(props: {
+  disabled: boolean;
+  draft: PromptFieldDraft;
+  onArrayChange: (field: PromptFieldArrayKey, index: number, value: string) => void;
+  onStringChange: (field: "objectTarget" | "useCase", value: string) => void;
+}) {
+  const labels = promptFieldLabels(props.draft.language);
+  return (
+    <div className="promptFieldEditor">
+      <label className="promptField promptFieldWide">
+        <span>{labels.objectTarget}</span>
+        <textarea
+          aria-label={labels.objectTarget}
+          className="promptFieldInput"
+          data-prompt-field="objectTarget"
+          disabled={props.disabled}
+          value={props.draft.fields.objectTarget}
+          onChange={(event) => props.onStringChange("objectTarget", event.target.value)}
+        />
+      </label>
+      <label className="promptField promptFieldWide">
+        <span>{labels.useCase}</span>
+        <textarea
+          aria-label={labels.useCase}
+          className="promptFieldInput"
+          data-prompt-field="useCase"
+          disabled={props.disabled}
+          value={props.draft.fields.useCase}
+          onChange={(event) => props.onStringChange("useCase", event.target.value)}
+        />
+      </label>
+      <PromptArrayField
+        disabled={props.disabled}
+        field="knownDetails"
+        label={labels.knownDetails}
+        values={props.draft.fields.knownDetails}
+        onChange={props.onArrayChange}
+      />
+      <PromptArrayField
+        disabled={props.disabled}
+        field="geometry"
+        label={labels.geometry}
+        values={props.draft.fields.geometry}
+        onChange={props.onArrayChange}
+      />
+      <PromptArrayField
+        disabled={props.disabled}
+        field="keyDimensions"
+        label={labels.keyDimensions}
+        values={props.draft.fields.keyDimensions}
+        onChange={props.onArrayChange}
+      />
+      <PromptArrayField
+        disabled={props.disabled}
+        field="printabilityConstraints"
+        label={labels.printabilityConstraints}
+        values={props.draft.fields.printabilityConstraints}
+        onChange={props.onArrayChange}
+      />
+      <PromptArrayField
+        disabled={props.disabled}
+        field="detailsToConfirm"
+        label={labels.detailsToConfirm}
+        values={props.draft.fields.detailsToConfirm}
+        onChange={props.onArrayChange}
+      />
+    </div>
+  );
+}
+
+function PromptArrayField(props: {
+  disabled: boolean;
+  field: PromptFieldArrayKey;
+  label: string;
+  values: string[];
+  onChange: (field: PromptFieldArrayKey, index: number, value: string) => void;
+}) {
+  return (
+    <fieldset className="promptField promptFieldList">
+      <legend>{props.label}</legend>
+      {props.values.map((value, index) => (
+        <textarea
+          aria-label={`${props.label} ${index + 1}`}
+          className="promptFieldInput"
+          data-prompt-field={props.field}
+          disabled={props.disabled}
+          key={`${props.field}-${index}`}
+          value={value}
+          onChange={(event) => props.onChange(props.field, index, event.target.value)}
+        />
+      ))}
+    </fieldset>
   );
 }
 

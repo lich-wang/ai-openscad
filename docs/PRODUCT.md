@@ -55,12 +55,14 @@ three columns:
 
 1. User writes a requirement, for example a six-slot organizer or a 30 ml cup,
    or clicks the reference-image action, selects one or more local images, and
-   asks the vision model to draft an editable target-model prompt from them.
-2. The reference-image prompt draft, when used, replaces the composer text but
-   does not submit the model request. The user may also click **Optimize
-   prompt** to have the text LLM turn the current composer text into a more
-   structured CAD-ready requirement and list likely missing details. The user
-   can edit the generated or optimized prompt before continuing.
+   asks the vision model to draft canonical editable target-model fields from
+   them.
+2. The reference-image field draft, when used, opens the editable prompt-field
+   composer and synchronizes a composed requirement string into project state,
+   but does not submit the model request. The user may also click **Optimize
+   prompt** to have the text LLM return JSON values that the app displays as
+   editable CAD prompt fields with likely missing details. The user can edit the
+   generated or optimized fields before continuing.
 3. User clicks **Generate**.
 4. The code model streams OpenSCAD into the center chat stream in real time.
 5. After the complete code arrives, the run stream collapses the code preview
@@ -107,16 +109,20 @@ three columns:
 - Reference-image input is a separate, user-triggered prompt-drafting action
   before code generation. The user clicks the inline `Reference images` button,
   selects one or more local image files in the picker, and the app immediately
-  calls the configured vision model to describe the intended target model. The
-  user then receives a concise editable prompt in the same composer used for
-  text requirements. This action must never call the code model, render
-  OpenSCAD, start visual review, or start a bounded confidence loop by itself.
+  calls the configured vision model with instructions to return the same
+  canonical JSON-only prompt-field schema used by prompt optimization. The user
+  then receives editable field controls in the same composer used for text
+  requirements. This action must never call the code model, render OpenSCAD,
+  start visual review, or start a bounded confidence loop by itself.
 - Prompt optimization is a separate, user-triggered text-to-text action before
   code generation. The user clicks the inline `Optimize prompt` button between
   `Reference images` and **Generate**. The app calls the configured text LLM
-  with the current composer text only, rewrites it into a more structured,
-  CAD-ready requirement, and lists likely missing details for the user to fill
-  in before generation. This action must never call the vision model, generate
+  with the current composer text only and the prompt must explicitly require a
+  JSON-only response using the canonical prompt-field schema. The app renders
+  the normalized JSON values as editable field controls in the composer, leaves
+  placeholders for likely missing details the user should fill in before
+  generation, and composes the field values back into a stable text requirement
+  for code generation. This action must never call the vision model, generate
   OpenSCAD, render, start visual review, create or replace retained reference
   image context, or start a bounded confidence loop by itself. Any retained
   reference images already on the project remain unchanged.
@@ -145,18 +151,21 @@ three columns:
   decals, surface patterns, photo lighting, and purely decorative image content
   on the reference object are ignored unless the user's text explicitly asks for
   a physical raised/engraved feature.
-- Prompt optimization must preserve the user's intent and concrete facts while
-  making the prompt easier for text-to-CAD generation: object category,
-  use-case, dimensions, quantities, parts, openings, holes, handles, clearances,
-  wall thickness, fillets/chamfers, printability constraints, and viewable
-  structure should be grouped or stated plainly when already implied. When
-  important CAD details are missing, the optimized text should include a short
-  editable "Details to confirm" section rather than inventing values.
-- The generated reference-image prompt replaces the composer requirement text
-  and clears stale render/review output exactly like a manual requirement edit.
-  The generated prompt is shown as editable text before **Generate** becomes the
-  next user action, so the user can correct hallucinated dimensions, missing
-  printability constraints, or ambiguous object details.
+- Reference-image drafting and prompt optimization both use the same
+  product-owned prompt-field schema. The provider response contract is
+  JSON-only, not a prose paragraph. The app owns the labels and rendering:
+  object category, use-case, dimensions, quantities, parts, openings, holes,
+  handles, clearances, wall thickness, fillets/chamfers, printability
+  constraints, and viewable structure appear as separate field controls or list
+  rows. Existing user facts should be prefilled into the right fields. Missing
+  or uncertain CAD details should appear as visible placeholders such as
+  `[fill in ...]` in the relevant fields and in editable "Details to confirm"
+  rows rather than inventing values.
+- The generated reference-image field draft composes into the project
+  requirement text and clears stale render/review output exactly like a manual
+  requirement edit. The generated fields are editable before **Generate**
+  becomes the next user action, so the user can correct hallucinated dimensions,
+  missing printability constraints, or ambiguous object details.
 - In a bounded confidence run, each clean render is followed by visual
   review. If review confidence meets or exceeds the user preset target
   confidence, the run stops with that review conclusion. If confidence is below
@@ -483,10 +492,12 @@ Workbench acceptance criteria:
   render that returns STL plus unsafe diagnostics and verify that no final files
   are downloaded.
 - Automated E2E coverage must verify the reference-image drafting flow: multiple
-  uploaded images are sent to `/api/vision`, the response fills the editable
-  requirement composer without calling `/api/llm`, the user can edit that prompt
-  before **Generate**, stale render/review state is cleared, and the subsequent
-  generation request uses the edited text rather than the raw image payload.
+  uploaded images are sent to `/api/vision` with a prompt that explicitly
+  demands the canonical JSON-only prompt-field schema, the response fills the
+  editable field composer without calling `/api/llm`, the user can edit those
+  fields before **Generate**, stale render/review state is cleared, and the
+  subsequent generation request uses the composed text from the edited fields
+  rather than the raw image payload.
 - Unit and E2E coverage must verify reference-image request boundaries and stale
   response protection: clicking `Reference images` opens a multi-image
   local picker, a canceled picker sends no request, and a completed selection
@@ -514,17 +525,21 @@ Workbench acceptance criteria:
   Chinese button text fits without overflow, overlap, or clipping. Screenshots
   after successful drafting or optimization must confirm the composer/status is
   visible, stale model views are cleared, and no retained-reference thumbnails
-  or filenames appear in the right panel. Screenshots after later render/review
-  must confirm the right result panel shows only the interactive preview plus
-  fourteen generated model view tiles, with no retained-reference thumbnails or
-  filenames.
+  or filenames appear in the right panel. Reference-image draft and
+  prompt-optimization success screenshots must explicitly show the JSON-derived
+  field controls, localized labels, editable placeholder values, editable
+  missing-detail rows, and no text overflow in desktop and narrow layouts.
+  Screenshots after later render/review must confirm the right result panel
+  shows only the interactive preview plus fourteen generated model view tiles,
+  with no retained-reference thumbnails or filenames.
 - Automated E2E coverage must verify prompt optimization: clicking `Optimize
   prompt` sends the current composer text to `/api/llm`; does not send
   reference image data URLs, OpenSCAD, STL, render evidence, review history, or
-  prompt traces; replaces the composer with editable structured CAD-ready text
-  that includes missing details for the user to fill in; does not generate,
-  render, review, or start an automatic loop; and the next **Generate** request
-  uses the user-editable optimized text.
+  prompt traces; replaces the composer with editable field controls backed by
+  the normalized JSON schema and missing details for the user to fill in; does
+  not generate, render, review, or start an automatic loop; and the next
+  **Generate** request uses the composed text from the user-editable field
+  values.
 - Unit and E2E coverage must verify retained reference images in visual review:
   after a successful reference-image draft, a later Review request sends exactly
   the fourteen generated model views first in stable order, then the retained
@@ -673,23 +688,35 @@ Workbench acceptance criteria:
   draft the original image payloads are retained only as hidden browser-local
   project context for visual review. There is no separate selected-file list to
   manage in the composer.
-- Accepts JSON with `prompt`, or plain text when a provider does not follow the
-  JSON contract. The final prompt is trimmed, must be non-empty, and should
-  describe the physical target model in printable OpenSCAD-friendly terms:
-  object category, visible parts, approximate proportions, key dimensions when
+- The vision request must explicitly require JSON only, with no prose before or
+  after the object, using the canonical prompt-field schema:
+  `objectTarget: string`, `useCase: string`, `knownDetails: string[]`,
+  `geometry: string[]`, `keyDimensions: string[]`,
+  `printabilityConstraints: string[]`, and `detailsToConfirm: string[]`.
+  The normalized `objectTarget` must be non-empty. The fields should describe
+  the physical target model in printable OpenSCAD-friendly terms: object
+  category, visible parts, approximate proportions, key dimensions when
   inferable, symmetry, openings, handles, holes, physical raised/engraved
   features when explicitly relevant, and constraints that should be preserved.
   It must ignore colors, printed text, decals, surface patterns, and decorative
   graphics as modeling requirements unless the user explicitly asks to model
-  them as physical geometry. It should not return OpenSCAD code.
+  them as physical geometry. It must not return OpenSCAD code. Legacy `prompt`
+  JSON, prose paragraphs, and underspecified objects are noncompliant provider
+  responses; the app must recover by normalizing any non-empty provider text
+  into the same field schema. Malformed or empty content that provides no
+  recoverable text must fail with a readable workflow error. Tests must verify
+  both that the outbound `/api/vision` prompt demands the canonical JSON-only
+  contract and that noncompliant-but-nonempty responses normalize into editable
+  fields.
 - A successful draft appends a vision prompt trace, records an Agent Run event,
-  fills the editable requirement composer, clears stale current code, pending
+  renders the normalized fields in the editable composer, recomposes the field
+  values into the project requirement text, clears stale current code, pending
   revision, review, STL, rendered views, and render evidence, and leaves the
   workflow at the pre-generation state. It also stores the uploaded reference
   image data URLs in browser-local project state for later visual review. The
-  trace stores the text instruction, model id, and returned prompt only; it
-  must not store uploaded image data URLs, binary image payloads, or thumbnail
-  object URLs. Exported project JSON omits the retained reference images.
+  trace stores the text instruction, model id, and composed prompt only; it must
+  not store uploaded image data URLs, binary image payloads, or thumbnail object
+  URLs. Exported project JSON omits the retained reference images.
 - A successful draft also appends a compact Agent Run status stating that the
   original reference images are retained for later visual review. This status
   must not include thumbnails, filenames, or a selected-file list.
@@ -724,14 +751,36 @@ Workbench acceptance criteria:
   workflow actions are locked like other text LLM operations. The Agent Run
   header or equivalent live region must announce a visible optimizing state,
   and the button must expose disabled semantics while the request is in flight.
-- The text LLM response may be JSON with `prompt`, or plain text when a
-  provider does not follow the JSON contract. The optimized prompt is trimmed,
-  must be non-empty, and replaces the editable composer text. It should keep
-  existing user-provided facts, rewrite ambiguous prose into a structured
-  CAD-ready requirement, and include an editable missing-detail checklist for
-  likely important but absent values such as exact dimensions, hole counts,
-  hole diameters, wall thickness, clearances, fastener standards, orientation,
-  and printability constraints.
+- The text LLM request for prompt optimization must explicitly require JSON
+  only, with no prose before or after the object, using this canonical schema:
+  `objectTarget: string`, `useCase: string`, `knownDetails: string[]`,
+  `geometry: string[]`, `keyDimensions: string[]`,
+  `printabilityConstraints: string[]`, and `detailsToConfirm: string[]`.
+  `objectTarget` must be non-empty after normalization. Empty or missing string
+  fields become editable placeholders. Empty or missing arrays become one or
+  more editable placeholder rows. The app must parse, normalize, and render
+  those values as editable composer fields controlled by the UI, not as one
+  large optimized prose textarea. Legacy `prompt` JSON, prose paragraphs, and
+  underspecified objects are noncompliant provider responses; the app must
+  recover by normalizing any non-empty provider text into the same field schema.
+  Malformed or empty content that provides no recoverable text must fail with a
+  readable workflow error. Tests must verify both that the outbound `/api/llm`
+  prompt demands the canonical JSON-only contract and that
+  noncompliant-but-nonempty responses normalize into editable fields.
+- The normalized prompt field object is the transient source of truth while a
+  reference-image draft or prompt-optimization field editor is visible. Every
+  user edit to a field or list row immediately recomposes a non-empty prompt
+  string into project state so existing generation, history, save/load,
+  import/export, and project switching continue to use the same text requirement
+  contract. The field object itself is not exported or required for project
+  hydration; manual editing of the raw composer text, importing/switching
+  projects, starting a new model, starting a different pre-generation helper, or
+  accepting/rejecting a pending revision clears the transient field editor. The
+  composed prompt must preserve user-provided facts, prefill facts into labeled
+  fields, rewrite ambiguous prose into CAD-ready structure, and include editable
+  placeholders/checklist items for likely important but absent values such as
+  exact dimensions, hole counts, hole diameters, wall thickness, clearances,
+  fastener standards, orientation, and printability constraints.
 - Prompt optimization clears stale generated code, pending revision, review,
   STL, rendered views, and render evidence exactly like a manual requirement
   edit. It appends a text prompt trace and an Agent Run event showing the
@@ -745,7 +794,7 @@ Workbench acceptance criteria:
 - If prompt optimization fails, the app keeps the user's current composer text
   unchanged and shows a readable, accessible workflow error in the Agent Run
   stream or equivalent live region. After completion or failure, focus and
-  controls must be recoverable so the user can edit the optimized text, retry
+  controls must be recoverable so the user can edit the current field values, retry
   optimization, choose reference images, or click **Generate**.
 
 ### Review And Iteration
@@ -1044,14 +1093,15 @@ The app should preserve these guarantees:
 - Review requests include rendered images and, when present, retained original
   reference images after the rendered views for shape-only comparison.
 - Reference-image prompt drafting requests include only user-selected reference
-  images, fill an editable requirement prompt, and do not call the code model
-  until the user clicks **Generate**. Drafting focuses on physical shape and
-  ignores color, printed graphics, decals, and surface patterns unless the user
-  explicitly asks for physical raised/engraved geometry.
+  images, request the canonical JSON-only prompt-field schema, fill editable
+  prompt fields, and do not call the code model until the user clicks
+  **Generate**. Drafting focuses on physical shape and ignores color, printed
+  graphics, decals, and surface patterns unless the user explicitly asks for
+  physical raised/engraved geometry.
 - Prompt optimization requests include only the current composer text, rewrite
-  it into a more structured CAD-ready requirement, and list likely missing
-  details for the user to fill in before **Generate**. Optimization does not
-  call vision, render, or start generation by itself.
+  it into the fixed JSON field schema, and display likely missing details as
+  editable fields for the user to fill in before **Generate**. Optimization
+  does not call vision, render, or start generation by itself.
 - Review does not trigger text generation unless it is part of an explicit
   user-started bounded confidence run with remaining automatic iterations.
 - New iterations clear stale review state.

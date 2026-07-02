@@ -27,6 +27,39 @@ const reviewImages = [
 ];
 const uploadedReferenceImagePayload =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADElEQVR42mP8z8AARQAFAAH/AnH9zAAAAABJRU5ErkJggg==";
+const promptFieldKeys = [
+  "objectTarget",
+  "useCase",
+  "knownDetails",
+  "geometry",
+  "keyDimensions",
+  "printabilityConstraints",
+  "detailsToConfirm"
+];
+const englishPromptTemplateLabels = [
+  "Object / target:",
+  "Use case:",
+  "Known details:",
+  "Geometry / structure:",
+  "Key dimensions:",
+  "Printability constraints:",
+  "Details to confirm:"
+];
+
+function expectPromptFieldSchemaContract(text: string) {
+  expect(text).toMatch(/JSON-only|JSON only/i);
+  for (const key of promptFieldKeys) {
+    expect(text).toContain(key);
+  }
+  expect(text).toContain("objectTarget: string");
+  expect(text).toContain("useCase: string");
+  expect(text).toContain("knownDetails: string[]");
+  expect(text).toContain("geometry: string[]");
+  expect(text).toContain("keyDimensions: string[]");
+  expect(text).toContain("printabilityConstraints: string[]");
+  expect(text).toContain("detailsToConfirm: string[]");
+  expect(text).not.toMatch(/one key:\s*prompt/i);
+}
 
 describe("apiClient prompt assembly", () => {
   it("adds Chinese output instruction for Chinese requirements", () => {
@@ -74,33 +107,48 @@ describe("apiClient prompt assembly", () => {
     expect(systemPrompt).toContain("coarse, inspectable approximations");
   });
 
-  it("optimizes composer text into a structured CAD-ready prompt without extra project context", async () => {
+  it("optimizes composer text into a fillable CAD prompt template without extra project context", async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
       json: async () => ({
         content: JSON.stringify({
-          prompt: [
-            "Object: 30 ml printable cup.",
-            "Known details: cylindrical body, rounded rim, handle.",
-            "Details to confirm: exact height, wall thickness, handle clearance."
-          ].join("\n")
+          objectTarget: "30 ml printable cup",
+          useCase: "[fill in intended use]",
+          knownDetails: ["cylindrical body", "rounded rim", "handle"],
+          geometry: ["cylindrical body", "rounded rim", "side handle"],
+          keyDimensions: ["capacity 30 ml", "height [fill in]", "wall thickness [fill in]"],
+          printabilityConstraints: ["3D printable", "avoid unsupported overhangs"],
+          detailsToConfirm: ["[fill in exact height]", "[fill in handle clearance]"]
         })
       })
     });
     vi.stubGlobal("fetch", fetchMock);
 
-    const { prompt, trace } = await optimizePrompt({
+    const { fields, prompt, trace } = await optimizePrompt({
       apiKey: "sk-user",
       modelId: "mimo-v2.5",
-      requirement: "做一个30ml杯子"
+      requirement: "make a 30 ml cup"
     });
 
-    expect(prompt).toContain("Object: 30 ml printable cup");
-    expect(prompt).toContain("Details to confirm");
+    expect(fields).toMatchObject({
+      objectTarget: "30 ml printable cup",
+      useCase: "[fill in intended use]",
+      knownDetails: expect.arrayContaining(["cylindrical body", "rounded rim", "handle"]),
+      geometry: expect.arrayContaining(["side handle"]),
+      keyDimensions: expect.arrayContaining(["capacity 30 ml", "height [fill in]"]),
+      printabilityConstraints: expect.arrayContaining(["3D printable"]),
+      detailsToConfirm: expect.arrayContaining(["[fill in exact height]"])
+    });
+    expect(prompt).toContain("Object / target: 30 ml printable cup");
+    expect(prompt).toContain("Use case: [fill in intended use]");
+    for (const label of englishPromptTemplateLabels) {
+      expect(prompt).toContain(label);
+    }
+    expect(prompt).toContain("[fill in");
     expect(trace).toMatchObject({
       phase: "prompt-optimization",
       modelId: "mimo-v2.5",
-      userPrompt: expect.stringContaining("做一个30ml杯子"),
+      userPrompt: expect.stringContaining("make a 30 ml cup"),
       response: expect.stringContaining("Details to confirm")
     });
 
@@ -112,9 +160,10 @@ describe("apiClient prompt assembly", () => {
     const systemPrompt = String(body.messages[0].content);
     const userPrompt = String(body.messages[1].content);
     const serializedBody = JSON.stringify(body);
-    expect(systemPrompt).toMatch(/CAD-ready|text-to-CAD|structured/i);
-    expect(systemPrompt).toMatch(/Details to confirm|missing details/i);
-    expect(userPrompt).toContain("做一个30ml杯子");
+    expectPromptFieldSchemaContract(systemPrompt);
+    expectPromptFieldSchemaContract(serializedBody);
+    expect(userPrompt).toContain("make a 30 ml cup");
+    expect(userPrompt).toMatch(/JSON-only|JSON only|objectTarget|detailsToConfirm/i);
     expect(serializedBody).not.toContain("data:image");
     expect(serializedBody).not.toContain("OpenSCAD code");
     expect(serializedBody).not.toContain("Render evidence");
@@ -124,24 +173,108 @@ describe("apiClient prompt assembly", () => {
     vi.unstubAllGlobals();
   });
 
-  it("accepts plain text prompt optimization responses", async () => {
+  it("normalizes underspecified prompt optimization JSON into complete fields", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn().mockResolvedValue({
         ok: true,
         json: async () => ({
-          content: "Object: wall hook\nDetails to confirm: screw diameter."
+          content: JSON.stringify({
+            objectTarget: "printable cable clip",
+            knownDetails: [],
+            keyDimensions: ["width 20mm"]
+          })
         })
       })
     );
 
-    const { prompt } = await optimizePrompt({
+    const { fields, prompt } = await optimizePrompt({
+      apiKey: "sk-user",
+      modelId: "mimo-v2.5",
+      requirement: "cable clip"
+    });
+
+    expect(fields.objectTarget).toBe("printable cable clip");
+    expect(fields.useCase).toContain("[fill in");
+    expect(fields.knownDetails.some((item) => item.includes("[fill in"))).toBe(true);
+    expect(fields.geometry.some((item) => item.includes("[fill in"))).toBe(true);
+    expect(fields.keyDimensions).toContain("width 20mm");
+    expect(fields.printabilityConstraints.some((item) => item.includes("[fill in"))).toBe(true);
+    expect(fields.detailsToConfirm.some((item) => item.includes("[fill in"))).toBe(true);
+    expect(prompt).toContain("printable cable clip");
+    expect(prompt).toContain("width 20mm");
+    vi.unstubAllGlobals();
+  });
+
+  it("normalizes fillable prompt templates into the user's language", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          content: JSON.stringify({
+            prompt: [
+              "Object / target: 一个30ml可打印杯子.",
+              "Use case: [fill in intended use].",
+              "Known details: 圆柱杯身、圆滑杯口、把手.",
+              "Key dimensions: capacity 30 ml; height [fill in]; wall thickness [fill in].",
+              "Details to confirm:",
+              "- [fill in exact height]",
+              "- [fill in handle clearance]"
+            ].join("\n")
+          })
+        })
+      })
+    );
+
+    const { fields, prompt } = await optimizePrompt({
+      apiKey: "sk-user",
+      modelId: "mimo-v2.5",
+      requirement: "做一个30ml杯子"
+    });
+
+    expect(fields.objectTarget).toContain("做一个30ml杯子");
+    expect(fields.useCase).toContain("[请填写");
+    expect(fields.keyDimensions.some((item) => item.includes("[请填写"))).toBe(true);
+    expect(prompt).toContain("目标对象：");
+    expect(prompt).toContain("使用场景：[请填写");
+    expect(prompt).toContain("关键尺寸：");
+    expect(prompt).toContain("待确认细节：");
+    expect(prompt).toContain("[请填写");
+    expect(prompt).toContain("做一个30ml杯子");
+    expect(prompt).not.toContain("Object / target");
+    expect(prompt).not.toContain("Use case:");
+    expect(prompt).not.toContain("[fill in");
+    vi.unstubAllGlobals();
+  });
+
+  it("normalizes plain prose prompt optimization responses into a fillable template", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          content:
+            "A wall hook for 3D printing with a curved hook and two screw holes. Make it strong and easy to print."
+        })
+      })
+    );
+
+    const { fields, prompt } = await optimizePrompt({
       apiKey: "sk-user",
       modelId: "mimo-v2.5",
       requirement: "hook"
     });
 
-    expect(prompt).toBe("Object: wall hook\nDetails to confirm: screw diameter.");
+    expect(fields.objectTarget).toContain("A wall hook for 3D printing");
+    expect(fields.detailsToConfirm.some((item) => item.includes("[fill in"))).toBe(true);
+    expect(prompt).toContain("Object / target:");
+    expect(prompt).toContain("A wall hook for 3D printing");
+    expect(prompt).toContain("Known details:");
+    expect(prompt).toContain("Key dimensions:");
+    expect(prompt).toContain("[fill in");
+    expect(prompt).toContain("Details to confirm:");
+    expect(prompt).not.toBe("A wall hook for 3D printing with a curved hook and two screw holes. Make it strong and easy to print.");
     vi.unstubAllGlobals();
   });
 
@@ -450,14 +583,19 @@ describe("apiClient prompt assembly", () => {
       ok: true,
       json: async () => ({
         content: JSON.stringify({
-          prompt:
-            "A printable wall-mounted cup holder with a rounded cradle, screw holes, and 80mm height."
+          objectTarget: "printable wall-mounted cup holder",
+          useCase: "wall-mounted cup storage",
+          knownDetails: ["rounded cradle", "screw holes", "80mm height"],
+          geometry: ["rounded cup cradle", "two countersunk screw holes", "reinforcing ribs"],
+          keyDimensions: ["height 80mm", "screw diameter [fill in]"],
+          printabilityConstraints: ["3D printable", "preserve wall strength"],
+          detailsToConfirm: ["[fill in screw diameter]", "[fill in cup diameter]"]
         })
       })
     });
     vi.stubGlobal("fetch", fetchMock);
 
-    const { prompt, trace } = await describeReferenceImages({
+    const { fields, prompt, trace } = await describeReferenceImages({
       apiKey: "sk-user",
       modelId: "mimo-v2.5",
       images: [
@@ -466,7 +604,19 @@ describe("apiClient prompt assembly", () => {
       ]
     });
 
+    expect(fields).toMatchObject({
+      objectTarget: "printable wall-mounted cup holder",
+      useCase: "wall-mounted cup storage",
+      knownDetails: expect.arrayContaining(["rounded cradle", "screw holes"]),
+      geometry: expect.arrayContaining(["rounded cup cradle", "two countersunk screw holes"]),
+      keyDimensions: expect.arrayContaining(["height 80mm"]),
+      printabilityConstraints: expect.arrayContaining(["3D printable"]),
+      detailsToConfirm: expect.arrayContaining(["[fill in screw diameter]"])
+    });
     expect(prompt).toContain("wall-mounted cup holder");
+    for (const label of englishPromptTemplateLabels) {
+      expect(prompt).toContain(label);
+    }
     expect(trace).toMatchObject({
       phase: "reference-image-draft",
       modelId: "mimo-v2.5",
@@ -484,6 +634,7 @@ describe("apiClient prompt assembly", () => {
     };
     const systemPrompt = JSON.stringify(body.messages[0].content);
     const userContent = JSON.stringify(body.messages[1].content);
+    const serializedRequest = JSON.stringify(body);
     expect(fetchMock.mock.calls[0][0]).toBe("/api/vision");
     expect(
       Array.isArray(body.messages[1].content)
@@ -501,7 +652,10 @@ describe("apiClient prompt assembly", () => {
     ).toHaveLength(2);
     expect(userContent).toContain(uploadedReferenceImagePayload);
     expect(userContent).toContain("target model prompt");
+    expectPromptFieldSchemaContract(systemPrompt);
+    expectPromptFieldSchemaContract(serializedRequest);
     expect(userContent).toMatch(/shape|geometry/i);
+    expect(userContent).toMatch(/JSON-only|JSON only|objectTarget|detailsToConfirm/i);
     expect(userContent).toMatch(/ignore.*color/i);
     expect(userContent).toMatch(/printed graphics|decals|surface patterns/i);
     expect(systemPrompt).toMatch(/subject.*shape/i);
@@ -515,7 +669,68 @@ describe("apiClient prompt assembly", () => {
     vi.unstubAllGlobals();
   });
 
-  it("accepts plain text reference-image prompt drafts when the vision model skips JSON", async () => {
+  it("normalizes underspecified reference-image JSON into complete fields", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          content: JSON.stringify({
+            objectTarget: "printable desk stand",
+            geometry: ["two fins"]
+          })
+        })
+      })
+    );
+
+    const { fields, prompt } = await describeReferenceImages({
+      apiKey: "sk-user",
+      modelId: "mimo-v2.5",
+      images: ["data:image/png;base64,reference"]
+    });
+
+    expect(fields.objectTarget).toBe("printable desk stand");
+    expect(fields.useCase).toContain("[fill in");
+    expect(fields.knownDetails.some((item) => item.includes("[fill in"))).toBe(true);
+    expect(fields.geometry).toContain("two fins");
+    expect(fields.keyDimensions.some((item) => item.includes("[fill in"))).toBe(true);
+    expect(fields.printabilityConstraints.some((item) => item.includes("[fill in"))).toBe(true);
+    expect(fields.detailsToConfirm.some((item) => item.includes("[fill in"))).toBe(true);
+    expect(prompt).toContain("printable desk stand");
+    expect(prompt).toContain("two fins");
+    vi.unstubAllGlobals();
+  });
+
+  it("normalizes legacy one-key reference-image JSON into prompt fields", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          content: JSON.stringify({
+            prompt:
+              "Create a printable wall cup holder with a rounded cradle, two screw holes, and reinforcing ribs."
+          })
+        })
+      })
+    );
+
+    const { fields, prompt } = await describeReferenceImages({
+      apiKey: "sk-user",
+      modelId: "mimo-v2.5",
+      images: ["data:image/png;base64,reference"]
+    });
+
+    expect(fields.objectTarget).toContain("Create a printable wall cup holder");
+    expect(fields.detailsToConfirm.some((item) => item.includes("[fill in"))).toBe(true);
+    for (const label of englishPromptTemplateLabels) {
+      expect(prompt).toContain(label);
+    }
+    expect(prompt).toContain("Create a printable wall cup holder");
+    vi.unstubAllGlobals();
+  });
+
+  it("normalizes plain text reference-image prompt drafts into prompt fields", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn().mockResolvedValue({
@@ -527,15 +742,17 @@ describe("apiClient prompt assembly", () => {
       })
     );
 
-    const { prompt } = await describeReferenceImages({
+    const { fields, prompt } = await describeReferenceImages({
       apiKey: "sk-user",
       modelId: "mimo-v2.5",
       images: ["data:image/png;base64,reference"]
     });
 
-    expect(prompt).toBe(
-      "Create a printable desk stand with two rounded support fins and a shallow front lip."
-    );
+    expect(fields.objectTarget).toContain("Create a printable desk stand");
+    expect(fields.detailsToConfirm.some((item) => item.includes("[fill in"))).toBe(true);
+    expect(prompt).toContain("Object / target:");
+    expect(prompt).toContain("Create a printable desk stand");
+    expect(prompt).toContain("Details to confirm:");
     vi.unstubAllGlobals();
   });
 

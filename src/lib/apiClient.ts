@@ -9,6 +9,10 @@ import {
   buildVisionSystemPrompt,
   buildVisionUserPrompt
 } from "./openscadSkills";
+import {
+  normalizePromptFieldsResponse,
+  type NormalizedPromptFields
+} from "./promptFields";
 import type { PromptTraceEntry, RenderEvidence, VisionReview } from "./project";
 import { createPromptTraceEntry } from "./promptTrace";
 import type { RenderPrecision } from "./renderSkill";
@@ -114,7 +118,7 @@ export async function describeReferenceImages(input: {
   apiKey: string;
   modelId: string;
   images: string[];
-}): Promise<{ prompt: string; trace: PromptTraceEntry }> {
+}): Promise<NormalizedPromptFields & { trace: PromptTraceEntry }> {
   const systemPrompt = buildReferenceImageSystemPrompt();
   const userPrompt = buildReferenceImageUserPrompt(input.images.length);
   const request = createModelRequest({
@@ -128,15 +132,18 @@ export async function describeReferenceImages(input: {
   });
   assertVisionPayloadWithinBudget(request, "selected-reference-draft");
   const content = await sendGatewayRequest(request);
-  const prompt = parseReferenceImagePrompt(content);
+  const normalized = normalizePromptFieldsResponse({
+    content,
+    emptyMessage: "Reference image prompt is empty."
+  });
   return {
-    prompt,
+    ...normalized,
     trace: createPromptTraceEntry({
       phase: "reference-image-draft",
       modelId: input.modelId,
       systemPrompt,
       userPrompt,
-      response: prompt,
+      response: normalized.prompt,
       apiKey: input.apiKey
     })
   };
@@ -146,7 +153,7 @@ export async function optimizePrompt(input: {
   apiKey: string;
   modelId: string;
   requirement: string;
-}): Promise<{ prompt: string; trace: PromptTraceEntry }> {
+}): Promise<NormalizedPromptFields & { trace: PromptTraceEntry }> {
   const systemPrompt = buildPromptOptimizationSystemPrompt(input.requirement);
   const userPrompt = buildPromptOptimizationUserPrompt(input.requirement);
   const request = createModelRequest({
@@ -158,15 +165,19 @@ export async function optimizePrompt(input: {
     responseFormat: "json"
   });
   const content = await sendGatewayRequest(request);
-  const prompt = parsePromptText(content, "Prompt optimization response is empty.");
+  const normalized = normalizePromptFieldsResponse({
+    content,
+    emptyMessage: "Prompt optimization response is empty.",
+    sourceText: input.requirement
+  });
   return {
-    prompt,
+    ...normalized,
     trace: createPromptTraceEntry({
       phase: "prompt-optimization",
       modelId: input.modelId,
       systemPrompt,
       userPrompt,
-      response: prompt,
+      response: normalized.prompt,
       apiKey: input.apiKey
     })
   };
@@ -381,32 +392,6 @@ async function sendGatewayStream(
 function stripCodeFence(content: string): string {
   const match = content.match(/```(?:[a-z0-9_-]+)?\s*([\s\S]*?)```/i);
   return (match?.[1] ?? content).trim();
-}
-
-function parseReferenceImagePrompt(content: string): string {
-  return parsePromptText(content, "Reference image prompt is empty.");
-}
-
-function parsePromptText(content: string, emptyMessage: string): string {
-  const trimmed = stripCodeFence(content);
-  try {
-    const parsed = JSON.parse(trimmed) as { prompt?: unknown };
-    if (typeof parsed.prompt === "string" && parsed.prompt.trim()) {
-      return parsed.prompt.trim();
-    }
-    throw new Error(emptyMessage);
-  } catch (caught) {
-    if (!(caught instanceof SyntaxError)) {
-      throw caught;
-    }
-    if (trimmed) {
-      return trimmed;
-    }
-  }
-  if (!trimmed) {
-    throw new Error(emptyMessage);
-  }
-  return trimmed;
 }
 
 function parseReview(content: string, requirement = "", strictConfidence = false): VisionReview {

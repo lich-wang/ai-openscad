@@ -105,7 +105,7 @@ If original reference images are provided, compare the generated model against t
 
 export function buildReferenceImageSystemPrompt(): string {
   return `You draft target-model prompts for AI OpenSCAD from user-provided reference images.
-Return JSON with one key: prompt.
+${promptFieldJsonSchemaInstruction()}
 - The prompt must describe the physical target model to generate, not the image file.
 - Focus on the reference image subject model's shape, silhouette, proportions, openings, handles, holes, structural parts, and physical geometric details.
 - Ignore colors, printed graphics, decals, surface patterns, photo lighting, and decorative image content unless the user explicitly asks to model a physical raised or engraved feature.
@@ -120,18 +120,20 @@ export function buildReferenceImageUserPrompt(imageCount: number): string {
 Write the prompt as a concise user-editable requirement for generating a 3D-printable OpenSCAD model.
 Focus on the target object's physical shape, geometry, proportions, openings, handles, holes, and visible functional details.
 Ignore color, printed graphics, decals, surface patterns, photo lighting, and purely decorative image content unless the user explicitly asked for physical raised or engraved geometry.
-Return JSON only: {"prompt":"..."}.`;
+Return JSON-only using the required field schema.`;
 }
 
 export function buildPromptOptimizationSystemPrompt(requirement = ""): string {
   return `You optimize user-entered text-to-CAD prompts for AI OpenSCAD.
 ${buildLanguageInstruction(requirement)}
-Return JSON with one key: prompt.
-- Rewrite the user's existing input into a structured, CAD-ready requirement for a 3D-printable OpenSCAD model.
+${promptFieldJsonSchemaInstruction()}
+- Rewrite the user's existing input into a fillable CAD prompt template with clear labeled fields for a 3D-printable OpenSCAD model.
 - Preserve all facts, dimensions, counts, constraints, and intent already provided by the user.
 - Do not invent exact values, hidden requirements, code, render evidence, or project history.
-- Use concise section labels such as Object, Known details, Geometry, Dimensions, Printability, Constraints, and Details to confirm.
-- Include a "Details to confirm" section listing likely missing CAD details the user may want to fill in, such as exact dimensions, wall thickness, hole diameters, clearances, counts, fasteners, print orientation, tolerances, and strength constraints.
+- Return structured field values, not a prose paragraph.
+- Prefill fields with details the user already gave.
+- For missing values, keep explicit placeholders such as "[fill in exact height]" in English or "[请填写精确高度]" in Chinese.
+- Include detailsToConfirm entries listing likely missing CAD details the user may want to fill in, such as exact dimensions, wall thickness, hole diameters, clearances, counts, fasteners, print orientation, tolerances, and strength constraints.
 - If a detail is only a possibility, phrase it as something to confirm rather than a decided requirement.
 - Do not return source code or CAD script.`;
 }
@@ -142,8 +144,8 @@ export function buildPromptOptimizationUserPrompt(requirement: string): string {
 Current prompt:
 ${requirement}
 
-Rewrite it into a clearer structured text-to-CAD prompt and add a Details to confirm section for important missing modeling information.
-Return JSON only: {"prompt":"..."}.`;
+Rewrite it into a fillable text-to-CAD prompt template with labeled fields, editable placeholders for missing values, and a Details to confirm section for important missing modeling information.
+Return JSON-only using the required field schema.`;
 }
 
 export function formatRenderEvidence(evidence?: RenderEvidence | null): string {
@@ -158,4 +160,25 @@ export function formatRenderEvidence(evidence?: RenderEvidence | null): string {
     `backend: ${evidence.backend}`,
     `viewCount: ${evidence.viewCount}`
   ].join("\n");
+}
+
+function promptFieldJsonSchemaInstruction(): string {
+  return `Return JSON-only. Do not include prose before or after the JSON.
+Required schema:
+{
+  "objectTarget": "objectTarget: string",
+  "useCase": "useCase: string",
+  "knownDetails": ["knownDetails: string[]"],
+  "geometry": ["geometry: string[]"],
+  "keyDimensions": ["keyDimensions: string[]"],
+  "printabilityConstraints": ["printabilityConstraints: string[]"],
+  "detailsToConfirm": ["detailsToConfirm: string[]"]
+}
+- objectTarget: string must name the target model.
+- useCase: string describes the intended use or an editable placeholder.
+- knownDetails: string[] lists facts already visible or provided.
+- geometry: string[] lists shape, structure, openings, handles, holes, and major parts.
+- keyDimensions: string[] lists given dimensions and placeholders for missing dimensions.
+- printabilityConstraints: string[] lists 3D-printing constraints, wall strength, overhang, tolerances, and orientation notes.
+- detailsToConfirm: string[] lists likely missing details the user should fill in.`;
 }

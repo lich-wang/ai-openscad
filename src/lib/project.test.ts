@@ -25,6 +25,25 @@ const emptyViews = {
   isoBackLeftBottom: ""
 };
 
+const promptFieldKeys = [
+  "objectTarget",
+  "useCase",
+  "knownDetails",
+  "geometry",
+  "keyDimensions",
+  "printabilityConstraints",
+  "detailsToConfirm"
+];
+
+function expectNoPromptFieldState(projectLike: Record<string, unknown>) {
+  expect(projectLike.promptFieldEditor).toBeUndefined();
+  expect(projectLike.promptFields).toBeUndefined();
+  expect(projectLike.promptFieldDraft).toBeUndefined();
+  for (const key of promptFieldKeys) {
+    expect(Object.prototype.hasOwnProperty.call(projectLike, key)).toBe(false);
+  }
+}
+
 describe("project persistence", () => {
   beforeEach(() => {
     localStorage.clear();
@@ -88,6 +107,45 @@ describe("project persistence", () => {
     expect(imported.requirement).toBe("imported bracket");
     expect(imported.referenceImages).toEqual([]);
     expect(JSON.stringify(imported)).not.toContain("imported-secret");
+  });
+
+  it("strips transient prompt field state on import, export, and workspace hydration", () => {
+    const staleProject = {
+      ...createEmptyProject(),
+      requirement: "structured prompt text",
+      promptFieldEditor: true,
+      promptFields: { objectTarget: "stale object" },
+      promptFieldDraft: { objectTarget: "stale draft" },
+      objectTarget: "stale object",
+      useCase: "stale use",
+      knownDetails: ["stale detail"],
+      geometry: ["stale geometry"],
+      keyDimensions: ["stale dimension"],
+      printabilityConstraints: ["stale printability"],
+      detailsToConfirm: ["stale confirmation"]
+    };
+
+    const imported = importProject(JSON.stringify(staleProject));
+    expect(imported.requirement).toBe("structured prompt text");
+    expectNoPromptFieldState(imported as unknown as Record<string, unknown>);
+    expect(JSON.stringify(imported)).not.toContain("stale object");
+
+    const exported = exportProject(
+      staleProject as unknown as ReturnType<typeof createEmptyProject>
+    );
+    expect(exported).toContain("structured prompt text");
+    expect(exported).not.toContain("promptFields");
+    expect(exported).not.toContain("stale object");
+    expectNoPromptFieldState(JSON.parse(exported) as Record<string, unknown>);
+
+    localStorage.setItem("ai-openscad.project", JSON.stringify(staleProject));
+    localStorage.setItem("ai-openscad.projects", JSON.stringify([staleProject]));
+    localStorage.setItem("ai-openscad.active-project-id", staleProject.id);
+    const workspace = loadProjectWorkspace();
+    expectNoPromptFieldState(workspace.activeProject as unknown as Record<string, unknown>);
+    for (const project of workspace.projects) {
+      expectNoPromptFieldState(project as unknown as Record<string, unknown>);
+    }
   });
 
   it("imports legacy three-view projects with empty fourteen-view slots", () => {

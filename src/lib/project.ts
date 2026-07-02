@@ -242,7 +242,10 @@ export function upsertProjectList(
 }
 
 export function exportProject(project: ProjectState): string {
-  const { referenceImages: _referenceImages, ...exportableProject } = project;
+  const { referenceImages: _referenceImages, ...exportableProject } = hydrateProject(
+    project,
+    { keepReferenceImages: false }
+  );
   return JSON.stringify(
     {
       ...exportableProject,
@@ -262,23 +265,31 @@ function hydrateProject(
   parsed: Partial<ProjectState>,
   options: { keepReferenceImages?: boolean } = { keepReferenceImages: true }
 ): ProjectState {
+  const empty = createEmptyProject();
   const requirement = parsed.requirement ?? "";
   const referenceImages =
     options.keepReferenceImages === false
       ? []
       : normalizeReferenceImages(parsed.referenceImages);
   return {
-    ...createEmptyProject(),
-    ...parsed,
+    id: parsed.id ?? empty.id,
+    title: parsed.title ?? empty.title,
     requirement,
     originalRequirement: parsed.originalRequirement ?? requirement,
+    codeModelId: parsed.codeModelId ?? empty.codeModelId,
+    visionModelId: parsed.visionModelId ?? empty.visionModelId,
+    currentCode: parsed.currentCode ?? "",
+    proposedCode: parsed.proposedCode ?? "",
+    compilerOutput: parsed.compilerOutput ?? "",
     renderEvidence: parsed.renderEvidence ?? null,
-    views: normalizeViewSet(parsed.views as Parameters<typeof normalizeViewSet>[0]),
+    review: parsed.review ?? null,
     stl: parsed.stl ?? "",
+    views: normalizeViewSet(parsed.views as Parameters<typeof normalizeViewSet>[0]),
     referenceImages,
     runEvents: parsed.runEvents ?? [],
     iterations: parsed.iterations ?? [],
-    promptTrace: parsed.promptTrace ?? []
+    promptTrace: parsed.promptTrace ?? [],
+    updatedAt: parsed.updatedAt ?? empty.updatedAt
   };
 }
 
