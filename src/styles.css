@@ -254,6 +254,61 @@ label > span,
   position: relative;
 }
 
+.fieldLabelWithHint {
+  align-items: center;
+  display: inline-flex;
+  gap: 6px;
+}
+
+.infoHint {
+  display: inline-flex;
+  position: relative;
+}
+
+.infoHintButton {
+  align-items: center;
+  background: #f3f6fb;
+  border: 1px solid #c9d4e3;
+  border-radius: 50%;
+  color: #475467;
+  cursor: help;
+  display: inline-flex;
+  flex: none;
+  font-size: 11px;
+  font-weight: 700;
+  height: 16px;
+  justify-content: center;
+  line-height: 1;
+  min-height: 0;
+  padding: 0;
+  width: 16px;
+}
+
+.infoHintTooltip {
+  background: #ffffff;
+  border: 1px solid #d5deea;
+  border-radius: 8px;
+  box-shadow: 0 14px 36px rgba(16, 24, 40, 0.2);
+  color: #344054;
+  display: none;
+  font-size: 12px;
+  font-weight: 400;
+  left: 0;
+  line-height: 1.5;
+  padding: 10px 12px;
+  position: absolute;
+  text-align: left;
+  top: calc(100% + 6px);
+  white-space: normal;
+  width: min(260px, calc(100vw - 44px));
+  z-index: 2000;
+}
+
+.infoHint:hover .infoHintTooltip,
+.infoHint:focus-within .infoHintTooltip {
+  display: block;
+}
+
 .newModelButton {
   background: #111827;
   color: #ffffff;

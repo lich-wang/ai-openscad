@@ -9,7 +9,15 @@ import {
   Send,
   WandSparkles
 } from "lucide-react";
-import { ChangeEvent, useEffect, useId, useMemo, useRef, useState } from "react";
+import {
+  ChangeEvent,
+  ReactNode,
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState
+} from "react";
 import { InteractiveStlPreview } from "./InteractiveStlPreview";
 import {
   describeReferenceImages,
@@ -2637,7 +2645,10 @@ export default function App() {
               <div className="fieldGroup autoRunField">
                 <span>{tr("autoRunSettings")}</span>
                 <label className="rangeField">
-                  <span>{tr("targetConfidence")}</span>
+                  <span className="fieldLabelWithHint">
+                    {tr("targetConfidence")}
+                    <InfoHint locale={locale} text={tr("hintTargetConfidence")} />
+                  </span>
                   <div className="rangeInputRow">
                     <input
                       aria-label={tr("targetConfidence")}
@@ -2653,7 +2664,10 @@ export default function App() {
                   </div>
                 </label>
                 <label className="numberField">
-                  <span>{tr("autoIterations")}</span>
+                  <span className="fieldLabelWithHint">
+                    {tr("autoIterations")}
+                    <InfoHint locale={locale} text={tr("hintAutoIterations")} />
+                  </span>
                   <input
                     aria-label={tr("autoIterations")}
                     disabled={controlsLocked}
@@ -2669,7 +2683,10 @@ export default function App() {
 
               <label>
                 <div className="fieldHeader">
-                  <span>{tr("llmApiKey")}</span>
+                  <span className="fieldLabelWithHint">
+                    {tr("llmApiKey")}
+                    <InfoHint locale={locale} text={tr("hintLlmApiKey")} />
+                  </span>
                   <ApiKeyHint locale={locale} />
                 </div>
                 <div className="keyInput">
@@ -2686,6 +2703,7 @@ export default function App() {
 
               <ModelPicker
                 label={tr("llmModel")}
+                hint={<InfoHint locale={locale} text={tr("hintLlmModel")} />}
                 models={CODE_MODEL_PRESETS}
                 value={project.codeModelId}
                 onChange={(codeModelId) => updateProject({ codeModelId })}
@@ -2694,7 +2712,10 @@ export default function App() {
 
               <label>
                 <div className="fieldHeader">
-                  <span>{tr("visionApiKey")}</span>
+                  <span className="fieldLabelWithHint">
+                    {tr("visionApiKey")}
+                    <InfoHint locale={locale} text={tr("hintVisionApiKey")} />
+                  </span>
                   <ApiKeyHint locale={locale} />
                 </div>
                 <div className="keyInput">
@@ -2711,6 +2732,7 @@ export default function App() {
 
               <ModelPicker
                 label={tr("visionModel")}
+                hint={<InfoHint locale={locale} text={tr("hintVisionModel")} />}
                 models={VISION_MODEL_PRESETS}
                 value={project.visionModelId}
                 onChange={(visionModelId) => updateProject({ visionModelId })}
@@ -2989,6 +3011,25 @@ export default function App() {
   );
 }
 
+function InfoHint(props: { locale: Locale; text: string }) {
+  const tooltipId = useId();
+  return (
+    <span className="infoHint">
+      <button
+        aria-describedby={tooltipId}
+        aria-label={t(props.locale, "infoHintLabel")}
+        className="infoHintButton"
+        type="button"
+      >
+        !
+      </button>
+      <span className="infoHintTooltip" id={tooltipId} role="tooltip">
+        {props.text}
+      </span>
+    </span>
+  );
+}
+
 function ApiKeyHint(props: { locale: Locale }) {
   const tooltipId = useId();
   return (
@@ -3020,6 +3061,7 @@ function ApiKeyHint(props: { locale: Locale }) {
 
 function ModelPicker(props: {
   label: string;
+  hint?: ReactNode;
   models: ModelPreset[];
   value: string;
   onChange: (modelId: string) => void;
@@ -3027,7 +3069,10 @@ function ModelPicker(props: {
 }) {
   return (
     <div className="fieldGroup">
-      <span>{props.label}</span>
+      <span className="fieldLabelWithHint">
+        {props.label}
+        {props.hint}
+      </span>
       <div className="segmentedControl" role="group" aria-label={props.label}>
         {props.models.map((model) => (
           <button
@@ -3178,6 +3223,28 @@ function AgentRunPanel(props: {
   const [openCodeEvents, setOpenCodeEvents] = useState<Record<string, boolean>>({});
   const [openThinkingEvents, setOpenThinkingEvents] = useState<Record<string, boolean>>({});
   const events = props.project.runEvents;
+  const timelineRef = useRef<HTMLDivElement | null>(null);
+  const stickToBottomRef = useRef(true);
+
+  // Follow streaming output (thinking and code tokens) by keeping the
+  // timeline pinned to the bottom, but stop following once the user
+  // scrolls up to read something.
+  useEffect(() => {
+    const timeline = timelineRef.current;
+    if (timeline && stickToBottomRef.current) {
+      timeline.scrollTop = timeline.scrollHeight;
+    }
+  }, [events, props.error, props.busy]);
+
+  const handleTimelineScroll = () => {
+    const timeline = timelineRef.current;
+    if (!timeline) {
+      return;
+    }
+    stickToBottomRef.current =
+      timeline.scrollHeight - timeline.scrollTop - timeline.clientHeight < 48;
+  };
+
   return (
     <section className="agentRun">
       <div className="panelHeader">
@@ -3188,7 +3255,7 @@ function AgentRunPanel(props: {
             : busyStatusLabel(props.locale, props.busy)}
         </span>
       </div>
-      <div className="agentTimeline">
+      <div className="agentTimeline" onScroll={handleTimelineScroll} ref={timelineRef}>
         {props.error ? (
           <article className="agentEvent agentError" role="alert">
             <h3>{t(props.locale, "workflowError")}</h3>

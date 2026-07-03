@@ -23,6 +23,18 @@ export const messages = {
     targetConfidence: "Target confidence",
     autoIterations: "Auto iterations",
     autoRunSettings: "Automatic review loop",
+    infoHintLabel: "What is this?",
+    hintTargetConfidence:
+      "During an automatic review loop, iteration stops once the visual review confidence reaches this target.",
+    hintAutoIterations:
+      "Maximum automatic review-and-revise rounds after Generate or Iterate Again. 0 keeps every iteration manual.",
+    hintLlmApiKey:
+      "Key used to generate and revise OpenSCAD code. MiMo models can run on the site's shared key; DeepSeek needs your own key.",
+    hintLlmModel: "Model that writes and revises the OpenSCAD code.",
+    hintVisionApiKey:
+      "Key used for the visual review of rendered views. MiMo models can run on the site's shared key.",
+    hintVisionModel:
+      "Multimodal model that inspects the rendered views and drafts the correction prompt.",
     noApiKey: "No key?",
     inviteTitle: "Register Xiaomi MiMo",
     inviteDescription: "Enter invite code QRU857 to get ¥10 test credit.",
@@ -58,7 +70,7 @@ export const messages = {
     draftRender: "Draft Render",
     visualReview: "Visual Review",
     correctionPrompt: "Correction Prompt",
-    agentComposer: "Tell the agent what to build",
+    agentComposer: "What are we building today?",
     workflowStages: "Workflow stages",
     stageCode: "Code generation",
     stageRender: "Model rendering",
@@ -220,6 +232,15 @@ export const messages = {
     targetConfidence: "目标置信度",
     autoIterations: "自动迭代次数",
     autoRunSettings: "自动评审循环",
+    infoHintLabel: "这是什么？",
+    hintTargetConfidence: "自动评审循环运行时，视觉评审置信度达到该目标后即停止迭代。",
+    hintAutoIterations:
+      "生成或再次迭代后自动“评审-修订”的最大轮数。0 表示每次迭代都由你手动确认。",
+    hintLlmApiKey:
+      "用于生成和修订 OpenSCAD 代码。MiMo 模型可使用站点共享 Key；DeepSeek 需要填写你自己的 Key。",
+    hintLlmModel: "负责编写和修订 OpenSCAD 代码的模型。",
+    hintVisionApiKey: "用于对渲染视图进行视觉评审。MiMo 模型可使用站点共享 Key。",
+    hintVisionModel: "查看渲染视图并生成修正提示词的多模态模型。",
     noApiKey: "没有 Key？",
     inviteTitle: "注册 Xiaomi MiMo",
     inviteDescription: "填写邀请码 QRU857，可获得 10 元额度用于测试。",
@@ -255,7 +276,7 @@ export const messages = {
     draftRender: "草稿渲染",
     visualReview: "视觉评审",
     correctionPrompt: "修正提示词",
-    agentComposer: "告诉 Agent 要做什么",
+    agentComposer: "今天我们做什么？",
     workflowStages: "工作流阶段",
     stageCode: "代码生成",
     stageRender: "模型渲染",

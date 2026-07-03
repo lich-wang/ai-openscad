@@ -49,7 +49,7 @@ test.describe("browser locale", () => {
 
       await expect(page.getByText("Text to code to model to visual review.")).toBeVisible();
       await expect(page.getByRole("heading", { name: "Agent Run" })).toBeVisible();
-      await expect(page.getByText("Tell the agent what to build")).toBeVisible();
+      await expect(page.getByText("What are we building today?")).toBeVisible();
       await expect(page.getByText("Vision Model")).toBeVisible();
       await expect(page.getByRole("button", { name: /^Generate$/ })).toBeVisible();
       await expect(page.getByRole("heading", { name: "Agent Thinking" })).toHaveCount(0);
@@ -68,7 +68,7 @@ test.describe("browser locale", () => {
 
       await expect(page.getByText("文本生成代码，代码生成模型，再用视觉评审迭代。")).toBeVisible();
       await expect(page.getByRole("heading", { name: "Agent 运行" })).toBeVisible();
-      await expect(page.getByText("告诉 Agent 要做什么")).toBeVisible();
+      await expect(page.getByText("今天我们做什么？")).toBeVisible();
       await expect(page.getByText("图像识别模型")).toBeVisible();
       const referenceButton = page.getByRole("button", { name: /^参考图片$/ });
       const optimizeButton = page.getByRole("button", { name: /^优化提示词$/ });

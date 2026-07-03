@@ -1234,3 +1234,68 @@ test("stacked layout keeps setup controls before model actions", async ({ page }
     });
   }
 });
+
+test("settings info hints explain controls and the run timeline follows output", async ({
+  page
+}) => {
+  const fillerEvents = Array.from({ length: 30 }, (_, index) => ({
+    id: `filler-${index}`,
+    createdAt: `2026-06-26T00:01:${String(index).padStart(2, "0")}.000Z`,
+    role: "tool",
+    title: `Render note ${index}`,
+    content: `Progress line ${index} keeps the timeline tall enough to scroll.`,
+    status: "complete"
+  }));
+  await page.addInitScript(
+    ({ storedProject, fillers }) => {
+      localStorage.setItem(
+        "ai-openscad.project",
+        JSON.stringify({
+          ...storedProject,
+          review: null,
+          runEvents: [...storedProject.runEvents, ...fillers]
+        })
+      );
+    },
+    { storedProject: project, fillers: fillerEvents }
+  );
+
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.goto("/");
+
+  const settingsHints = page.locator(".sidebarSettingsBody .infoHintButton");
+  await expect(settingsHints).toHaveCount(6);
+  const confidenceHint = page.locator(".rangeField .infoHintButton");
+  await expect(page.locator(".rangeField .infoHintTooltip")).toBeHidden();
+  await confidenceHint.hover();
+  await expect(page.locator(".rangeField .infoHintTooltip")).toBeVisible();
+  await expect(page.locator(".rangeField .infoHintTooltip")).toContainText(/confidence/i);
+  await page.mouse.move(0, 0);
+  await expect(page.locator(".rangeField .infoHintTooltip")).toBeHidden();
+
+  const timelineMetrics = () =>
+    page.locator(".agentTimeline").evaluate((node) => ({
+      scrollTop: node.scrollTop,
+      scrollHeight: node.scrollHeight,
+      clientHeight: node.clientHeight
+    }));
+  const initial = await timelineMetrics();
+  expect(initial.scrollHeight).toBeGreaterThan(initial.clientHeight);
+  expect(initial.scrollTop + initial.clientHeight).toBeGreaterThanOrEqual(
+    initial.scrollHeight - 2
+  );
+
+  await page.getByRole("button", { name: /^Rerender$/i }).click();
+  await expect(page.locator(".agentTimeline")).toContainText("Render started");
+  const streaming = await timelineMetrics();
+  expect(streaming.scrollTop + streaming.clientHeight).toBeGreaterThanOrEqual(
+    streaming.scrollHeight - 2
+  );
+  await expect(page.getByRole("button", { name: /^Review$/i })).toBeVisible({
+    timeout: 45_000
+  });
+  const settled = await timelineMetrics();
+  expect(settled.scrollTop + settled.clientHeight).toBeGreaterThanOrEqual(
+    settled.scrollHeight - 2
+  );
+});
