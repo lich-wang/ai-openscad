@@ -1,3 +1,5 @@
+import { resolveAllowedOrigin } from "./cors";
+
 interface GatewayMessage {
   role: "system" | "user" | "assistant";
   content: unknown;
@@ -52,6 +54,13 @@ export async function proxyModelRequest(
   request: Request,
   env: GatewayEnv = {}
 ): Promise<Response> {
+  if (!resolveAllowedOrigin(request)) {
+    return normalizedError(
+      "Requests must originate from https://ai.openscad.tech.",
+      403
+    );
+  }
+
   let body: GatewayBody;
   try {
     body = (await request.json()) as GatewayBody;

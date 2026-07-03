@@ -85,6 +85,61 @@ describe("streaming", () => {
     ]);
   });
 
+  it("parses events separated by CRLF blank lines", async () => {
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(
+          encoder.encode(
+            'data: {"choices":[{"delta":{"content":"cube"}}]}\r\n\r\n' +
+              'data: {"choices":[{"delta":{"content":"(10);"}}]}\r\n\r\n' +
+              "data: [DONE]\r\n\r\n"
+          )
+        );
+        controller.close();
+      }
+    });
+    const contentDeltas: string[] = [];
+
+    const finalText = await readOpenAiStream(stream, (delta) =>
+      contentDeltas.push(delta)
+    );
+
+    expect(finalText).toBe("cube(10);");
+    expect(contentDeltas).toEqual(["cube", "(10);"]);
+  });
+
+  it("surfaces mid-stream provider error events as thrown errors", async () => {
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(
+          encoder.encode(
+            'data: {"choices":[{"delta":{"content":"cube"}}]}\n\n' +
+              'data: {"error":{"message":"Provider quota exhausted."}}\n\n'
+          )
+        );
+        controller.close();
+      }
+    });
+
+    await expect(
+      readOpenAiStream(stream, () => undefined)
+    ).rejects.toThrow("Provider quota exhausted.");
+  });
+
+  it("fails instead of hanging when the stream stalls past the idle timeout", async () => {
+    const stream = new ReadableStream<Uint8Array>({
+      start() {
+        // Never enqueue or close: a stalled provider connection.
+      }
+    });
+
+    await expect(
+      readOpenAiStream(stream, () => undefined, undefined, { idleTimeoutMs: 50 })
+    ).rejects.toThrow("Model stream stalled");
+  });
+
   it("ignores partial or non-content events", () => {
     const chunk = [
       "event: ping",

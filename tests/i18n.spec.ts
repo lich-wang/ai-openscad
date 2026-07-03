@@ -25,7 +25,6 @@ const project = {
   codeModelId: "mimo-v2.5",
   visionModelId: "mimo-v2.5",
   currentCode: "",
-  proposedCode: "",
   compilerOutput: "",
   review: null,
   views: emptyViews,

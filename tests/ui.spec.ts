@@ -149,7 +149,6 @@ const project = {
   visionModelId: "mimo-v2.5",
   currentCode:
     "$fn = 32;\nmodule cup() {\n  difference() {\n    cylinder(h=40, r=18);\n    translate([0,0,2]) cylinder(h=39, r=15);\n  }\n}\ncup();",
-  proposedCode: "",
   compilerOutput: "Compiled to STL in browser.\nDraft precision was used for fast review.",
   review: {
     summary: "杯子主体正确，杯口需要更圆滑。",
@@ -242,7 +241,6 @@ const emptyProject = {
   codeModelId: "mimo-v2.5",
   visionModelId: "mimo-v2.5",
   currentCode: "",
-  proposedCode: "",
   compilerOutput: "",
   review: null,
   stl: "",

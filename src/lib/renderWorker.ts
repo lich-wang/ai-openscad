@@ -17,50 +17,58 @@ interface RenderWorkerDependencies {
   postMessage: (message: { id: string; result: RenderResult }) => void;
 }
 
+interface PreparedOpenScad {
+  instance: OpenSCADInstance;
+  logs: string[];
+}
+
 export function createRenderWorkerHandler(dependencies: RenderWorkerDependencies) {
-  let nextInstancePromise: ReturnType<typeof createOpenSCAD> | null = null;
-  let openScadLogs: string[] = [];
-  const captureOpenScadLog = (text: unknown) => {
-    openScadLogs.push(String(text));
-  };
+  let nextPrepared: Promise<PreparedOpenScad> | null = null;
   const startOpenScad = () => {
+    // Each instance captures into its own log array so overlapping jobs (or
+    // the prewarmed next instance) cannot corrupt another job's diagnostics.
+    const logs: string[] = [];
+    const capture = (text: unknown) => {
+      logs.push(String(text));
+    };
     const promise = dependencies
       .createOpenSCAD({
-        print: captureOpenScadLog,
-        printErr: captureOpenScadLog
+        print: capture,
+        printErr: capture
       })
+      .then((instance) => ({ instance, logs }))
       .catch((error) => {
-        if (nextInstancePromise === promise) {
-          nextInstancePromise = null;
+        if (nextPrepared === promise) {
+          nextPrepared = null;
         }
         throw error;
       });
-    nextInstancePromise = promise;
+    nextPrepared = promise;
     return promise;
   };
-  const getOpenScad = () => {
-    if (!nextInstancePromise) {
+  const getPrepared = () => {
+    if (!nextPrepared) {
       return startOpenScad();
     }
-    return nextInstancePromise;
+    return nextPrepared;
   };
-  const consumeOpenScad = async () => {
-    const instance = await getOpenScad();
-    nextInstancePromise = null;
-    return instance;
+  const consumePrepared = async () => {
+    const prepared = await getPrepared();
+    nextPrepared = null;
+    return prepared;
   };
   const prewarmNextOpenScad = () => {
-    if (!nextInstancePromise) {
+    if (!nextPrepared) {
       void startOpenScad();
     }
   };
 
   return async (event: MessageEvent<RenderWorkerRequest>) => {
     const { id, code, kind = "compile" } = event.data;
-    openScadLogs = [];
+    let jobLogs: string[] = [];
     try {
       if (kind === "warmup") {
-        await getOpenScad();
+        await getPrepared();
         dependencies.postMessage({
           id,
           result: {
@@ -73,7 +81,8 @@ export function createRenderWorkerHandler(dependencies: RenderWorkerDependencies
       if (!code) {
         throw new Error("OpenSCAD code is required.");
       }
-      const instance = await consumeOpenScad();
+      const { instance, logs } = await consumePrepared();
+      jobLogs = logs;
       let stl = "";
       let backend = "web-default";
       try {
@@ -90,7 +99,7 @@ export function createRenderWorkerHandler(dependencies: RenderWorkerDependencies
           ok: true,
           stl,
           backend,
-          diagnostics: buildRenderSuccessDiagnostics(openScadLogs)
+          diagnostics: buildRenderSuccessDiagnostics(jobLogs)
         }
       });
     } catch (error) {
@@ -99,7 +108,7 @@ export function createRenderWorkerHandler(dependencies: RenderWorkerDependencies
         id,
         result: {
           ok: false,
-          diagnostics: buildRenderFailureDiagnostics(error, openScadLogs)
+          diagnostics: buildRenderFailureDiagnostics(error, jobLogs)
         }
       });
     }

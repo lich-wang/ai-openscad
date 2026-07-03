@@ -248,7 +248,8 @@ updated:
   review -> user-confirmed iteration -> final export.
 - Visual review must not automatically trigger another text LLM call.
 - The user can edit the review-generated correction prompt before iterating.
-- Accepting a revision clears stale review state and requires a fresh review.
+- A user-confirmed iteration applies revised code directly to the draft; each
+  new draft clears stale review state and requires a fresh review.
 - Draft iteration uses low precision for speed; final export uses higher
   precision.
 - Project data, API keys, prompt traces, and history are local browser state

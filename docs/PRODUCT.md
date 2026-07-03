@@ -220,18 +220,17 @@ three columns:
   diagnostics. If no code model key is available, the app stops with readable
   diagnostics and keeps manual retry guidance editable.
 - The compiler-repair loop applies to the compile step being executed, whether
-  it follows first generation, manual rerender, accepted revision,
-  user-confirmed iteration, or an automatic follow-up revision inside a bounded
-  confidence run. The two-attempt compiler-repair counter is counted per compile
+  it follows first generation, manual rerender, user-confirmed iteration, or an
+  automatic follow-up revision inside a bounded confidence run. The two-attempt compiler-repair counter is counted per compile
   step and is separate from the review-driven automatic iteration count.
 - This borrows the useful part of verified text-to-OpenSCAD workflows:
   compiler evidence can repair invalid code automatically, while rendered image
   evidence remains user-controlled review context unless the user has opted into
   a bounded confidence run with a visible target and attempt limit.
 - The user can edit the correction prompt before another generation.
-- A pending revision must be accepted and rendered before project export.
-- Accepting a revision clears the old review, forcing a fresh review for the new
-  rendered model.
+- A user-confirmed iteration applies the revised code directly to the
+  workbench draft. Each new draft clears the previous review and requires a
+  fresh render and review before final export.
 - OpenSCAD code remains editable through the advanced code panel.
 - The workbench shows the current workflow stage across the top of the agent
   panel as a cyclic pipeline arrow: code generation -> model rendering -> model
@@ -279,8 +278,8 @@ three columns:
   target-model prompt. The composer does not show a persistent vertical list of
   filenames, thumbnails, remove controls, clear controls, or a separate
   `Reference images` label. If the picker is canceled, no request is sent. The
-  action is enabled only when a vision model can be called, the workbench is
-  idle, and no pending revision is waiting for acceptance.
+  action is enabled only when a vision model can be called and the workbench
+  is idle.
 - The left settings surface lets the user set a target review confidence and
   automatic iteration count before starting **Generate** or **Iterate Again**.
   These controls affect only future user-started runs; changing them while idle
@@ -301,9 +300,9 @@ Workbench acceptance criteria:
   preserving the source aspect ratio and constrained by the available viewport.
   It must not crop the invite image into a square or upscale it in a way that
   makes it blurry.
-- Token estimates are removed from the normal workbench surface. Busy progress,
-  pending revision warnings, and errors remain visible through the agent stage
-  strip and center agent stream.
+- Token estimates are removed from the normal workbench surface. Busy progress
+  and errors remain visible through the agent stage strip and center agent
+  stream.
 - The stage strip is informational and not interactive. It has exactly three
   arrow-shaped stages: code generation, model rendering, and model review. Each
   stage can show waiting, active, complete, or blocked/error state, and the
@@ -319,13 +318,9 @@ Workbench acceptance criteria:
   all fourteen current rendered view keys are non-empty, render diagnostics are
   clean, there is no active or failed repair for the current draft, and there is
   no current review. It shows Iterate Again only after the current clean
-  fourteen-view render has been reviewed and no pending revision is waiting for
-  acceptance.
+  fourteen-view render has been reviewed.
   Missing inputs, provider-key failures, compile failures, and review failures
-  appear in the center stream without changing the right panel contract. While a
-  pending revision is waiting for acceptance, the composer shows an acceptance
-  hint instead of Generate, Review, or Iterate Again; the user must accept or
-  reject the revision before continuing the main workflow.
+  appear in the center stream without changing the right panel contract.
 - While a reference-image prompt draft is running, model settings, project
   import/export, new model, local project navigation, the composer textarea,
   reference-image controls, and all workflow actions are disabled or read-only.
@@ -338,9 +333,9 @@ Workbench acceptance criteria:
   or project. Retrying means clicking `Reference images` again and
   selecting images again, or manually editing the composer text.
 - During an active bounded confidence run, Generate, Review, Iterate Again,
-  Rerender, Final Export, Accept Revision, Reject Revision, project import,
-  project export, new model, local model navigation, and the target-confidence
-  and auto-iteration controls are disabled or read-only for the active run. This
+  Rerender, Final Export, project import, project export, new model, local
+  model navigation, and the target-confidence and auto-iteration controls are
+  disabled or read-only for the active run. This
   prevents a stale in-flight response from changing a different project or
   starting a hidden provider call. When the run stops, the controls return to
   normal availability according to the latest project state.
@@ -357,9 +352,8 @@ Workbench acceptance criteria:
   model rendering stage is waiting until repaired code streams, and no visual
   review stage is active. The run stream states the repair attempt number, for
   example `Compiler repair 1 of 2`. Generate, Review, Iterate Again, Rerender,
-  Final Export, Accept Revision, Reject Revision, project import, project
-  export, new model, local model navigation, and target-confidence and
-  auto-iteration controls stay disabled or read-only until that repair attempt
+  Final Export, project import, project export, new model, local model
+  navigation, and target-confidence and auto-iteration controls stay disabled or read-only until that repair attempt
   finishes or stops with diagnostics.
 - The center agent stream remains the place for user request records, streaming
   generated code, collapsed completed code, compiler output, render start,

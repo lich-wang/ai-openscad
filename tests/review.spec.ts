@@ -86,7 +86,6 @@ const project = {
   codeModelId: "mimo-v2.5",
   visionModelId: "mimo-v2.5",
   currentCode: "module cup() { difference() { cylinder(h=40, r=18); cylinder(h=38, r=15); } } cup();",
-  proposedCode: "",
   compilerOutput: "Compiled to STL in browser.",
   review: null,
   stl: "",
@@ -250,7 +249,13 @@ async function dragInteractivePreview(page: Page) {
 async function setNumericControl(locator: Locator, value: string) {
   await locator.evaluate((node, nextValue) => {
     const input = node as HTMLInputElement;
-    input.value = nextValue as string;
+    // Use the native setter so React's value tracker sees the change and
+    // its onChange handler fires for the dispatched input event.
+    const setter = Object.getOwnPropertyDescriptor(
+      window.HTMLInputElement.prototype,
+      "value"
+    )?.set;
+    setter?.call(input, nextValue as string);
     input.dispatchEvent(new Event("input", { bubbles: true }));
     input.dispatchEvent(new Event("change", { bubbles: true }));
   }, value);
@@ -667,7 +672,6 @@ test("reference images draft an editable requirement before generation", async (
         requirement: "旧的杯子需求",
         originalRequirement: "旧的杯子需求",
         currentCode: "cube(10);",
-        proposedCode: "",
         stl: "solid stale\nendsolid stale",
         renderEvidence: {
           compileStatus: "success",
@@ -806,7 +810,7 @@ test("reference images draft an editable requirement before generation", async (
   expect(storedAfterDraft.requirement).toContain("螺丝孔直径4mm");
   expect(storedAfterDraft.originalRequirement).toBe("");
   expect(storedAfterDraft.currentCode).toBe("");
-  expect(storedAfterDraft.proposedCode).toBe("");
+  expect(storedAfterDraft.proposedCode).toBeUndefined();
   expect(storedAfterDraft.review).toBeNull();
   expect(storedAfterDraft.stl).toBe("");
   expect(storedAfterDraft.renderEvidence).toBeNull();
@@ -898,7 +902,6 @@ test("reference images draft an editable requirement before generation", async (
   expect(exportedProject.content).not.toContain("solid stale");
   expect(JSON.parse(exportedProject.content)).toMatchObject({
     currentCode: "",
-    proposedCode: "",
     review: null,
     stl: "",
     renderEvidence: null
@@ -930,7 +933,6 @@ test("prompt optimization rewrites editable requirement before generation", asyn
       requirement: "做一个30ml杯子",
       originalRequirement: "做一个30ml杯子",
       currentCode: "cube(10);",
-      proposedCode: "",
       stl: "solid stale\nendsolid stale",
       referenceImages: [retainedReference],
       renderEvidence: {
@@ -1095,7 +1097,7 @@ test("prompt optimization rewrites editable requirement before generation", asyn
   expect(storedAfterOptimize.requirement).toContain("杯底倒角2mm");
   expect(storedAfterOptimize.requirement).toContain("把手间隙18mm");
   expect(storedAfterOptimize.currentCode).toBe("");
-  expect(storedAfterOptimize.proposedCode).toBe("");
+  expect(storedAfterOptimize.proposedCode).toBeUndefined();
   expect(storedAfterOptimize.review).toBeNull();
   expect(storedAfterOptimize.stl).toBe("");
   expect(storedAfterOptimize.renderEvidence).toBeNull();
@@ -1313,7 +1315,11 @@ test("late prompt optimization responses do not overwrite newer composer state",
   await page.locator(".agentInput").evaluate((node) => {
     const textarea = node as HTMLTextAreaElement;
     textarea.disabled = false;
-    textarea.value = "用户在旧优化返回前写的新需求";
+    const setter = Object.getOwnPropertyDescriptor(
+      window.HTMLTextAreaElement.prototype,
+      "value"
+    )?.set;
+    setter?.call(textarea, "用户在旧优化返回前写的新需求");
     textarea.dispatchEvent(new Event("input", { bubbles: true }));
     textarea.dispatchEvent(new Event("change", { bubbles: true }));
   });
@@ -1427,7 +1433,6 @@ test("prompt field editor clears across new model and project switch", async ({
       title: "Field editor source",
       requirement: "做一个桌面挂钩",
       currentCode: "",
-      proposedCode: "",
       compilerOutput: "",
       renderEvidence: null,
       stl: "",
@@ -1444,7 +1449,6 @@ test("prompt field editor clears across new model and project switch", async ({
       title: "Other model",
       requirement: "另一个模型需求",
       currentCode: "",
-      proposedCode: "",
       compilerOutput: "",
       renderEvidence: null,
       stl: "",
@@ -1499,69 +1503,6 @@ test("prompt field editor clears across new model and project switch", async ({
   );
   expect(stored.requirement).toBe("手动改写后的纯文本需求");
   expectNoPromptFieldState(stored);
-});
-
-test("pending revision blocks pre-generation prompt helpers", async ({ page }) => {
-  await page.addInitScript((storedProject) => {
-    localStorage.setItem("ai-openscad.vision-api-key", "sk-vision");
-    localStorage.setItem(
-      "ai-openscad.project",
-      JSON.stringify({
-        ...storedProject,
-        proposedCode: "sphere(5); // PENDING_PROPOSED_SECRET",
-        review: {
-          summary: "已有待确认修订",
-          issues: ["先确认修订"],
-          correctionPrompt: "先接受或拒绝当前修订。",
-          confidence: 0.6
-        },
-        promptTrace: [
-          {
-            id: "pending-old-trace",
-            createdAt: "2026-06-25T00:00:00.000Z",
-            phase: "code-generation",
-            modelId: "mimo-v2.5",
-            systemPrompt: "PENDING_OLD_TRACE_SECRET",
-            userPrompt: "pending old trace",
-            response: "pending old trace"
-          }
-        ]
-      })
-    );
-  }, project);
-
-  let visionRequests = 0;
-  let llmRequests = 0;
-  await page.route("**/api/vision", async (route) => {
-    visionRequests += 1;
-    await route.fulfill({
-      status: 500,
-      contentType: "application/json",
-      body: JSON.stringify({ error: "Vision should not run with a pending revision" })
-    });
-  });
-  await page.route("**/api/llm", async (route) => {
-    llmRequests += 1;
-    await route.fulfill({
-      status: 500,
-      contentType: "application/json",
-      body: JSON.stringify({ error: "LLM should not run with a pending revision" })
-    });
-  });
-
-  await page.goto("/");
-  await expect(page.getByRole("button", { name: /^Reference images$/ })).toBeDisabled();
-  await expect(page.getByRole("button", { name: /^Optimize prompt$/ })).toBeDisabled();
-  await expect(page.getByText("pending-reference.png")).toHaveCount(0);
-  await expect(page.getByRole("button", { name: "Clear reference images" })).toHaveCount(0);
-  await expect(page.locator(".pendingActionHint")).toBeVisible();
-  await delay(500);
-  expect(visionRequests).toBe(0);
-  expect(llmRequests).toBe(0);
-  const stored = await page.evaluate(() =>
-    JSON.parse(localStorage.getItem("ai-openscad.project") ?? "{}")
-  );
-  expect(stored.proposedCode).toContain("PENDING_PROPOSED_SECRET");
 });
 
 test("visual review appends retained reference images after generated views", async ({
@@ -1701,7 +1642,11 @@ test("late reference image draft responses do not overwrite newer composer state
   await page.locator(".agentInput").evaluate((node) => {
     const textarea = node as HTMLTextAreaElement;
     textarea.disabled = false;
-    textarea.value = "用户在旧请求返回前写的新需求";
+    const setter = Object.getOwnPropertyDescriptor(
+      window.HTMLTextAreaElement.prototype,
+      "value"
+    )?.set;
+    setter?.call(textarea, "用户在旧请求返回前写的新需求");
     textarea.dispatchEvent(new Event("input", { bubbles: true }));
     textarea.dispatchEvent(new Event("change", { bubbles: true }));
   });
@@ -4292,113 +4237,6 @@ test("iterate again uses the editable correction prompt then renders a new model
   expect(iterationPrompt).toContain("User iteration notes:\n保持30ML杯子容量，把杯壁调薄，并把把手再大一点");
   expect(iterationPrompt).toContain("browser render complexity budget");
   expect(iterationPrompt).toContain("coarse, inspectable approximations");
-});
-
-test("accepting a revision requires a fresh visual review before another iteration", async ({
-  page
-}) => {
-  await page.addInitScript((storedProject) => {
-    localStorage.setItem("ai-openscad.llm-api-key", "sk-llm");
-    localStorage.setItem("ai-openscad.vision-api-key", "sk-vision");
-    localStorage.setItem(
-      "ai-openscad.project",
-      JSON.stringify({
-        ...storedProject,
-        proposedCode: "cube(10);",
-        review: {
-          summary: "旧评审：杯口太厚",
-          issues: ["旧问题"],
-          correctionPrompt: "根据旧问题继续修正杯口厚度。",
-          confidence: 0.74
-        },
-        promptTrace: []
-      })
-    );
-  }, project);
-
-  let llmRequests = 0;
-  let repairPrompt = "";
-  await page.route("**/api/llm", async (route) => {
-    llmRequests += 1;
-    const body = route.request().postDataJSON() as {
-      messages: Array<{ content: unknown }>;
-    };
-    repairPrompt = JSON.stringify(body.messages);
-    await delay(1_500);
-    await route.fulfill({
-      status: 200,
-      contentType: "text/event-stream",
-      body: sseChunks("cube(10);")
-    });
-  });
-
-  await page.goto("/");
-  await expect(page.locator(".agentActions").getByRole("button", { name: /^Generate$/i })).toHaveCount(0);
-  await expect(page.locator(".agentActions").getByRole("button", { name: /^Review$/i })).toHaveCount(0);
-  await expect(page.locator(".agentActions").getByRole("button", { name: /Iterate Again/i })).toHaveCount(0);
-  await expect(page.locator(".pendingActionHint")).toContainText("Accept");
-  await page.getByRole("button", { name: /^Reject$/i }).click();
-  await expect(page.getByRole("button", { name: /Iterate Again/i })).toBeVisible();
-
-  await page.evaluate((storedProject) => {
-    const pendingProject = {
-      ...storedProject,
-      proposedCode: "cube(",
-      review: {
-        summary: "旧评审：杯口太厚",
-        issues: ["旧问题"],
-        correctionPrompt: "根据旧问题继续修正杯口厚度。",
-        confidence: 0.74
-      },
-      promptTrace: []
-    };
-    localStorage.setItem(
-      "ai-openscad.project",
-      JSON.stringify(pendingProject)
-    );
-    localStorage.setItem("ai-openscad.projects", JSON.stringify([pendingProject]));
-    localStorage.setItem("ai-openscad.active-project-id", pendingProject.id);
-  }, project);
-  await page.reload();
-  await expect(page.locator(".pendingActionHint")).toContainText("Accept");
-  await page.getByRole("button", { name: /Accept \+ render/i }).click();
-
-  await expect.poll(() => llmRequests, { timeout: 30_000 }).toBe(1);
-  await expectCompilerRepairInFlight(page);
-  expect(repairPrompt).toContain("cube(");
-  expect(repairPrompt).toContain("OpenSCAD render failed");
-  await expect(page.getByRole("button", { name: /^Review$/i })).toBeVisible({
-    timeout: 45000
-  });
-  await expect(page.locator(".viewTile img")).toHaveCount(14);
-  await expect(page.getByRole("button", { name: /Iterate Again/i })).toHaveCount(0);
-  await expect(page.locator(".resultPanel").getByText("No review yet.")).toHaveCount(0);
-  await expect(page.locator(".agentRun")).not.toContainText("旧评审：杯口太厚");
-  await expect(page.locator(".agentRun")).not.toContainText("旧问题");
-  await expect(page.locator(".agentRun")).not.toContainText("根据旧问题继续修正杯口厚度。");
-  await expect(page.locator(".agentInput")).not.toHaveValue(/根据旧问题继续修正杯口厚度/);
-  await expect(page.locator('.workflowStage[data-stage="review"]')).toContainText("Waiting");
-});
-
-test("pending revision without review still blocks the main workflow", async ({ page }) => {
-  await page.addInitScript((storedProject) => {
-    localStorage.setItem(
-      "ai-openscad.project",
-      JSON.stringify({
-        ...storedProject,
-        proposedCode: "cube(10);",
-        review: null,
-        promptTrace: []
-      })
-    );
-  }, project);
-
-  await page.goto("/");
-
-  await expect(page.locator(".pendingActionHint")).toContainText("Accept");
-  await expect(page.locator(".agentActions").getByRole("button", { name: /^Generate$/i })).toHaveCount(0);
-  await expect(page.locator(".agentActions").getByRole("button", { name: /^Review$/i })).toHaveCount(0);
-  await expect(page.locator(".agentActions").getByRole("button", { name: /Iterate Again/i })).toHaveCount(0);
 });
 
 test("invalid OpenSCAD render fails without leaving the page busy", async ({ page }) => {

@@ -318,6 +318,74 @@ describe("project persistence", () => {
     expect(JSON.stringify(storedProjects)).not.toContain("old-reference-secret");
   });
 
+  it("coerces malformed imported fields instead of crashing later renders", () => {
+    const imported = importProject(
+      JSON.stringify({
+        title: { nested: "object" },
+        requirement: 42,
+        updatedAt: 1234,
+        review: { summary: 7, issues: ["ok", { bad: true }], confidence: "high" },
+        runEvents: [
+          { id: "good", title: "Generation", content: "cube", role: "assistant" },
+          { id: 12, title: "bad id" },
+          { title: "missing id" },
+          "not an object"
+        ],
+        iterations: [{ id: "it-1", status: "bogus", code: 9 }, null],
+        promptTrace: [{ id: "pt-1", phase: "unknown-phase" }, []]
+      })
+    );
+
+    expect(imported.title).toBe("Untitled OpenSCAD Project");
+    expect(imported.requirement).toBe("");
+    expect(typeof imported.updatedAt).toBe("string");
+    expect(imported.review).toEqual({
+      summary: "",
+      issues: ["ok"],
+      correctionPrompt: "",
+      confidence: 0
+    });
+    expect(imported.runEvents).toHaveLength(1);
+    expect(imported.runEvents[0].id).toBe("good");
+    expect(imported.iterations).toEqual([
+      expect.objectContaining({ id: "it-1", status: "generated", code: "" })
+    ]);
+    expect(imported.promptTrace).toEqual([
+      expect.objectContaining({ id: "pt-1", phase: "code-generation" })
+    ]);
+  });
+
+  it("rejects project files that are not JSON objects", () => {
+    expect(() => importProject("null")).toThrow();
+    expect(() => importProject("[1,2]")).toThrow();
+    expect(() => importProject("\"text\"")).toThrow();
+  });
+
+  it("keeps readable projects when the stored list holds a broken entry", () => {
+    const good = createEmptyProject();
+    good.id = "good";
+    good.requirement = "survivor";
+    localStorage.setItem(
+      "ai-openscad.projects",
+      JSON.stringify([good, "garbage-entry", { title: 3 }])
+    );
+    localStorage.setItem("ai-openscad.active-project-id", "good");
+
+    const workspace = loadProjectWorkspace();
+
+    expect(workspace.activeProject.id).toBe("good");
+    expect(workspace.activeProject.requirement).toBe("survivor");
+  });
+
+  it("backs up an unparseable project list instead of silently discarding it", () => {
+    localStorage.setItem("ai-openscad.projects", "{not json");
+
+    const workspace = loadProjectWorkspace();
+
+    expect(workspace.projects).toHaveLength(1);
+    expect(localStorage.getItem("ai-openscad.projects.corrupt")).toBe("{not json");
+  });
+
   it("keeps the page saveable when rendered STL exceeds local storage quota", () => {
     const project = createEmptyProject();
     project.id = "large-render";

@@ -13,7 +13,6 @@ export const messages = {
     untitledModel: "Untitled model",
     importProject: "Import project",
     exportProject: "Export project",
-    exportProjectPending: "Accept and render the pending revision before exporting.",
     projectFiles: "Project files",
     basicSettings: "Basic settings",
     basicSettingsSummary: "Models and keys",
@@ -92,14 +91,6 @@ export const messages = {
     events: "events",
     openscad: "OpenSCAD",
     draftPrecision: "Draft preview uses low precision",
-    proposedRevision: "Proposed Revision",
-    revisionPending: "Revision pending",
-    revisionReady: "Revision proposal ready.",
-    pendingRevisionNotice:
-      "The preview still shows the reviewed draft. Accept + render before export.",
-    pendingRevisionActionHint: "Accept the proposal to update the preview before final export.",
-    accept: "Accept + render",
-    reject: "Reject",
     views: "Views",
     interactiveStlPreview: "Interactive STL preview",
     front: "Front",
@@ -166,7 +157,9 @@ export const messages = {
     diagnosticFixPromptReady: "Diagnostic fix prompt ready",
     renderDiagnostics: "Render diagnostics",
     compilerRepairStarted: "Compiler repair",
+    compilerRepairProgress: "Compiler repair {current} of {total}",
     autoIterationStarted: "Auto iteration",
+    autoIterationProgress: "Auto iteration {current} of {total}",
     targetConfidenceReached:
       "Target confidence reached. No further automatic LLM call will occur.",
     autoIterationLimitReached:
@@ -196,6 +189,14 @@ export const messages = {
       "Generate high precision final images and export SCAD? This can be slower than draft review.",
     finalExportTrace: "User confirmed high precision final export.",
     finalExportDone: "High precision final export generated.",
+    unsafeDiagnosticsGuidance:
+      "Unsafe OpenSCAD diagnostics were reported. The render may be incomplete or invalid; repair before review or export.",
+    draftTimeoutGuidance:
+      "The draft likely exceeded the browser draft render complexity budget. Simplify stacked extrusions, dense arrays, per-layer booleans, or high segment counts, then rerender.",
+    finalTimeoutGuidance:
+      "The high precision final export timed out. Simplify the accepted source or try a lower-complexity model before exporting again.",
+    viewsIncompleteGuidance:
+      "Rendered {count} of {total} required views. Rerender all views before review or export.",
     confidence: "Confidence"
   },
   zh: {
@@ -209,7 +210,6 @@ export const messages = {
     untitledModel: "未命名模型",
     importProject: "导入项目",
     exportProject: "导出项目",
-    exportProjectPending: "请先接受并渲染待确认修订，再导出。",
     projectFiles: "项目文件",
     basicSettings: "基础设置",
     basicSettingsSummary: "模型与 Key",
@@ -288,13 +288,6 @@ export const messages = {
     events: "条记录",
     openscad: "OpenSCAD",
     draftPrecision: "草稿预览使用低精度",
-    proposedRevision: "建议修订",
-    revisionPending: "等待确认修订",
-    revisionReady: "修订建议已生成。",
-    pendingRevisionNotice: "右侧预览仍是刚评审的草稿模型，请先接受并渲染后再最终导出。",
-    pendingRevisionActionHint: "请先接受修订并重新渲染，确认右侧预览更新后再最终导出。",
-    accept: "接受并渲染",
-    reject: "拒绝",
     views: "多角度视图",
     interactiveStlPreview: "交互式 STL 预览",
     front: "正视图",
@@ -328,7 +321,7 @@ export const messages = {
     downloadIsoFrontLeftBottomPng: "前左下等轴测 PNG",
     downloadIsoBackRightBottomPng: "后右下等轴测 PNG",
     downloadIsoBackLeftBottomPng: "后左下等轴测 PNG",
-    downloadSourceScad: "Source SCAD",
+    downloadSourceScad: "SCAD 源码",
     downloadStl: "STL",
     compiler: "编译器",
     noCompileOutput: "还没有编译输出。",
@@ -361,7 +354,9 @@ export const messages = {
     diagnosticFixPromptReady: "诊断修复提示词已准备",
     renderDiagnostics: "渲染诊断",
     compilerRepairStarted: "编译修复",
+    compilerRepairProgress: "编译修复 第 {current}/{total} 次",
     autoIterationStarted: "自动迭代",
+    autoIterationProgress: "自动迭代 第 {current}/{total} 次",
     targetConfidenceReached: "已达到目标置信度。不会再自动调用 LLM。",
     autoIterationLimitReached: "已达到自动迭代上限。不会再自动调用 LLM。",
     autoRunCompileStopped: "自动置信度运行因编译失败停止。不会再自动调用 LLM。",
@@ -386,6 +381,14 @@ export const messages = {
     finalExportConfirm: "是否生成高精度最终图片并导出 SCAD？这会比草稿评审更慢。",
     finalExportTrace: "用户确认进行高精度最终导出。",
     finalExportDone: "已生成高精度最终导出。",
+    unsafeDiagnosticsGuidance:
+      "OpenSCAD 报告了不安全的诊断信息。渲染结果可能不完整或无效，请先修复再评审或导出。",
+    draftTimeoutGuidance:
+      "草稿渲染可能超出了浏览器渲染复杂度预算。请简化堆叠拉伸、密集阵列、逐层布尔运算或高段数，然后重新渲染。",
+    finalTimeoutGuidance:
+      "高精度最终导出超时。请先简化源码或换用更低复杂度的模型，再重新导出。",
+    viewsIncompleteGuidance:
+      "已渲染 {count}/{total} 个必需视图。请重新渲染全部视图后再评审或导出。",
     confidence: "置信度"
   }
 } as const;

@@ -33,6 +33,30 @@ export const VIEW_CAPTURE_SPECS: ViewCaptureSpec[] = [
   { key: "isoBackLeftBottom", direction: normalizeDirection([-1, 1, -0.75]), up: [0, 0, 1] }
 ];
 
+// Browsers cap the number of live WebGL contexts (~16) and evict the oldest,
+// which can kill the interactive preview during long auto-iterate sessions.
+// Reuse one hidden renderer for every capture instead of leaking a context
+// per call.
+let sharedRenderer: THREE.WebGLRenderer | null = null;
+
+function getCaptureRenderer(): THREE.WebGLRenderer {
+  if (sharedRenderer && sharedRenderer.getContext().isContextLost()) {
+    sharedRenderer.dispose();
+    sharedRenderer.forceContextLoss();
+    sharedRenderer = null;
+  }
+  if (!sharedRenderer) {
+    sharedRenderer = new THREE.WebGLRenderer({
+      antialias: true,
+      preserveDrawingBuffer: true,
+      alpha: true
+    });
+    sharedRenderer.setSize(640, 480);
+    sharedRenderer.setPixelRatio(1);
+  }
+  return sharedRenderer;
+}
+
 export async function captureOrthographicViews(
   stl: string,
   options: { onProgress?: (stage: ViewCaptureStage) => Promise<void> | void } = {}
@@ -48,13 +72,7 @@ export async function captureOrthographicViews(
   const size = box.getSize(new THREE.Vector3());
   geometry.translate(-center.x, -center.y, -center.z);
 
-  const renderer = new THREE.WebGLRenderer({
-    antialias: true,
-    preserveDrawingBuffer: true,
-    alpha: true
-  });
-  renderer.setSize(640, 480);
-  renderer.setPixelRatio(1);
+  const renderer = getCaptureRenderer();
   renderer.setClearColor(0xf8fafc, 1);
 
   const scene = new THREE.Scene();
@@ -92,14 +110,16 @@ export async function captureOrthographicViews(
   };
 
   const views = createEmptyViewSet();
-  for (const spec of VIEW_CAPTURE_SPECS) {
-    await options.onProgress?.(spec.key);
-    views[spec.key] = render(spec);
+  try {
+    for (const spec of VIEW_CAPTURE_SPECS) {
+      await options.onProgress?.(spec.key);
+      views[spec.key] = render(spec);
+    }
+  } finally {
+    // The renderer is shared; only per-capture GPU resources are released.
+    geometry.dispose();
+    material.dispose();
   }
-
-  renderer.dispose();
-  geometry.dispose();
-  material.dispose();
   return views;
 }
 

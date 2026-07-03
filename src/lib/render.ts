@@ -1,4 +1,4 @@
-import { createOpenSCAD, type OpenSCADInstance } from "openscad-wasm";
+import type { OpenSCADInstance } from "openscad-wasm";
 import {
   captureOrthographicViews,
   type ViewCaptureStage,
@@ -33,7 +33,23 @@ export interface RenderMcpAdapter extends RenderAdapter {
   render(input: RenderMcpInput): Promise<RenderMcpOutput>;
 }
 
-export type OpenScadLoader = () => Promise<OpenSCADInstance>;
+export interface OpenScadLoaderHooks {
+  print?: (text: unknown) => void;
+  printErr?: (text: unknown) => void;
+}
+
+export type OpenScadLoader = (
+  hooks?: OpenScadLoaderHooks
+) => Promise<OpenSCADInstance>;
+
+// openscad-wasm inlines the ~13 MB WASM binary; loading it lazily keeps it
+// out of the main bundle since browsers compile through the worker instead.
+async function loadOpenScadModule(
+  hooks?: OpenScadLoaderHooks
+): Promise<OpenSCADInstance> {
+  const { createOpenSCAD } = await import("openscad-wasm");
+  return createOpenSCAD(hooks);
+}
 export type RenderWorkerFactory = () => Worker;
 export type ViewCapture = typeof captureOrthographicViews;
 
@@ -86,7 +102,7 @@ export class WebRenderMcpAdapter implements RenderMcpAdapter {
       return;
     }
 
-    this.loadOpenScad = options.loadOpenScad ?? createOpenSCAD;
+    this.loadOpenScad = options.loadOpenScad ?? loadOpenScadModule;
     this.captureViews = options.captureViews ?? captureOrthographicViews;
     this.timeoutMs = options.timeoutMs ?? DEFAULT_RENDER_TIMEOUT_MS;
     this.createWorker =
@@ -156,8 +172,12 @@ export class WebRenderMcpAdapter implements RenderMcpAdapter {
   }
 
   private async compileInCurrentContext(code: string): Promise<RenderResult> {
+    const logs: string[] = [];
+    const capture = (text: unknown) => {
+      logs.push(String(text));
+    };
     try {
-      const instance = await this.loadOpenScad();
+      const instance = await this.loadOpenScad({ print: capture, printErr: capture });
       const rendered = await withTimeout(
         renderOpenScadToStlWithBackend(instance, code),
         this.timeoutMs,
@@ -167,12 +187,12 @@ export class WebRenderMcpAdapter implements RenderMcpAdapter {
         ok: true,
         stl: rendered.stl,
         backend: rendered.backend,
-        diagnostics: "Compiled to STL in browser."
+        diagnostics: buildRenderSuccessDiagnostics(logs)
       };
     } catch (error) {
       return {
         ok: false,
-        diagnostics: buildRenderFailureDiagnostics(error)
+        diagnostics: buildRenderFailureDiagnostics(error, logs)
       };
     }
   }
@@ -278,11 +298,17 @@ export async function renderOpenScadToStlWithBackend(
       stl: typeof result === "string" ? result : new TextDecoder().decode(result),
       backend: "web-manifold"
     };
-  } catch {
-    return {
-      stl: await instance.renderToStl(code),
-      backend: "web-default"
-    };
+  } catch (error) {
+    try {
+      return {
+        stl: await instance.renderToStl(code),
+        backend: "web-default"
+      };
+    } catch {
+      // Surface the Manifold failure: re-rendering the same broken code only
+      // produces a less readable FS error about the missing output file.
+      throw error;
+    }
   } finally {
     try {
       openscad.FS.unlink("/input.scad");

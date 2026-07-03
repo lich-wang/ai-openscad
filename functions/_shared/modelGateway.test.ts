@@ -22,7 +22,8 @@ describe("proxyModelRequest", () => {
         method: "POST",
         headers: {
           Authorization: "Bearer sk-user",
-          "Content-Type": "application/json"
+          "Content-Type": "application/json",
+          Origin: "https://ai.openscad.tech"
         },
         body: JSON.stringify({
           provider: "mimo",
@@ -74,7 +75,8 @@ describe("proxyModelRequest", () => {
         method: "POST",
         headers: {
           Authorization: "Bearer sk-user",
-          "Content-Type": "application/json"
+          "Content-Type": "application/json",
+          Origin: "https://ai.openscad.tech"
         },
         body: JSON.stringify({
           provider: "mimo",
@@ -108,7 +110,8 @@ describe("proxyModelRequest", () => {
       new Request("https://example.com/api/llm", {
         method: "POST",
         headers: {
-          "Content-Type": "application/json"
+          "Content-Type": "application/json",
+          Origin: "https://ai.openscad.tech"
         },
         body: JSON.stringify({
           provider: "mimo",
@@ -128,6 +131,83 @@ describe("proxyModelRequest", () => {
     expect(upstreamHeaders["api-key"]).toBe("sk-server-mimo");
   });
 
+  it("rejects requests from disallowed origins before touching any key", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    const response = await proxyModelRequest(
+      new Request("https://ai.openscad.tech/api/llm", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Origin: "https://evil.example.com"
+        },
+        body: JSON.stringify({
+          provider: "mimo",
+          model: "mimo-v2.5-pro",
+          messages: [{ role: "user", content: "make cube" }]
+        })
+      }),
+      { MiMo_KEY: "sk-server-mimo" }
+    );
+
+    expect(response.status).toBe(403);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects requests with no Origin or Referer header", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    const response = await proxyModelRequest(
+      new Request("https://ai.openscad.tech/api/llm", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          provider: "mimo",
+          model: "mimo-v2.5-pro",
+          messages: [{ role: "user", content: "make cube" }]
+        })
+      }),
+      { MiMo_KEY: "sk-server-mimo" }
+    );
+
+    expect(response.status).toBe(403);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("accepts localhost dev and pages.dev preview origins", async () => {
+    const fetchMock = vi.fn(async () => {
+      return new Response(
+        JSON.stringify({ choices: [{ message: { content: "cube(10);" } }] }),
+        { status: 200 }
+      );
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    for (const origin of [
+      "http://localhost:5173",
+      "https://abc123.ai-openscad.pages.dev"
+    ]) {
+      const response = await proxyModelRequest(
+        new Request("https://ai.openscad.tech/api/llm", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Origin: origin
+          },
+          body: JSON.stringify({
+            provider: "mimo",
+            model: "mimo-v2.5-pro",
+            messages: [{ role: "user", content: "make cube" }]
+          })
+        }),
+        { MiMo_KEY: "sk-server-mimo" }
+      );
+      expect(response.status).toBe(200);
+    }
+  });
+
   it("still rejects DeepSeek requests without a user bearer token", async () => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
@@ -136,7 +216,8 @@ describe("proxyModelRequest", () => {
       new Request("https://example.com/api/llm", {
         method: "POST",
         headers: {
-          "Content-Type": "application/json"
+          "Content-Type": "application/json",
+          Origin: "https://ai.openscad.tech"
         },
         body: JSON.stringify({
           provider: "deepseek",

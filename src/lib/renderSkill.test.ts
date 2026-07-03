@@ -44,6 +44,21 @@ describe("renderSkill", () => {
     );
   });
 
+  it("rewrites every top-level $fn so a later assignment cannot win", () => {
+    const code = [
+      "$fn = 16;",
+      "module rim() { cylinder(r=5, h=2); }",
+      "$fn = 128.0;",
+      "rim();"
+    ].join("\n");
+
+    const normalized = normalizeOpenScadPrecision(code, "draft");
+
+    expect(normalized).not.toContain("$fn = 16;");
+    expect(normalized).not.toContain("$fn = 128.0;");
+    expect(normalized.match(/\$fn = 32;/g)).toHaveLength(2);
+  });
+
   it("keeps final export normalization high precision", () => {
     expect(normalizeOpenScadPrecision("$fn = 32;\ncylinder(r=5,h=10);", "final")).toContain(
       "$fn = 128;"

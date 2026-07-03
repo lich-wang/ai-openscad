@@ -1,6 +1,7 @@
 export type OpenAiStreamEvent =
   | { type: "content"; delta: string }
-  | { type: "thinking"; delta: string };
+  | { type: "thinking"; delta: string }
+  | { type: "error"; message: string };
 
 export function extractOpenAiStreamEvents(chunk: string): OpenAiStreamEvent[] {
   const events: OpenAiStreamEvent[] = [];
@@ -15,6 +16,7 @@ export function extractOpenAiStreamEvents(chunk: string): OpenAiStreamEvent[] {
     }
     try {
       const parsed = JSON.parse(payload) as {
+        error?: { message?: string } | string;
         choices?: Array<{
           delta?: {
             content?: string;
@@ -24,6 +26,14 @@ export function extractOpenAiStreamEvents(chunk: string): OpenAiStreamEvent[] {
           };
         }>;
       };
+      if (parsed.error) {
+        const message =
+          typeof parsed.error === "string"
+            ? parsed.error
+            : parsed.error.message ?? "Provider reported a stream error.";
+        events.push({ type: "error", message });
+        continue;
+      }
       const delta = parsed.choices?.[0]?.delta;
       const thinking = delta?.reasoning_content ?? delta?.reasoning ?? delta?.thinking;
       if (thinking) {
@@ -49,22 +59,19 @@ export function extractOpenAiStreamDeltas(chunk: string): string[] {
 export async function readOpenAiStream(
   stream: ReadableStream<Uint8Array>,
   onDelta: (delta: string) => void,
-  onThinkingDelta?: (delta: string) => void
+  onThinkingDelta?: (delta: string) => void,
+  options: { idleTimeoutMs?: number } = {}
 ): Promise<string> {
   const reader = stream.getReader();
   const decoder = new TextDecoder();
   let fullText = "";
   let buffer = "";
 
-  while (true) {
-    const { value, done } = await reader.read();
-    if (done) {
-      break;
-    }
-    buffer += decoder.decode(value, { stream: true });
-    const events = buffer.split(/\n\n/);
-    buffer = events.pop() ?? "";
-    for (const event of extractOpenAiStreamEvents(events.join("\n\n"))) {
+  const dispatch = (chunk: string) => {
+    for (const event of extractOpenAiStreamEvents(chunk)) {
+      if (event.type === "error") {
+        throw new Error(event.message);
+      }
       if (event.type === "thinking") {
         onThinkingDelta?.(event.delta);
       } else {
@@ -72,18 +79,46 @@ export async function readOpenAiStream(
         onDelta(event.delta);
       }
     }
-  }
+  };
 
-  if (buffer) {
-    for (const event of extractOpenAiStreamEvents(buffer)) {
-      if (event.type === "thinking") {
-        onThinkingDelta?.(event.delta);
-      } else {
-        fullText += event.delta;
-        onDelta(event.delta);
+  try {
+    while (true) {
+      const { value, done } = options.idleTimeoutMs
+        ? await readWithIdleTimeout(reader, options.idleTimeoutMs)
+        : await reader.read();
+      if (done) {
+        break;
       }
+      buffer += decoder.decode(value, { stream: true });
+      const events = buffer.split(/\r?\n\r?\n/);
+      buffer = events.pop() ?? "";
+      dispatch(events.join("\n\n"));
     }
+
+    if (buffer) {
+      dispatch(buffer);
+    }
+  } catch (error) {
+    void reader.cancel().catch(() => undefined);
+    throw error;
   }
 
   return fullText;
+}
+
+async function readWithIdleTimeout(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  idleTimeoutMs: number
+): Promise<ReadableStreamReadResult<Uint8Array>> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      reject(new Error("Model stream stalled: no data received from the provider."));
+    }, idleTimeoutMs);
+  });
+  try {
+    return await Promise.race([reader.read(), timeout]);
+  } finally {
+    clearTimeout(timer);
+  }
 }

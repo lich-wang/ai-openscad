@@ -22,8 +22,13 @@ export function normalizeOpenScadPrecision(
   precision: RenderPrecision
 ): string {
   const targetFn = precision === "final" ? 128 : 32;
-  if (/^\s*\$fn\s*=\s*\d+\s*;/m.test(code)) {
-    return code.replace(/^\s*\$fn\s*=\s*\d+\s*;/m, `$fn = ${targetFn};`);
+  // OpenSCAD applies the last top-level assignment, so every numeric $fn
+  // assignment must be rewritten or a later one silently wins.
+  if (/^\s*\$fn\s*=\s*\d+(?:\.\d+)?\s*;/m.test(code)) {
+    return code.replace(
+      /^(\s*)\$fn\s*=\s*\d+(?:\.\d+)?\s*;/gm,
+      `$1$fn = ${targetFn};`
+    );
   }
   return `$fn = ${targetFn};\n${code}`;
 }

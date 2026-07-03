@@ -872,6 +872,42 @@ describe("apiClient prompt assembly", () => {
     vi.unstubAllGlobals();
   });
 
+  it("parses review JSON wrapped in markdown code fences", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          content:
+            "```json\n" +
+            JSON.stringify({
+              summary: "Handle looks too small.",
+              issues: ["Right view handle is undersized"],
+              correctionPrompt:
+                "Enlarge the handle loop while preserving the 30ML capacity.",
+              confidence: 0.72
+            }) +
+            "\n```"
+        })
+      })
+    );
+
+    const { review } = await reviewViews({
+      apiKey: "sk-user",
+      modelId: "mimo-v2.5",
+      requirement: "生成一个30ML的杯子模型",
+      code: "module cup() {}",
+      renderedImages: reviewImages,
+      strictConfidence: true
+    });
+
+    expect(review.summary).toBe("Handle looks too small.");
+    expect(review.issues).toEqual(["Right view handle is undersized"]);
+    expect(review.confidence).toBe(0.72);
+
+    vi.unstubAllGlobals();
+  });
+
   it("estimates LLM and vision tokens separately", () => {
     const usage = estimateTokenUsage({
       llmText: "abcd".repeat(100),

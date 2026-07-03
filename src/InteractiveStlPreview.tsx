@@ -80,6 +80,8 @@ export function InteractiveStlPreview({ label, stl }: InteractiveStlPreviewProps
       camera.position.set(maxDimension * 1.45, -maxDimension * 1.85, maxDimension * 1.2);
       camera.lookAt(0, 0, 0);
 
+      // preserveDrawingBuffer keeps the last frame readable after the
+      // on-demand render loop goes idle (screenshots, pixel checks).
       renderer = new THREE.WebGLRenderer({
         antialias: true,
         alpha: true,
@@ -110,19 +112,39 @@ export function InteractiveStlPreview({ label, stl }: InteractiveStlPreviewProps
         camera.updateProjectionMatrix();
       };
 
-      const animate = () => {
+      // Render on demand instead of a permanent rAF loop: the loop only runs
+      // during interaction and for a short damping decay window afterwards.
+      const DAMPING_DECAY_MS = 800;
+      let lastActivity = 0;
+      const renderLoop = () => {
         if (!renderer || !controls) {
+          animationFrame = 0;
           return;
         }
         controls.update();
         renderer.render(scene, camera);
-        animationFrame = window.requestAnimationFrame(animate);
+        if (performance.now() - lastActivity < DAMPING_DECAY_MS) {
+          animationFrame = window.requestAnimationFrame(renderLoop);
+        } else {
+          animationFrame = 0;
+        }
       };
+      const wake = () => {
+        lastActivity = performance.now();
+        if (!animationFrame) {
+          animationFrame = window.requestAnimationFrame(renderLoop);
+        }
+      };
+      controls.addEventListener("start", wake);
+      controls.addEventListener("change", wake);
 
-      resizeObserver = new ResizeObserver(resize);
+      resizeObserver = new ResizeObserver(() => {
+        resize();
+        wake();
+      });
       resizeObserver.observe(mount);
       resize();
-      animate();
+      wake();
       setPreviewState("ready");
     } catch {
       if (animationFrame) {

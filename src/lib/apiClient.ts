@@ -47,6 +47,9 @@ export async function generateOpenScad(input: {
     ? await sendGatewayStream(request, input.onToken, input.onThinkingToken)
     : await sendGatewayRequest(request);
   const code = stripCodeFence(response);
+  if (!code) {
+    throw new Error("The model returned an empty response.");
+  }
   return {
     code,
     trace: createPromptTraceEntry({
@@ -211,6 +214,9 @@ export async function proposeRevision(input: {
     ? await sendGatewayStream(request, input.onToken, input.onThinkingToken)
     : await sendGatewayRequest(request);
   const code = stripCodeFence(response);
+  if (!code) {
+    throw new Error("The model returned an empty response.");
+  }
   return {
     code,
     trace: createPromptTraceEntry({
@@ -278,7 +284,11 @@ export function estimateTokenUsage(input: {
   visionText: string;
   imageCount: number;
 }) {
-  const estimateTextTokens = (text: string) => Math.ceil(text.length / 3.2);
+  // CJK text tokenizes near one token per character; Latin text near 3.2 chars per token.
+  const estimateTextTokens = (text: string) => {
+    const cjkChars = text.match(/[\u3000-\u9fff\uf900-\ufaff]/g)?.length ?? 0;
+    return Math.ceil(cjkChars + (text.length - cjkChars) / 3.2);
+  };
   return {
     llmTokens: estimateTextTokens(input.llmText),
     visionTokens: estimateTextTokens(input.visionText) + input.imageCount * 1100,
@@ -353,13 +363,17 @@ function formatBytes(bytes: number): string {
   return `${(bytes / 1_000_000).toFixed(1)} MB`;
 }
 
+const REQUEST_TIMEOUT_MS = 180_000;
+const STREAM_IDLE_TIMEOUT_MS = 90_000;
+
 async function sendGatewayRequest(request: ReturnType<typeof createModelRequest>) {
   const response = await fetch(request.endpoint, {
     method: "POST",
     headers: request.headers,
-    body: JSON.stringify(request.body)
+    body: JSON.stringify(request.body),
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS)
   });
-  const data = (await response.json()) as Partial<GatewayResponse> & {
+  const data = (await response.json().catch(() => ({}))) as Partial<GatewayResponse> & {
     error?: string;
   };
   if (!response.ok) {
@@ -396,37 +410,27 @@ async function sendGatewayStream(
     (delta) => {
       thinking += delta;
       onThinkingToken?.(thinking);
-    }
+    },
+    { idleTimeoutMs: STREAM_IDLE_TIMEOUT_MS }
   );
 }
 
 function stripCodeFence(content: string): string {
   const match = content.match(/```(?:[a-z0-9_-]+)?\s*([\s\S]*?)```/i);
-  return (match?.[1] ?? content).trim();
+  if (match) {
+    return match[1].trim();
+  }
+  const openFence = content.match(/^\s*```(?:[a-z0-9_-]+)?\s*([\s\S]*)$/i);
+  return (openFence?.[1] ?? content).trim();
 }
 
 function parseReview(content: string, requirement = "", strictConfidence = false): VisionReview {
+  let parsed: Partial<VisionReview>;
   try {
-    const parsed = JSON.parse(content) as Partial<VisionReview>;
-    const summary = String(parsed.summary ?? "Review completed.");
-    const issues = Array.isArray(parsed.issues)
-      ? parsed.issues.map(String)
-      : ["The model returned review text without an issues array."];
-    const confidence = normalizeReviewConfidence(parsed.confidence, strictConfidence);
-    return {
-      summary,
-      issues,
-      correctionPrompt: buildFallbackCorrectionPrompt(
-        summary,
-        issues,
-        parsed.correctionPrompt,
-        requirement
-      ),
-      confidence
-    };
+    parsed = JSON.parse(stripCodeFence(content)) as Partial<VisionReview>;
   } catch {
     if (strictConfidence) {
-      throw new Error("Review confidence is missing or invalid.");
+      throw new Error("Review response is not valid JSON.");
     }
     return {
       summary: content,
@@ -437,6 +441,26 @@ function parseReview(content: string, requirement = "", strictConfidence = false
       confidence: 0.5
     };
   }
+  const summary = String(parsed.summary ?? "Review completed.");
+  const issues = Array.isArray(parsed.issues)
+    ? parsed.issues.map((issue) =>
+        typeof issue === "string" ? issue : JSON.stringify(issue)
+      )
+    : ["The model returned review text without an issues array."];
+  // Confidence errors must keep their own message; a strict-mode failure
+  // here is not a JSON parsing problem.
+  const confidence = normalizeReviewConfidence(parsed.confidence, strictConfidence);
+  return {
+    summary,
+    issues,
+    correctionPrompt: buildFallbackCorrectionPrompt(
+      summary,
+      issues,
+      parsed.correctionPrompt,
+      requirement
+    ),
+    confidence
+  };
 }
 
 function normalizeReviewConfidence(value: unknown, strict: boolean): number {

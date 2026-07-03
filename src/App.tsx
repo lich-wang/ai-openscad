@@ -1,5 +1,4 @@
 import {
-  Check,
   Code2,
   Download,
   Eye,
@@ -8,10 +7,9 @@ import {
   Play,
   RefreshCw,
   Send,
-  WandSparkles,
-  X
+  WandSparkles
 } from "lucide-react";
-import { ChangeEvent, useEffect, useMemo, useRef, useState } from "react";
+import { ChangeEvent, useEffect, useId, useMemo, useRef, useState } from "react";
 import { InteractiveStlPreview } from "./InteractiveStlPreview";
 import {
   describeReferenceImages,
@@ -52,6 +50,7 @@ import {
   type PromptTraceEntry,
   type RenderEvidence,
   type RunEvent,
+  type RunEventKind,
   type RunEventRole,
   type RunEventStatus
 } from "./lib/project";
@@ -69,8 +68,6 @@ import {
   viewImagesInOrder,
   type ViewKey
 } from "./lib/viewSpecs";
-import { acceptRevision, rejectRevision } from "./lib/workflow";
-
 type BusyState =
   | "idle"
   | "draftingReference"
@@ -249,6 +246,15 @@ function formatConfidencePercent(confidence: number): string {
   return `${Math.round(confidence * 100)}%`;
 }
 
+function formatMessage(
+  template: string,
+  values: Record<string, string | number>
+): string {
+  return template.replace(/\{(\w+)\}/g, (match, name: string) =>
+    name in values ? String(values[name]) : match
+  );
+}
+
 function hasUnsafeRenderDiagnostics(diagnostics?: string | null): boolean {
   if (!diagnostics) {
     return false;
@@ -267,11 +273,11 @@ function hasUnsafeRenderDiagnostics(diagnostics?: string | null): boolean {
   return unsafePatterns.some((pattern) => pattern.test(diagnostics));
 }
 
-function addUnsafeRenderDiagnosticsGuidance(diagnostics: string): string {
+function addUnsafeRenderDiagnosticsGuidance(diagnostics: string, guidance: string): string {
   if (!hasUnsafeRenderDiagnostics(diagnostics)) {
     return diagnostics;
   }
-  return `${diagnostics}\nUnsafe OpenSCAD diagnostics were reported. The render may be incomplete or invalid; repair before review or export.`;
+  return `${diagnostics}\n${guidance}`;
 }
 
 function renderEvidenceIsClean(renderEvidence?: RenderEvidence | null): boolean {
@@ -342,51 +348,37 @@ export default function App() {
   const hasReviewReadyModel = Boolean(
     project.currentCode.trim() && hasRenderedViews && !hasCurrentReview
   );
-  const hasPendingRevision = Boolean(project.proposedCode.trim());
   const canUseCodeModelForPrompt = canUseCodeModel(project.codeModelId, llmApiKey);
   const canUseCodeModelForRepair = canUseCodeModel(project.codeModelId, llmApiKey);
   const hasDiagnosticFix = Boolean(
     project.currentCode.trim() &&
       !hasRenderedViews &&
-      !hasPendingRevision &&
       !hasCurrentReview &&
       project.renderEvidence?.compileStatus === "failure" &&
       project.renderEvidence.repairable !== false &&
       canUseCodeModelForRepair
   );
-  const compilerOutputForDisplay =
-    renderStatus ||
-    (hasPendingRevision && busy === "idle" ? tr("revisionReady") : project.compilerOutput);
+  const compilerOutputForDisplay = renderStatus || project.compilerOutput;
   const workflowStages = buildWorkflowStages({
     busy,
     errorStage,
-    hasCode: Boolean(project.currentCode.trim() || project.proposedCode.trim()),
+    hasCode: Boolean(project.currentCode.trim()),
     hasRenderedViews,
     hasReview: hasCurrentReview
   });
-  const hasModelWork = Boolean(
-    project.currentCode.trim() ||
-      project.proposedCode.trim() ||
-      renderedViewCount(project.views) > 0 ||
-      project.review
-  );
   const canUseVisionModelForDraft =
     getModelPreset(project.visionModelId, "vision").provider === "mimo" ||
     Boolean(visionApiKey.trim());
-  const referenceControlsDisabled =
-    controlsLocked || hasPendingRevision || !canUseVisionModelForDraft;
+  const referenceControlsDisabled = controlsLocked || !canUseVisionModelForDraft;
   const describeReferenceDisabled = referenceControlsDisabled;
-  const showPromptOptimizeAction =
-    hasPendingRevision || (!hasDiagnosticFix && !hasReviewReadyModel);
+  const showPromptOptimizeAction = !hasDiagnosticFix && !hasReviewReadyModel;
   const optimizePromptDisabled =
     controlsLocked ||
-    hasPendingRevision ||
     hasDiagnosticFix ||
     hasReviewReadyModel ||
     !project.requirement.trim() ||
     !canUseCodeModelForPrompt;
   const showGenerateAction =
-    !hasPendingRevision &&
     !hasDiagnosticFix &&
     (!hasRenderedViews || !project.currentCode.trim() || busy === "optimizingPrompt");
 
@@ -394,14 +386,14 @@ export default function App() {
     if (!diagnostics.includes("OpenSCAD render timed out")) {
       return diagnostics;
     }
-    return `${diagnostics} The draft likely exceeded the browser draft render complexity budget. Simplify stacked extrusions, dense arrays, per-layer booleans, or high segment counts, then rerender.`;
+    return `${diagnostics} ${tr("draftTimeoutGuidance")}`;
   }
 
   function addFinalExportTimeoutGuidance(diagnostics: string): string {
     if (!diagnostics.includes("OpenSCAD render timed out")) {
       return diagnostics;
     }
-    return `${diagnostics} The high precision final export timed out. Simplify the accepted source or try a lower-complexity model before exporting again.`;
+    return `${diagnostics} ${tr("finalTimeoutGuidance")}`;
   }
 
   function addIncompleteViewGuidance(
@@ -412,17 +404,71 @@ export default function App() {
     if (!result.ok || !result.stl || !result.views || viewCount === VIEW_KEYS.length) {
       return diagnostics;
     }
-    return `${diagnostics}\nRendered ${viewCount} of ${VIEW_KEYS.length} required views. Rerender all views before review or export.`;
+    return `${diagnostics}\n${formatMessage(tr("viewsIncompleteGuidance"), {
+      count: viewCount,
+      total: VIEW_KEYS.length
+    })}`;
   }
 
   useEffect(() => {
     projectRef.current = project;
   }, [project]);
 
+  // Persisting the workspace serializes every stored project; doing that per
+  // streamed token freezes the UI, so writes are throttled with a trailing
+  // flush and a flush on page hide.
+  const SAVE_THROTTLE_MS = 300;
+  const lastSaveAtRef = useRef(0);
+  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingSaveRef = useRef<ProjectState | null>(null);
+  const flushPendingSaveRef = useRef(() => {});
+  flushPendingSaveRef.current = () => {
+    if (saveTimerRef.current) {
+      clearTimeout(saveTimerRef.current);
+      saveTimerRef.current = null;
+    }
+    const pending = pendingSaveRef.current;
+    if (pending) {
+      pendingSaveRef.current = null;
+      lastSaveAtRef.current = Date.now();
+      saveProject(pending);
+    }
+  };
+
   useEffect(() => {
-    saveProject(project);
+    pendingSaveRef.current = project;
+    const elapsed = Date.now() - lastSaveAtRef.current;
+    // Idle edits persist immediately; only busy workflows (which stream many
+    // state updates per second) are throttled.
+    if (busyRef.current === "idle" || elapsed >= SAVE_THROTTLE_MS) {
+      flushPendingSaveRef.current();
+    } else if (!saveTimerRef.current) {
+      saveTimerRef.current = setTimeout(() => {
+        saveTimerRef.current = null;
+        flushPendingSaveRef.current();
+      }, SAVE_THROTTLE_MS - elapsed);
+    }
     setProjectList((current) => upsertProjectList(current, project));
   }, [project]);
+
+  useEffect(() => {
+    const flush = () => flushPendingSaveRef.current();
+    window.addEventListener("pagehide", flush);
+    window.addEventListener("beforeunload", flush);
+    return () => {
+      window.removeEventListener("pagehide", flush);
+      window.removeEventListener("beforeunload", flush);
+      flush();
+    };
+  }, []);
+
+  // Streamed tokens arrive only while busy; once the workbench settles the
+  // latest state must be durable immediately.
+  useEffect(() => {
+    if (busy === "idle") {
+      flushPendingSaveRef.current();
+    }
+  }, [busy]);
 
   useEffect(() => {
     adapter.prewarm();
@@ -460,25 +506,23 @@ export default function App() {
   function updatePromptFieldDraft(
     updater: (fields: PromptFields) => PromptFields
   ) {
-    setPromptFieldDraft((current) => {
-      if (!current) {
-        return current;
-      }
-      const nextDraft = {
-        ...current,
-        fields: updater(current.fields)
+    if (!promptFieldDraft) {
+      return;
+    }
+    const nextDraft = {
+      ...promptFieldDraft,
+      fields: updater(promptFieldDraft.fields)
+    };
+    const prompt = promptFieldsToText(nextDraft.fields, nextDraft.language);
+    setPromptFieldDraft(nextDraft);
+    setProject((activeProject) => {
+      const nextProject = {
+        ...activeProject,
+        requirement: prompt,
+        updatedAt: new Date().toISOString()
       };
-      const prompt = promptFieldsToText(nextDraft.fields, nextDraft.language);
-      setProject((activeProject) => {
-        const nextProject = {
-          ...activeProject,
-          requirement: prompt,
-          updatedAt: new Date().toISOString()
-        };
-        projectRef.current = nextProject;
-        return nextProject;
-      });
-      return nextDraft;
+      projectRef.current = nextProject;
+      return nextProject;
     });
   }
 
@@ -637,6 +681,7 @@ export default function App() {
     title: string;
     content: string;
     status?: RunEventStatus;
+    kind?: RunEventKind;
     code?: string;
     thinking?: string;
     thinkingCollapsed?: boolean;
@@ -650,6 +695,7 @@ export default function App() {
       title: input.title,
       content: input.content,
       status: input.status ?? "complete",
+      kind: input.kind,
       code: input.code,
       thinking: input.thinking,
       thinkingCollapsed: input.thinkingCollapsed,
@@ -727,7 +773,6 @@ export default function App() {
       requirement: canRepairWithText ? prompt : current.requirement,
       compilerOutput: diagnostics,
       renderEvidence: evidence,
-      proposedCode: "",
       review: null,
       stl: "",
       views: emptyViews(),
@@ -832,9 +877,6 @@ export default function App() {
         return;
       }
       const activeProject = projectRef.current;
-      if (activeProject.proposedCode.trim()) {
-        throw new Error(tr("pendingRevisionActionHint"));
-      }
       const failureRetentionMessage = activeProject.referenceImages.length
         ? tr("referenceImagesNotRetainedPreviousRemain")
         : tr("referenceImagesNotRetained");
@@ -874,7 +916,6 @@ export default function App() {
             requirement: prompt,
             originalRequirement: "",
             currentCode: "",
-            proposedCode: "",
             compilerOutput: "",
             renderEvidence: null,
             review: null,
@@ -924,9 +965,6 @@ export default function App() {
       if (!activeProject.requirement.trim()) {
         throw new Error(tr("missingRequirement"));
       }
-      if (activeProject.proposedCode.trim()) {
-        throw new Error(tr("pendingRevisionActionHint"));
-      }
       if (
         activeProject.currentCode.trim() &&
         hasCleanRenderedViews(activeProject) &&
@@ -966,7 +1004,6 @@ export default function App() {
           requirement: prompt,
           originalRequirement: "",
           currentCode: "",
-          proposedCode: "",
           compilerOutput: "",
           renderEvidence: null,
           review: null,
@@ -1027,7 +1064,6 @@ export default function App() {
               requirement: "",
               originalRequirement,
               currentCode: "",
-              proposedCode: "",
               review: null,
               stl: "",
               views: emptyViews(),
@@ -1067,6 +1103,13 @@ export default function App() {
         if (!workflowIsCurrent(workflow) || !textStreamIsCurrent(textStream)) {
           throw new StaleTextStreamError();
         }
+        // The composer was cleared when the request started; put the prompt
+        // back so a failed generation can be retried without retyping.
+        setProject((current) =>
+          workflowIsCurrent(workflow, current) && !current.requirement.trim()
+            ? { ...current, requirement: originalRequirement, updatedAt: new Date().toISOString() }
+            : current
+        );
         if (shouldAutoRun) {
           ensureAutoRunCurrent(autoRunToken);
         }
@@ -1083,7 +1126,6 @@ export default function App() {
           ? {
               ...current,
               currentCode: code,
-              proposedCode: "",
               review: null,
               stl: "",
               views: emptyViews(),
@@ -1183,7 +1225,6 @@ export default function App() {
           ? {
               ...current,
               currentCode: finalCode,
-              proposedCode: "",
               review: null,
               views: rendered.views,
               stl: rendered.stl,
@@ -1271,7 +1312,6 @@ export default function App() {
               ...current,
               currentCode: finalCode,
               review: null,
-              proposedCode: "",
               views: rendered.views,
               stl: rendered.stl,
               compilerOutput: `${rendered.diagnostics}\n${tr("compiledDraft")}`,
@@ -1322,7 +1362,8 @@ export default function App() {
     const hasCompleteViews = result.views ? allViewsRendered(result.views) : false;
     const diagnostics = addDraftRenderTimeoutGuidance(
       addUnsafeRenderDiagnosticsGuidance(
-        addIncompleteViewGuidance(result.diagnostics, result, viewCount)
+        addIncompleteViewGuidance(result.diagnostics, result, viewCount),
+        tr("unsafeDiagnosticsGuidance")
       )
     );
     const hasUnsafeDiagnostics = hasUnsafeRenderDiagnostics(diagnostics);
@@ -1392,7 +1433,10 @@ export default function App() {
       const renderEvidence = rendered.evidence;
       const repairPrompt = buildDiagnosticFixPrompt(input.originalRequirement, diagnostics);
       const codeEventId = crypto.randomUUID();
-      const title = `${tr("compilerRepairStarted")} ${attempt} of ${MAX_COMPILER_REPAIR_ATTEMPTS}`;
+      const title = formatMessage(tr("compilerRepairProgress"), {
+        current: attempt,
+        total: MAX_COMPILER_REPAIR_ATTEMPTS
+      });
       const textStream = beginTextStream({
         projectId: projectRef.current.id,
         eventId: codeEventId,
@@ -1406,7 +1450,6 @@ export default function App() {
           : {
               ...current,
               currentCode: code,
-              proposedCode: "",
               review: null,
               stl: "",
               views: emptyViews(),
@@ -1517,7 +1560,6 @@ export default function App() {
           : {
               ...current,
               currentCode: code,
-              proposedCode: "",
               review: null,
               stl: "",
               views: emptyViews(),
@@ -1575,16 +1617,24 @@ export default function App() {
     renderEvidence: RenderEvidence | null;
     strictConfidence: boolean;
     autoRunToken?: number;
+    workflow?: WorkflowIdentity;
   }) {
     if (!allViewsRendered(input.views) || !renderEvidenceIsClean(input.renderEvidence)) {
       throw new Error(tr("compileBeforeReview"));
     }
     requireVisionApiKey();
+    // If the user edits the requirement while the review runs, their text
+    // must survive; only an unchanged baseline is replaced by the
+    // correction prompt.
+    const baselineRequirement = projectRef.current.requirement;
+    const startedEventId = crypto.randomUUID();
     appendRunEvent(createRunEvent({
+      id: startedEventId,
       role: "review",
       title: tr("reviewStarted"),
       content: tr("reviewStarted"),
-      status: "active"
+      status: "active",
+      kind: "review-started"
     }));
     let reviewed: Awaited<ReturnType<typeof reviewViews>>;
     try {
@@ -1600,6 +1650,13 @@ export default function App() {
         strictConfidence: input.strictConfidence
       });
     } catch (caught) {
+      setProject((current) => ({
+        ...current,
+        runEvents: current.runEvents.map((event) =>
+          event.id === startedEventId ? { ...event, status: "error" as const } : event
+        ),
+        updatedAt: new Date().toISOString()
+      }));
       if (input.autoRunToken !== undefined) {
         ensureAutoRunCurrent(input.autoRunToken);
       }
@@ -1609,51 +1666,63 @@ export default function App() {
     if (input.autoRunToken !== undefined) {
       ensureAutoRunCurrent(input.autoRunToken);
     }
-    setProject((current) => ({
-      ...current,
-      originalRequirement: current.originalRequirement.trim()
-        ? current.originalRequirement
-        : input.originalRequirement,
-      review,
-      requirement: review.correctionPrompt || current.requirement,
-      promptTrace: [...current.promptTrace, reviewTrace],
-      compilerOutput: tr("visionComplete"),
-      runEvents: [
-        ...current.runEvents.filter((event) => event.title !== tr("reviewStarted")),
-        createRunEvent({
-          role: "review",
-          title: tr("visionComplete"),
-          content: tr("visionComplete"),
-          status: "complete"
-        }),
-        createRunEvent({
-          role: "review",
-          title: tr("visualReview"),
-          content: review.summary,
-          review,
-          status: "complete"
-        }),
-        createRunEvent({
-          role: "review",
-          title: tr("correctionPrompt"),
-          content: review.correctionPrompt,
-          status: "complete"
-        })
-      ],
-      updatedAt: new Date().toISOString(),
-      iterations: [
-        ...current.iterations,
-        {
-          id: crypto.randomUUID(),
-          createdAt: new Date().toISOString(),
-          requirement: current.requirement,
-          code: input.code,
-          modelId: current.visionModelId,
-          status: "reviewed",
-          reviewSummary: review.summary
-        }
-      ]
-    }));
+    ensureWorkflowCurrent(input.workflow);
+    setProject((current) => {
+      if (input.workflow && !workflowIsCurrent(input.workflow, current)) {
+        return current;
+      }
+      return {
+        ...current,
+        originalRequirement: current.originalRequirement.trim()
+          ? current.originalRequirement
+          : input.originalRequirement,
+        review,
+        requirement:
+          current.requirement === baselineRequirement
+            ? review.correctionPrompt || current.requirement
+            : current.requirement,
+        promptTrace: [...current.promptTrace, reviewTrace],
+        compilerOutput: tr("visionComplete"),
+        runEvents: [
+          ...current.runEvents.filter((event) => event.id !== startedEventId),
+          createRunEvent({
+            role: "review",
+            title: tr("visionComplete"),
+            content: tr("visionComplete"),
+            status: "complete",
+            kind: "notice"
+          }),
+          createRunEvent({
+            role: "review",
+            title: tr("visualReview"),
+            content: review.summary,
+            review,
+            status: "complete",
+            kind: "review"
+          }),
+          createRunEvent({
+            role: "review",
+            title: tr("correctionPrompt"),
+            content: review.correctionPrompt,
+            status: "complete",
+            kind: "correction-prompt"
+          })
+        ],
+        updatedAt: new Date().toISOString(),
+        iterations: [
+          ...current.iterations,
+          {
+            id: crypto.randomUUID(),
+            createdAt: new Date().toISOString(),
+            requirement: current.requirement,
+            code: input.code,
+            modelId: current.visionModelId,
+            status: "reviewed" as const,
+            reviewSummary: review.summary
+          }
+        ]
+      };
+    });
     return review;
   }
 
@@ -1708,7 +1777,6 @@ export default function App() {
         setProject((current) => ({
           ...current,
           currentCode: checkpoint.code,
-          proposedCode: "",
           review: checkpoint.review,
           requirement: checkpoint.review.correctionPrompt || current.requirement,
           views: checkpoint.views,
@@ -1769,7 +1837,10 @@ export default function App() {
         review
       };
       usedAutoIterations += 1;
-      const autoIterationTitle = `${tr("autoIterationStarted")} ${usedAutoIterations} of ${iterationLimit}`;
+      const autoIterationTitle = formatMessage(tr("autoIterationProgress"), {
+        current: usedAutoIterations,
+        total: iterationLimit
+      });
       appendRunEvent(createRunEvent({
         role: "assistant",
         title: autoIterationTitle,
@@ -1781,7 +1852,6 @@ export default function App() {
       setProject((current) => ({
         ...current,
         currentCode: "",
-        proposedCode: "",
         review: null,
         views: emptyViews(),
         stl: "",
@@ -1846,7 +1916,6 @@ export default function App() {
       setProject((current) => ({
         ...current,
         currentCode: code,
-        proposedCode: "",
         review: null,
         stl: "",
         views: emptyViews(),
@@ -1910,7 +1979,6 @@ export default function App() {
       setProject((current) => ({
         ...current,
         currentCode: code,
-        proposedCode: "",
         review: null,
         views: rendered.views,
         stl: rendered.stl,
@@ -1962,12 +2030,14 @@ export default function App() {
   async function handleReview() {
     await runSafely("reviewing", async () => {
       const originalRequirement = originalRequirementFor(project);
+      const workflow = beginWorkflow(projectRef.current.id);
       await reviewRenderedDraft({
         originalRequirement,
         code: project.currentCode,
         views: project.views,
         renderEvidence: project.renderEvidence,
-        strictConfidence: false
+        strictConfidence: false,
+        workflow
       });
     });
   }
@@ -1994,7 +2064,6 @@ export default function App() {
       setProject((current) => ({
         ...current,
         currentCode: "",
-        proposedCode: "",
         review: null,
         views: emptyViews(),
         stl: "",
@@ -2070,7 +2139,6 @@ export default function App() {
           ? {
               ...current,
               currentCode: code,
-              proposedCode: "",
               review: null,
               views: emptyViews(),
               stl: "",
@@ -2144,7 +2212,6 @@ export default function App() {
           ? {
               ...current,
               currentCode: finalCode,
-              proposedCode: "",
               review: null,
               views: rendered.views,
               stl: rendered.stl,
@@ -2193,7 +2260,6 @@ export default function App() {
       setProject((current) => ({
         ...current,
         currentCode: "",
-        proposedCode: "",
         review: null,
         views: emptyViews(),
         stl: "",
@@ -2273,7 +2339,6 @@ export default function App() {
           ? {
               ...current,
               currentCode: code,
-              proposedCode: "",
               review: null,
               views: emptyViews(),
               stl: "",
@@ -2368,7 +2433,6 @@ export default function App() {
           ? {
               ...current,
               currentCode: finalCode,
-              proposedCode: "",
               review: null,
               views: rendered.views,
               stl: rendered.stl,
@@ -2426,7 +2490,8 @@ export default function App() {
       const hasCompleteViews = result.views ? allViewsRendered(result.views) : false;
       const diagnostics = addFinalExportTimeoutGuidance(
         addUnsafeRenderDiagnosticsGuidance(
-          addIncompleteViewGuidance(result.diagnostics, result, viewCount)
+          addIncompleteViewGuidance(result.diagnostics, result, viewCount),
+          tr("unsafeDiagnosticsGuidance")
         )
       );
       const hasUnsafeDiagnostics = hasUnsafeRenderDiagnostics(diagnostics);
@@ -2471,79 +2536,6 @@ export default function App() {
         updatedAt: new Date().toISOString()
       }));
     });
-  }
-
-  async function handleAcceptRevision() {
-    clearPromptFieldDraft();
-    await runSafely("compiling", async () => {
-      const accepted = acceptRevision(project);
-      const workflow = beginWorkflow(accepted.id);
-      setProject(accepted);
-      if (!accepted.currentCode.trim()) {
-        throw new Error(tr("missingCode"));
-      }
-      const originalRequirement = originalRequirementFor(accepted);
-      let finalCode = accepted.currentCode;
-      let rendered = await compileDraftCode(accepted.currentCode, undefined, workflow);
-      ensureWorkflowCurrent(workflow);
-      if (!rendered.ok || !rendered.views || !rendered.stl) {
-        const repaired = await repairDraftCompileIfPossible({
-          code: accepted.currentCode,
-          rendered,
-          originalRequirement,
-          workflow
-        });
-        finalCode = repaired.code;
-        rendered = repaired.rendered;
-        ensureWorkflowCurrent(workflow);
-      }
-      if (!rendered.ok || !rendered.views || !rendered.stl) {
-        ensureWorkflowCurrent(workflow);
-        setProject((current) => ({
-          ...(workflowIsCurrent(workflow, current)
-            ? {
-                ...current,
-                ...diagnosticFixPatch(current, rendered.diagnostics, rendered.evidence),
-                promptTrace: [...current.promptTrace, rendered.trace],
-                updatedAt: new Date().toISOString()
-              }
-            : current)
-        }));
-        throw new Error(rendered.diagnostics);
-      }
-      ensureWorkflowCurrent(workflow);
-      setProject((current) => ({
-        ...(workflowIsCurrent(workflow, current)
-          ? {
-              ...current,
-              currentCode: finalCode,
-              views: rendered.views,
-              stl: rendered.stl,
-              review: null,
-              compilerOutput: `${rendered.diagnostics}\n${tr("compiledDraft")}`,
-              renderEvidence: rendered.evidence,
-              promptTrace: [...current.promptTrace, rendered.trace],
-              updatedAt: new Date().toISOString(),
-              iterations: [
-                ...current.iterations,
-                {
-                  id: crypto.randomUUID(),
-                  createdAt: new Date().toISOString(),
-                  requirement: current.requirement,
-                  code: finalCode,
-                  modelId: current.codeModelId,
-                  status: "compiled"
-                }
-              ]
-            }
-          : current)
-      }));
-    });
-  }
-
-  function handleRejectRevision() {
-    clearPromptFieldDraft();
-    setProject((current) => rejectRevision(current));
   }
 
   function handleNewModel() {
@@ -2592,7 +2584,6 @@ export default function App() {
     setProject((current) => ({
       ...current,
       currentCode: code,
-      proposedCode: "",
       review: null,
       stl: "",
       views: emptyViews(),
@@ -2606,7 +2597,9 @@ export default function App() {
     cancelWorkflows();
     clearReferenceImages();
     clearPromptFieldDraft();
-    const file = event.target.files?.[0];
+    const file = event.currentTarget.files?.[0];
+    // Reset so importing the same file twice still fires a change event.
+    event.currentTarget.value = "";
     if (!file) {
       return;
     }
@@ -2652,7 +2645,6 @@ export default function App() {
                       max={MAX_TARGET_CONFIDENCE_PERCENT}
                       min={MIN_TARGET_CONFIDENCE_PERCENT}
                       onChange={(event) => updateTargetConfidence(Number(event.target.value))}
-                      onInput={(event) => updateTargetConfidence(Number(event.currentTarget.value))}
                       step={1}
                       type="range"
                       value={targetConfidencePercent}
@@ -2668,7 +2660,6 @@ export default function App() {
                     max={MAX_AUTO_ITERATION_LIMIT}
                     min={MIN_AUTO_ITERATION_LIMIT}
                     onChange={(event) => updateAutoIterationLimit(Number(event.target.value))}
-                    onInput={(event) => updateAutoIterationLimit(Number(event.currentTarget.value))}
                     step={1}
                     type="number"
                     value={autoIterationLimit}
@@ -2747,8 +2738,8 @@ export default function App() {
               </label>
               <button
                 className="projectToolButton"
-                disabled={hasPendingRevision || controlsLocked}
-                title={hasPendingRevision ? tr("exportProjectPending") : tr("exportProject")}
+                disabled={controlsLocked}
+                title={tr("exportProject")}
                 onClick={() =>
                   downloadText("ai-openscad-project.json", exportProject(project))
                 }
@@ -2795,7 +2786,6 @@ export default function App() {
             compilerOutput={compilerOutputForDisplay}
             error={error}
             locale={locale}
-            pendingRevision={hasPendingRevision}
             project={project}
           />
           <section className="agentComposer">
@@ -2817,7 +2807,6 @@ export default function App() {
                 ref={requirementInputRef}
                 value={project.requirement}
                 onChange={(event) => handleRequirementInput(event.target.value)}
-                onInput={(event) => handleRequirementInput(event.currentTarget.value)}
                 placeholder={tr("requirementPlaceholder")}
               />
             )}
@@ -2853,9 +2842,6 @@ export default function App() {
                   <span>{tr("optimizePrompt")}</span>
                 </button>
               ) : null}
-              {hasPendingRevision ? (
-                <p className="pendingActionHint">{tr("pendingRevisionActionHint")}</p>
-              ) : null}
               {hasDiagnosticFix ? (
                 <button className="primaryAction" disabled={isBusy} onClick={handleDiagnosticFix}>
                   <RefreshCw size={16} />
@@ -2868,13 +2854,13 @@ export default function App() {
                   {tr("generate")}
                 </button>
               ) : null}
-              {!hasPendingRevision && !hasRenderedViews && project.currentCode.trim() ? (
+              {!hasRenderedViews && project.currentCode.trim() ? (
                 <button className="secondaryAction" disabled={isBusy} onClick={handleCompile}>
                   <Play size={16} />
                   {tr("rerender")}
                 </button>
               ) : null}
-              {!hasPendingRevision && hasRenderedViews && !project.review ? (
+              {hasRenderedViews && !project.review ? (
                 <>
                   <button className="primaryAction" disabled={isBusy} onClick={handleReview}>
                     <Eye size={16} />
@@ -2894,7 +2880,7 @@ export default function App() {
                   </button>
                 </>
               ) : null}
-              {!hasPendingRevision && hasCurrentReview ? (
+              {hasCurrentReview ? (
                 <>
                   <button className="primaryAction" disabled={isBusy} onClick={handleIterateAgain}>
                     <RefreshCw size={16} />
@@ -2934,60 +2920,6 @@ export default function App() {
             />
           </details>
 
-          {project.proposedCode ? (
-            <div className="revisionArea revisionCard">
-              <div className="panelHeader compact">
-                <h2>{tr("proposedRevision")}</h2>
-                <div className="inlineActions">
-                  <button
-                    className="smallButton success"
-                    disabled={isBusy || controlsLocked}
-                    onClick={handleAcceptRevision}
-                  >
-                    <Check size={15} />
-                    {tr("accept")}
-                  </button>
-                  <button
-                    className="smallButton"
-                    disabled={isBusy || controlsLocked}
-                    onClick={handleRejectRevision}
-                  >
-                    <X size={15} />
-                    {tr("reject")}
-                  </button>
-                </div>
-              </div>
-              <p>
-                {project.review
-                  ? `${tr("visualReview")}: ${project.review.summary}`
-                  : tr("generatedCode")}
-              </p>
-              <p className="pendingRevisionNotice">{tr("pendingRevisionNotice")}</p>
-              {project.review?.issues.length ? (
-                <ul>
-                  {project.review.issues.map((issue) => (
-                    <li key={issue}>{issue}</li>
-                  ))}
-                </ul>
-              ) : null}
-              <details className="codeDisclosure revisionCodeDisclosure">
-                <summary>
-                  <span>
-                    <Code2 size={17} />
-                    {tr("codeDetails")}
-                  </span>
-                  <small>{tr("proposedRevision")}</small>
-                </summary>
-                <textarea
-                  className="codeEditor proposed"
-                  disabled={busy === "draftingReference"}
-                  spellCheck={false}
-                  value={project.proposedCode}
-                  onChange={(event) => updateProject({ proposedCode: event.target.value })}
-                />
-              </details>
-            </div>
-          ) : null}
         </section>
 
         <aside className="panel resultPanel">
@@ -3058,16 +2990,18 @@ export default function App() {
 }
 
 function ApiKeyHint(props: { locale: Locale }) {
+  const tooltipId = useId();
   return (
     <span className="keyHelp">
       <button
+        aria-describedby={tooltipId}
         aria-label={t(props.locale, "noApiKey")}
         className="keyHelpButton"
         type="button"
       >
         {t(props.locale, "noApiKey")}
       </button>
-      <span className="keyHelpTooltip" role="tooltip">
+      <span className="keyHelpTooltip" id={tooltipId} role="tooltip">
         <strong>{t(props.locale, "inviteTitle")}</strong>
         <span>{t(props.locale, "inviteDescription")}</span>
         <img
@@ -3239,21 +3173,18 @@ function AgentRunPanel(props: {
   compilerOutput: string;
   error: string;
   locale: Locale;
-  pendingRevision: boolean;
   project: ProjectState;
 }) {
   const [openCodeEvents, setOpenCodeEvents] = useState<Record<string, boolean>>({});
   const [openThinkingEvents, setOpenThinkingEvents] = useState<Record<string, boolean>>({});
   const events = props.project.runEvents;
   return (
-    <section className="agentRun" aria-live="polite">
+    <section className="agentRun">
       <div className="panelHeader">
         <h2>{t(props.locale, "agentRun")}</h2>
-        <span>
+        <span aria-live="polite">
           {props.busy === "idle"
-            ? props.pendingRevision
-              ? t(props.locale, "revisionPending")
-              : t(props.locale, "ready")
+            ? t(props.locale, "ready")
             : busyStatusLabel(props.locale, props.busy)}
         </span>
       </div>
@@ -3269,13 +3200,20 @@ function AgentRunPanel(props: {
           const codeOpen = Boolean(openCodeEvents[event.id]);
           const thinkingOpen =
             event.status === "active" ? true : Boolean(openThinkingEvents[event.id]);
-          const eventReview =
-            event.title === t(props.locale, "visualReview")
-              ? event.review ?? props.project.review
-              : null;
+          // Prefer the durable kind field; fall back to localized titles only
+          // for events persisted before kinds existed.
+          const isReviewEvent = event.kind
+            ? event.kind === "review"
+            : event.title === t(props.locale, "visualReview");
+          const isCorrectionPromptEvent = event.kind
+            ? event.kind === "correction-prompt"
+            : event.title === t(props.locale, "correctionPrompt");
+          const eventReview = isReviewEvent
+            ? event.review ?? props.project.review
+            : null;
           const showEventContent =
             Boolean(event.content) &&
-            event.title !== t(props.locale, "correctionPrompt") &&
+            !isCorrectionPromptEvent &&
             event.content !== event.title &&
             (!event.content.startsWith(event.title) ||
               event.title === t(props.locale, "autoRunRollbackTitle"));
@@ -3323,8 +3261,8 @@ function AgentRunPanel(props: {
               {eventReview ? (
                 <>
                   <ul>
-                    {eventReview.issues.map((issue) => (
-                      <li key={issue}>{issue}</li>
+                    {eventReview.issues.map((issue, index) => (
+                      <li key={`${event.id}-issue-${index}`}>{issue}</li>
                     ))}
                   </ul>
                   <p className="confidence">
@@ -3333,7 +3271,7 @@ function AgentRunPanel(props: {
                   </p>
                 </>
               ) : null}
-              {event.title === t(props.locale, "correctionPrompt") ? (
+              {isCorrectionPromptEvent ? (
                 <div className="correctionPromptPreview">
                   <span>{t(props.locale, "correctionPrompt")}</span>
                   <p>{event.content}</p>
