@@ -4564,3 +4564,44 @@ test("rerender remains available after code exists without rendered views", asyn
   await page.locator(".controlPanel").getByRole("button", { name: "New model" }).click();
   await expect(page.locator('.workflowStage[data-stage="render"]')).not.toContainText("Error");
 });
+
+test("selecting DeepSeek as the code model persists to newly created models", async ({
+  page
+}) => {
+  await page.addInitScript((storedProject) => {
+    localStorage.setItem("ai-openscad.llm-api-key", "sk-llm");
+    localStorage.setItem(
+      "ai-openscad.project",
+      JSON.stringify({
+        ...storedProject,
+        currentCode: "",
+        review: null,
+        stl: "",
+        views: Object.fromEntries(Object.keys(storedProject.views).map((k) => [k, ""])),
+        renderEvidence: null,
+        promptTrace: []
+      })
+    );
+  }, project);
+
+  await page.goto("/");
+
+  const codePicker = page.getByRole("group", { name: "LLM Model" });
+  const deepseekButton = codePicker.getByRole("button", { name: "DeepSeek V4 Pro" });
+  await deepseekButton.click();
+  await expect(deepseekButton).toHaveAttribute("aria-pressed", "true");
+
+  // A brand-new model should keep DeepSeek instead of resetting to MiMo.
+  await page.locator(".controlPanel").getByRole("button", { name: "New model" }).click();
+  await expect(page.locator(".agentInput")).toHaveValue("");
+  await expect(
+    page.getByRole("group", { name: "LLM Model" }).getByRole("button", { name: "DeepSeek V4 Pro" })
+  ).toHaveAttribute("aria-pressed", "true");
+
+  // Preference also survives a reload.
+  await page.reload();
+  await page.locator(".controlPanel").getByRole("button", { name: "New model" }).click();
+  await expect(
+    page.getByRole("group", { name: "LLM Model" }).getByRole("button", { name: "DeepSeek V4 Pro" })
+  ).toHaveAttribute("aria-pressed", "true");
+});

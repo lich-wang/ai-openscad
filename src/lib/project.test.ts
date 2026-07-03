@@ -4,7 +4,10 @@ import {
   exportProject,
   importProject,
   loadProjectWorkspace,
+  loadPreferredCodeModel,
   saveApiKey,
+  savePreferredCodeModel,
+  savePreferredVisionModel,
   saveProject
 } from "./project";
 
@@ -316,6 +319,32 @@ describe("project persistence", () => {
     expect(storedProjects[0].referenceImages).toEqual([]);
     expect(storedProjects[1].referenceImages).toEqual([]);
     expect(JSON.stringify(storedProjects)).not.toContain("old-reference-secret");
+  });
+
+  it("defaults new projects to MiMo when no model preference is stored", () => {
+    const project = createEmptyProject();
+    expect(project.codeModelId).toBe("mimo-v2.5");
+    expect(project.visionModelId).toBe("mimo-v2.5");
+  });
+
+  it("remembers the last selected models for new projects", () => {
+    savePreferredCodeModel("deepseek-v4");
+    savePreferredVisionModel("mimo-v2.5");
+
+    expect(loadPreferredCodeModel()).toBe("deepseek-v4");
+    const project = createEmptyProject();
+    expect(project.codeModelId).toBe("deepseek-v4");
+    expect(project.visionModelId).toBe("mimo-v2.5");
+  });
+
+  it("ignores unknown or invalid stored model preferences", () => {
+    savePreferredCodeModel("not-a-real-model");
+    localStorage.setItem("ai-openscad.preferred-vision-model", "also-bogus");
+
+    expect(loadPreferredCodeModel()).toBe("mimo-v2.5");
+    const project = createEmptyProject();
+    expect(project.codeModelId).toBe("mimo-v2.5");
+    expect(project.visionModelId).toBe("mimo-v2.5");
   });
 
   it("coerces malformed imported fields instead of crashing later renders", () => {

@@ -284,6 +284,10 @@ three columns:
   automatic iteration count before starting **Generate** or **Iterate Again**.
   These controls affect only future user-started runs; changing them while idle
   does not mutate existing review conclusions or prompt traces.
+- The code model and vision model selections are remembered. Selecting a model
+  updates a stored preference, and a newly created model defaults to the last
+  selected code and vision models instead of resetting to the built-in default.
+  Existing projects keep whatever model they were saved with.
 - Token estimates and duplicate ready status badges are hidden from the normal
   workbench surface to keep more room for the model list and the multi-angle
   views.

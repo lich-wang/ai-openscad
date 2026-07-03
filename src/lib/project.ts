@@ -1,3 +1,4 @@
+import { CODE_MODEL_PRESETS, VISION_MODEL_PRESETS } from "./models";
 import {
   createEmptyViewSet,
   normalizeViewSet,
@@ -99,6 +100,10 @@ export interface ProjectState {
 const API_KEY_STORAGE_KEY = "ai-openscad.api-key";
 const LLM_API_KEY_STORAGE_KEY = "ai-openscad.llm-api-key";
 const VISION_API_KEY_STORAGE_KEY = "ai-openscad.vision-api-key";
+const CODE_MODEL_PREF_KEY = "ai-openscad.preferred-code-model";
+const VISION_MODEL_PREF_KEY = "ai-openscad.preferred-vision-model";
+const DEFAULT_CODE_MODEL = "mimo-v2.5";
+const DEFAULT_VISION_MODEL = "mimo-v2.5";
 const PROJECT_STORAGE_KEY = "ai-openscad.project";
 const PROJECTS_STORAGE_KEY = "ai-openscad.projects";
 const CORRUPT_PROJECTS_BACKUP_KEY = "ai-openscad.projects.corrupt";
@@ -109,14 +114,42 @@ export interface ProjectWorkspace {
   projects: ProjectState[];
 }
 
+function isKnownModelId(id: string, presets: { id: string }[]): boolean {
+  return presets.some((preset) => preset.id === id);
+}
+
+// The user's last model choice is remembered so a new model keeps using it
+// (e.g. pick DeepSeek once, and new models default to DeepSeek).
+export function savePreferredCodeModel(modelId: string): void {
+  if (isKnownModelId(modelId, CODE_MODEL_PRESETS)) {
+    localStorage.setItem(CODE_MODEL_PREF_KEY, modelId);
+  }
+}
+
+export function loadPreferredCodeModel(): string {
+  const stored = localStorage.getItem(CODE_MODEL_PREF_KEY) ?? "";
+  return isKnownModelId(stored, CODE_MODEL_PRESETS) ? stored : DEFAULT_CODE_MODEL;
+}
+
+export function savePreferredVisionModel(modelId: string): void {
+  if (isKnownModelId(modelId, VISION_MODEL_PRESETS)) {
+    localStorage.setItem(VISION_MODEL_PREF_KEY, modelId);
+  }
+}
+
+export function loadPreferredVisionModel(): string {
+  const stored = localStorage.getItem(VISION_MODEL_PREF_KEY) ?? "";
+  return isKnownModelId(stored, VISION_MODEL_PRESETS) ? stored : DEFAULT_VISION_MODEL;
+}
+
 export function createEmptyProject(): ProjectState {
   return {
     id: crypto.randomUUID(),
     title: "Untitled OpenSCAD Project",
     requirement: "",
     originalRequirement: "",
-    codeModelId: "mimo-v2.5",
-    visionModelId: "mimo-v2.5",
+    codeModelId: loadPreferredCodeModel(),
+    visionModelId: loadPreferredVisionModel(),
     currentCode: "",
     compilerOutput: "",
     renderEvidence: null,

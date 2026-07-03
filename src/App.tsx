@@ -50,6 +50,8 @@ import {
   loadLlmApiKey,
   loadProjectWorkspace,
   loadVisionApiKey,
+  savePreferredCodeModel,
+  savePreferredVisionModel,
   saveLlmApiKey,
   saveProject,
   saveVisionApiKey,
@@ -2706,7 +2708,10 @@ export default function App() {
                 hint={<InfoHint locale={locale} text={tr("hintLlmModel")} />}
                 models={CODE_MODEL_PRESETS}
                 value={project.codeModelId}
-                onChange={(codeModelId) => updateProject({ codeModelId })}
+                onChange={(codeModelId) => {
+                  savePreferredCodeModel(codeModelId);
+                  updateProject({ codeModelId });
+                }}
                 disabled={controlsLocked}
               />
 
@@ -2735,7 +2740,10 @@ export default function App() {
                 hint={<InfoHint locale={locale} text={tr("hintVisionModel")} />}
                 models={VISION_MODEL_PRESETS}
                 value={project.visionModelId}
-                onChange={(visionModelId) => updateProject({ visionModelId })}
+                onChange={(visionModelId) => {
+                  savePreferredVisionModel(visionModelId);
+                  updateProject({ visionModelId });
+                }}
                 disabled={controlsLocked}
               />
             </div>
