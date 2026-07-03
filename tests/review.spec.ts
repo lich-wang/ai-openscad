@@ -2234,6 +2234,97 @@ test("generation streams code and automatically renders draft views", async ({
   );
 });
 
+test("streaming keeps the thinking and live code panes pinned to their own bottom", async ({
+  page
+}) => {
+  await page.addInitScript((storedProject) => {
+    localStorage.setItem("ai-openscad.llm-api-key", "sk-llm");
+    localStorage.setItem("ai-openscad.vision-api-key", "sk-vision");
+    localStorage.setItem(
+      "ai-openscad.project",
+      JSON.stringify({
+        ...storedProject,
+        currentCode: "",
+        originalRequirement: "",
+        views: { front: "", back: "", left: "", right: "", top: "", isometric: "" },
+        review: null,
+        promptTrace: []
+      })
+    );
+  }, project);
+
+  // Stream many thinking and code lines slowly so both nested scroll panes
+  // overflow their max-height while generation is still in flight.
+  await page.addInitScript(() => {
+    const originalFetch = window.fetch.bind(window);
+    window.fetch = async (input, init) => {
+      const url = typeof input === "string" ? input : input instanceof Request ? input.url : "";
+      if (url.includes("/api/llm")) {
+        const encoder = new TextEncoder();
+        const event = (delta: Record<string, string>) =>
+          `data: ${JSON.stringify({ choices: [{ delta }] })}\n\n`;
+        return new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              let tick = 0;
+              const push = () => {
+                if (tick < 24) {
+                  controller.enqueue(
+                    encoder.encode(event({ reasoning_content: `思考步骤 ${tick} 保持推理可见。\n` }))
+                  );
+                } else if (tick < 48) {
+                  controller.enqueue(
+                    encoder.encode(event({ content: `line_${tick} = ${tick}; // streamed code\n` }))
+                  );
+                } else {
+                  controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+                  controller.close();
+                  return;
+                }
+                tick += 1;
+                window.setTimeout(push, 40);
+              };
+              push();
+            }
+          }),
+          { status: 200, headers: { "Content-Type": "text/event-stream" } }
+        );
+      }
+      return originalFetch(input, init);
+    };
+  });
+
+  const paneAtBottom = (selector: string) =>
+    page.locator(selector).evaluate((node) => {
+      const el = node as HTMLElement;
+      return el.scrollHeight - el.scrollTop - el.clientHeight < 4;
+    });
+
+  await page.goto("/");
+  await page.getByRole("button", { name: /^Generate$/i }).click();
+
+  // While thinking streams, its pane overflows and must stay at the bottom.
+  const thinkingPre = page.locator(".liveThinkingPreview");
+  await expect(thinkingPre).toBeVisible();
+  await expect
+    .poll(async () =>
+      thinkingPre.evaluate((node) => (node as HTMLElement).scrollHeight > (node as HTMLElement).clientHeight)
+    )
+    .toBe(true);
+  await expect.poll(() => paneAtBottom(".liveThinkingPreview")).toBe(true);
+
+  // Once code starts streaming, the live code pane overflows and must also
+  // stay pinned to the bottom.
+  const codePre = page.locator(".liveCodePreview");
+  await expect(codePre).toBeVisible();
+  await expect
+    .poll(async () =>
+      codePre.evaluate((node) => (node as HTMLElement).scrollHeight > (node as HTMLElement).clientHeight)
+    )
+    .toBe(true);
+  await expect.poll(() => paneAtBottom(".liveCodePreview")).toBe(true);
+});
+
 test("late generation stream chunks after project switch are ignored", async ({ page }) => {
   await page.addInitScript((storedProject) => {
     localStorage.setItem("ai-openscad.llm-api-key", "sk-llm");

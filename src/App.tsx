@@ -3228,12 +3228,19 @@ function AgentRunPanel(props: {
 
   // Follow streaming output (thinking and code tokens) by keeping the
   // timeline pinned to the bottom, but stop following once the user
-  // scrolls up to read something.
+  // scrolls up to read something. The thinking and live-code panes are
+  // their own scroll regions, so pin them to their own bottom too.
   useEffect(() => {
     const timeline = timelineRef.current;
-    if (timeline && stickToBottomRef.current) {
-      timeline.scrollTop = timeline.scrollHeight;
+    if (!timeline || !stickToBottomRef.current) {
+      return;
     }
+    timeline.scrollTop = timeline.scrollHeight;
+    timeline
+      .querySelectorAll<HTMLElement>(".liveThinkingPreview, .liveCodePreview")
+      .forEach((pane) => {
+        pane.scrollTop = pane.scrollHeight;
+      });
   }, [events, props.error, props.busy]);
 
   const handleTimelineScroll = () => {
@@ -3321,7 +3328,9 @@ function AgentRunPanel(props: {
                       <small>{t(props.locale, "thinkingCollapsed")}</small>
                     ) : null}
                   </summary>
-                  <pre>{event.thinking}</pre>
+                  <pre className={event.status === "active" ? "liveThinkingPreview" : undefined}>
+                    {event.thinking}
+                  </pre>
                 </details>
               ) : null}
               {showEventContent ? <p>{event.content}</p> : null}
