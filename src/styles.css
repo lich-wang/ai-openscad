@@ -911,6 +911,93 @@ textarea {
   white-space: pre-wrap;
 }
 
+.printabilitySliceActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.viewerTabs {
+  display: flex;
+  gap: 6px;
+}
+
+.viewerTabs button {
+  background: #eef1f6;
+  border: 1px solid #d7dee8;
+  border-radius: 999px;
+  color: #475467;
+  font-size: 12px;
+  font-weight: 700;
+  min-height: 28px;
+  padding: 4px 12px;
+}
+
+.viewerTabs button[aria-selected="true"] {
+  background: #2f8f83;
+  border-color: #2f8f83;
+  color: #ffffff;
+}
+
+.viewerTabs button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.gcodeSlicePreview {
+  background: #f8fafc;
+  border: 1px solid #d7dee8;
+  border-radius: 6px;
+  display: grid;
+  flex: 0 0 auto;
+  gap: 6px;
+  min-height: 300px;
+  overflow: hidden;
+  padding: 6px;
+  position: relative;
+}
+
+.gcodeSlicePreview .interactivePreviewSurface {
+  border-radius: 4px;
+  min-height: 220px;
+}
+
+.gcodeLayerControl {
+  align-items: center;
+  color: #475467;
+  display: flex;
+  font-size: 12px;
+  gap: 8px;
+}
+
+.gcodeLayerControl input[type="range"] {
+  flex: 1 1 auto;
+}
+
+.gcodeLegend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  font-size: 11px;
+  color: #475467;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.gcodeLegend li {
+  align-items: center;
+  display: inline-flex;
+  gap: 4px;
+}
+
+.gcodeLegendSwatch {
+  border-radius: 2px;
+  display: inline-block;
+  height: 10px;
+  width: 10px;
+}
+
 .smallButton {
   background: #475467;
   min-height: 32px;

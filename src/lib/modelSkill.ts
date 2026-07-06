@@ -14,7 +14,8 @@ export const OPENSCAD_MODELING_SKILL = `
 - Preserve wall thickness and assembly clearance: start with gap = 0.3 to 0.4 mm for sliding fits, larger for rough printers or large parts.
 - Avoid unknown external files, non-manifold geometry, coplanar boolean faces, floating internal surfaces, and zero-thickness walls.
 - Add fillets, chamfers, or rounding to stress points on hooks, handles, clips, hinge arms, and bracket roots.
-- Prefer a broad flat print face, mention print orientation in comments when relevant, and avoid unsupported overhangs beyond about 45 degrees unless supports are expected.
+- Prefer a broad flat print face, mention print orientation in comments when relevant, and avoid unsupported overhangs beyond about 45-50 degrees from vertical.
+- Minimizing support material is an explicit design goal, not just avoiding outright failure: convert blunt horizontal overhangs, shelves, and bridges into chamfered or sloped self-supporting geometry wherever the design intent allows it; round the underside of cantilevers instead of leaving a flat 90-degree ledge; prefer teardrop or vertically-elongated cross-sections over circular ones for horizontal holes.
 - Split oversized or support-heavy parts into printable pieces with alignment features when needed.
 - Echo derived critical dimensions for panels, slots, hinge counts, and clearances when helpful.
 - Design the model so front, top, and right orthographic views reveal the requested features.

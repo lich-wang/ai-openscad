@@ -1,18 +1,23 @@
 import { useEffect, useMemo, useState } from "react";
 import { STLLoader } from "three/examples/jsm/loaders/STLLoader.js";
+import { GcodeSlicePreview } from "./GcodeSlicePreview";
+import { InteractiveStlPreview } from "./InteractiveStlPreview";
 import { downloadText } from "./lib/capture";
-import { type Locale, t } from "./lib/i18n";
+import { parseGcodeToolpath, type GcodeToolpath } from "./lib/gcodeParse";
+import { formatMessage, type Locale, t } from "./lib/i18n";
 import { checkPrintability, type PrintabilityResult } from "./lib/printability";
 import { sliceStlForPrintability, type SliceResult } from "./lib/slice";
 
 interface PrintabilityPanelProps {
   locale: Locale;
   stl: string;
+  onOptimizeForPrintability: (note: string) => void;
 }
 
 type SliceStatus = "idle" | "slicing" | "done";
+type ViewerTab = "model" | "slice";
 
-export function PrintabilityPanel({ locale, stl }: PrintabilityPanelProps) {
+export function PrintabilityPanel({ locale, stl, onOptimizeForPrintability }: PrintabilityPanelProps) {
   const tr = (key: Parameters<typeof t>[1]) => t(locale, key);
 
   const geometryResult = useMemo<PrintabilityResult | null>(() => {
@@ -35,12 +40,25 @@ export function PrintabilityPanel({ locale, stl }: PrintabilityPanelProps) {
   const [sliceStatus, setSliceStatus] = useState<SliceStatus>("idle");
   const [sliceProgress, setSliceProgress] = useState(0);
   const [sliceResult, setSliceResult] = useState<SliceResult | null>(null);
+  const [activeTab, setActiveTab] = useState<ViewerTab>("model");
 
   useEffect(() => {
     setSliceStatus("idle");
     setSliceProgress(0);
     setSliceResult(null);
+    setActiveTab("model");
   }, [stl]);
+
+  const toolpath = useMemo<GcodeToolpath | null>(() => {
+    if (!sliceResult?.ok) {
+      return null;
+    }
+    try {
+      return parseGcodeToolpath(new TextDecoder().decode(sliceResult.gcode));
+    } catch {
+      return null;
+    }
+  }, [sliceResult]);
 
   if (!stl.trim()) {
     return (
@@ -60,7 +78,23 @@ export function PrintabilityPanel({ locale, stl }: PrintabilityPanelProps) {
     });
     setSliceResult(result);
     setSliceStatus("done");
+    if (result.ok) {
+      setActiveTab("slice");
+    }
   }
+
+  function handleOptimizeForPrintability() {
+    if (!toolpath) {
+      return;
+    }
+    const supportPercent = Math.round(toolpath.supportSegmentRatio * 100);
+    onOptimizeForPrintability(
+      formatMessage(tr("optimizeForPrintabilityNoteTemplate"), { percent: supportPercent })
+    );
+  }
+
+  const supportRatio = toolpath?.supportSegmentRatio ?? null;
+  const supportPercentLabel = supportRatio != null ? Math.round(supportRatio * 100) : null;
 
   return (
     <section className="printabilityPanel" aria-label={tr("printability")}>
@@ -90,6 +124,32 @@ export function PrintabilityPanel({ locale, stl }: PrintabilityPanelProps) {
         ) : null}
       </div>
 
+      <div className="viewerTabs" role="tablist">
+        <button
+          aria-selected={activeTab === "model"}
+          onClick={() => setActiveTab("model")}
+          role="tab"
+          type="button"
+        >
+          {tr("modelTab")}
+        </button>
+        <button
+          aria-selected={activeTab === "slice"}
+          disabled={!toolpath}
+          onClick={() => setActiveTab("slice")}
+          role="tab"
+          type="button"
+        >
+          {tr("sliceTab")}
+        </button>
+      </div>
+
+      {activeTab === "model" ? (
+        <InteractiveStlPreview label={tr("interactiveStlPreview")} stl={stl} />
+      ) : (
+        <GcodeSlicePreview label={tr("sliceTab")} locale={locale} toolpath={toolpath} />
+      )}
+
       <div className="printabilitySliceCheck">
         <strong>{tr("sliceSectionTitle")}</strong>
         <button disabled={sliceStatus === "slicing"} onClick={handleRunSliceTest} type="button">
@@ -100,6 +160,16 @@ export function PrintabilityPanel({ locale, stl }: PrintabilityPanelProps) {
           sliceResult.ok ? (
             <div className="printabilitySliceResult" data-outcome="success">
               <PrintabilityBadge ok label={tr("sliceSuccess")} />
+              {supportPercentLabel != null ? (
+                <PrintabilityBadge
+                  ok={supportPercentLabel === 0}
+                  label={
+                    supportPercentLabel === 0
+                      ? tr("sliceNoSupportNeeded")
+                      : `${tr("sliceSupportNeeded")} (~${supportPercentLabel}%)`
+                  }
+                />
+              ) : null}
               <ul className="printabilityStats">
                 <li>
                   {tr("sliceLayerCount")}: {sliceResult.layerCount ?? tr("sliceUnknown")}
@@ -111,18 +181,25 @@ export function PrintabilityPanel({ locale, stl }: PrintabilityPanelProps) {
                   {tr("sliceFilamentVolume")}: {formatVolume(sliceResult.filamentVolumeMm3)}
                 </li>
               </ul>
-              <button
-                onClick={() =>
-                  downloadText(
-                    "ai-openscad-model.gcode",
-                    new TextDecoder().decode(sliceResult.gcode),
-                    "text/x-gcode;charset=utf-8"
-                  )
-                }
-                type="button"
-              >
-                {tr("downloadGcode")}
-              </button>
+              <div className="printabilitySliceActions">
+                <button
+                  onClick={() =>
+                    downloadText(
+                      "ai-openscad-model.gcode",
+                      new TextDecoder().decode(sliceResult.gcode),
+                      "text/x-gcode;charset=utf-8"
+                    )
+                  }
+                  type="button"
+                >
+                  {tr("downloadGcode")}
+                </button>
+                {supportPercentLabel ? (
+                  <button onClick={handleOptimizeForPrintability} type="button">
+                    {tr("optimizeForPrintability")}
+                  </button>
+                ) : null}
+              </div>
             </div>
           ) : (
             <div className="printabilitySliceResult" data-outcome="failure">

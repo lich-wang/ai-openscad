@@ -18,7 +18,6 @@ import {
   useRef,
   useState
 } from "react";
-import { InteractiveStlPreview } from "./InteractiveStlPreview";
 import { PrintabilityPanel } from "./PrintabilityPanel";
 import {
   describeReferenceImages,
@@ -30,7 +29,7 @@ import {
 import {
   downloadText
 } from "./lib/capture";
-import { getBrowserLocale, t, type Locale, type MessageKey } from "./lib/i18n";
+import { formatMessage, getBrowserLocale, t, type Locale, type MessageKey } from "./lib/i18n";
 import {
   CODE_MODEL_PRESETS,
   getModelPreset,
@@ -255,15 +254,6 @@ function writeStoredInteger(key: string, value: number): void {
 
 function formatConfidencePercent(confidence: number): string {
   return `${Math.round(confidence * 100)}%`;
-}
-
-function formatMessage(
-  template: string,
-  values: Record<string, string | number>
-): string {
-  return template.replace(/\{(\w+)\}/g, (match, name: string) =>
-    name in values ? String(values[name]) : match
-  );
 }
 
 function hasUnsafeRenderDiagnostics(diagnostics?: string | null): boolean {
@@ -2957,11 +2947,11 @@ export default function App() {
           <div className="panelHeader">
             <h2>{tr("views")}</h2>
           </div>
-          <InteractiveStlPreview
-            label={tr("interactiveStlPreview")}
+          <PrintabilityPanel
+            locale={locale}
+            onOptimizeForPrintability={handleRequirementInput}
             stl={project.stl}
           />
-          <PrintabilityPanel locale={locale} stl={project.stl} />
           <div className="viewGrid">
             {VIEW_KEYS.map((key) => (
               <ViewImage key={key} label={tr(VIEW_LABEL_KEYS[key])} src={project.views[key]} />

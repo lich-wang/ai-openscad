@@ -157,6 +157,20 @@ export const messages = {
     sliceFilamentVolume: "Filament used (volume)",
     downloadGcode: "Download G-code",
     sliceUnknown: "unknown",
+    modelTab: "Model",
+    sliceTab: "Slice preview",
+    sliceNoGcode: "Run the slice test to see the toolpath preview.",
+    sliceLayerSlider: "Layer",
+    sliceLegendWall: "Walls",
+    sliceLegendSkin: "Skin",
+    sliceLegendFill: "Infill",
+    sliceLegendSupport: "Support",
+    sliceLegendSkirt: "Skirt",
+    sliceSupportNeeded: "Support needed",
+    sliceNoSupportNeeded: "No support needed",
+    optimizeForPrintability: "Optimize for printability",
+    optimizeForPrintabilityNoteTemplate:
+      "The current slice needs support material on about {percent}% of the extruded paths. Reduce unsupported overhangs (steeper than ~45-50 degrees from vertical) by chamfering, sloping, or reorienting the affected geometry, to minimize support material.",
     compiler: "Compiler",
     noCompileOutput: "No compile output yet.",
     noReview: "No review yet.",
@@ -382,6 +396,20 @@ export const messages = {
     sliceFilamentVolume: "耗材用量（体积）",
     downloadGcode: "下载 G-code",
     sliceUnknown: "未知",
+    modelTab: "模型",
+    sliceTab: "切片预览",
+    sliceNoGcode: "运行切片测试后即可查看走线预览。",
+    sliceLayerSlider: "层",
+    sliceLegendWall: "壁",
+    sliceLegendSkin: "顶底皮层",
+    sliceLegendFill: "填充",
+    sliceLegendSupport: "支撑",
+    sliceLegendSkirt: "裙边",
+    sliceSupportNeeded: "需要支撑",
+    sliceNoSupportNeeded: "无需支撑",
+    optimizeForPrintability: "根据切片结果优化打印性",
+    optimizeForPrintabilityNoteTemplate:
+      "当前切片约有 {percent}% 的走线需要支撑材料。请通过倒角、改用坡度过渡或调整朝向，减少陡于垂直方向约 45-50 度的悬空面，从而尽量减少支撑用量。",
     compiler: "编译器",
     noCompileOutput: "还没有编译输出。",
     noReview: "还没有评审。",
@@ -469,4 +497,10 @@ export function getBrowserLocale(): Locale {
 
 export function t(locale: Locale, key: MessageKey): string {
   return messages[locale][key] ?? messages.en[key];
+}
+
+export function formatMessage(template: string, values: Record<string, string | number>): string {
+  return template.replace(/\{(\w+)\}/g, (match, name: string) =>
+    name in values ? String(values[name]) : match
+  );
 }

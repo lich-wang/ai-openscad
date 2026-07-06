@@ -77,7 +77,14 @@ export async function sliceStlForPrintability(
         { key: "machine_gcode_flavor", value: "Marlin" },
         { key: "machine_width", value: String(bedSize.x) },
         { key: "machine_depth", value: String(bedSize.y) },
-        { key: "machine_height", value: String(bedSize.z) }
+        { key: "machine_height", value: String(bedSize.z) },
+        // Enabled unconditionally so the diagnostic reflects every overhang
+        // that would need support, not just the subset a particular real
+        // print profile happens to support; "everywhere" (vs. the default
+        // "buildplate") also catches mid-air overhangs, which is the
+        // worst-case signal we want for a printability check.
+        { key: "support_enable", value: "true" },
+        { key: "support_type", value: "everywhere" }
       ]
     };
     slicer = new CuraWASM(config as never) as unknown as CuraSlicerHandle;
