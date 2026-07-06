@@ -60,15 +60,6 @@ export function PrintabilityPanel({ locale, stl, onOptimizeForPrintability }: Pr
     }
   }, [sliceResult]);
 
-  if (!stl.trim()) {
-    return (
-      <section className="printabilityPanel" aria-label={tr("printability")}>
-        <span>{tr("printability")}</span>
-        <p className="printabilityEmpty">{tr("printabilityNoStl")}</p>
-      </section>
-    );
-  }
-
   async function handleRunSliceTest() {
     setSliceStatus("slicing");
     setSliceProgress(0);
@@ -100,29 +91,33 @@ export function PrintabilityPanel({ locale, stl, onOptimizeForPrintability }: Pr
     <section className="printabilityPanel" aria-label={tr("printability")}>
       <span>{tr("printability")}</span>
 
-      <div className="printabilityGeometryCheck">
-        <strong>{tr("printabilityGeometrySectionTitle")}</strong>
-        {geometryResult ? (
-          <>
-            <PrintabilityBadge ok={geometryResult.watertight} label={tr("printabilityWatertight")} />
-            <PrintabilityBadge ok={geometryResult.manifold} label={tr("printabilityManifold")} />
-            <ul className="printabilityStats">
-              <li>
-                {tr("printabilityTriangleCount")}: {geometryResult.triangleCount}
-              </li>
-              <li>
-                {tr("printabilityOpenEdges")}: {geometryResult.openEdgeCount}
-              </li>
-              <li>
-                {tr("printabilityNonManifoldEdges")}: {geometryResult.nonManifoldEdgeCount}
-              </li>
-              <li>
-                {tr("printabilityDegenerateTriangles")}: {geometryResult.degenerateTriangleCount}
-              </li>
-            </ul>
-          </>
-        ) : null}
-      </div>
+      {stl.trim() ? (
+        <div className="printabilityGeometryCheck">
+          <strong>{tr("printabilityGeometrySectionTitle")}</strong>
+          {geometryResult ? (
+            <>
+              <PrintabilityBadge ok={geometryResult.watertight} label={tr("printabilityWatertight")} />
+              <PrintabilityBadge ok={geometryResult.manifold} label={tr("printabilityManifold")} />
+              <ul className="printabilityStats">
+                <li>
+                  {tr("printabilityTriangleCount")}: {geometryResult.triangleCount}
+                </li>
+                <li>
+                  {tr("printabilityOpenEdges")}: {geometryResult.openEdgeCount}
+                </li>
+                <li>
+                  {tr("printabilityNonManifoldEdges")}: {geometryResult.nonManifoldEdgeCount}
+                </li>
+                <li>
+                  {tr("printabilityDegenerateTriangles")}: {geometryResult.degenerateTriangleCount}
+                </li>
+              </ul>
+            </>
+          ) : null}
+        </div>
+      ) : (
+        <p className="printabilityEmpty">{tr("printabilityNoStl")}</p>
+      )}
 
       <div className="viewerTabs" role="tablist">
         <button
@@ -152,7 +147,7 @@ export function PrintabilityPanel({ locale, stl, onOptimizeForPrintability }: Pr
 
       <div className="printabilitySliceCheck">
         <strong>{tr("sliceSectionTitle")}</strong>
-        <button disabled={sliceStatus === "slicing"} onClick={handleRunSliceTest} type="button">
+        <button disabled={!stl.trim() || sliceStatus === "slicing"} onClick={handleRunSliceTest} type="button">
           {sliceStatus === "slicing" ? `${tr("slicing")} ${sliceProgress}%` : tr("runSliceTest")}
         </button>
 
