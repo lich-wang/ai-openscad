@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import { STLLoader } from "three/examples/jsm/loaders/STLLoader.js";
+import type { GcodeToolpath } from "./gcodeParse";
 import {
   createEmptyViewSet,
   type ViewKey,
@@ -89,6 +90,30 @@ export async function captureOrthographicViews(
   scene.add(new THREE.Mesh(geometry, material));
 
   const maxDimension = Math.max(size.x, size.y, size.z, 20);
+
+  const views = createEmptyViewSet();
+  try {
+    for (const spec of VIEW_CAPTURE_SPECS) {
+      await options.onProgress?.(spec.key);
+      views[spec.key] = renderOrthographicSnapshot(renderer, scene, maxDimension, spec);
+    }
+  } finally {
+    // The renderer is shared; only per-capture GPU resources are released.
+    geometry.dispose();
+    material.dispose();
+  }
+  return views;
+}
+
+// Shared by captureOrthographicViews (mesh) and captureToolpathHighlightViews
+// (support-highlighted toolpath lines): positions an orthographic camera per
+// spec, renders the given scene, and returns a PNG data URL.
+function renderOrthographicSnapshot(
+  renderer: THREE.WebGLRenderer,
+  scene: THREE.Scene,
+  maxDimension: number,
+  spec: ViewCaptureSpec
+): string {
   const camera = new THREE.OrthographicCamera(
     -maxDimension,
     maxDimension,
@@ -97,30 +122,54 @@ export async function captureOrthographicViews(
     0.1,
     maxDimension * 8
   );
+  camera.up.set(...spec.up);
+  camera.position.set(...spec.direction).multiplyScalar(maxDimension * 2.5);
+  camera.lookAt(0, 0, 0);
+  camera.updateProjectionMatrix();
+  renderer.render(scene, camera);
+  return renderer.domElement.toDataURL("image/png");
+}
 
-  const render = (spec: ViewCaptureSpec) => {
-    camera.up.set(...spec.up);
-    camera.position
-      .set(...spec.direction)
-      .multiplyScalar(maxDimension * 2.5);
-    camera.lookAt(0, 0, 0);
-    camera.updateProjectionMatrix();
-    renderer.render(scene, camera);
-    return renderer.domElement.toDataURL("image/png");
-  };
+// Renders a subset of the standard view directions for the support-colored
+// toolpath (see gcodeParse.ts) instead of the mesh, so the vision-review
+// model can be shown where support material concentrates. Only a few views
+// are captured (not all 14) to keep the review payload small.
+export function captureToolpathHighlightViews(
+  toolpath: GcodeToolpath,
+  viewKeys: ViewKey[] = ["front", "right", "isoFrontRightTop"]
+): string[] {
+  if (toolpath.segmentCount === 0) {
+    return [];
+  }
 
-  const views = createEmptyViewSet();
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute("position", new THREE.BufferAttribute(toolpath.positions, 3));
+  geometry.setAttribute("color", new THREE.BufferAttribute(toolpath.colors, 3));
+  geometry.computeBoundingBox();
+  const box = geometry.boundingBox ?? new THREE.Box3();
+  const center = box.getCenter(new THREE.Vector3());
+  const size = box.getSize(new THREE.Vector3());
+  geometry.translate(-center.x, -center.y, -center.z);
+
+  const renderer = getCaptureRenderer();
+  renderer.setClearColor(0xf8fafc, 1);
+
+  const scene = new THREE.Scene();
+  const material = new THREE.LineBasicMaterial({ vertexColors: true });
+  scene.add(new THREE.LineSegments(geometry, material));
+
+  const maxDimension = Math.max(size.x, size.y, size.z, 20);
+  const specsByKey = new Map(VIEW_CAPTURE_SPECS.map((spec) => [spec.key, spec]));
+
   try {
-    for (const spec of VIEW_CAPTURE_SPECS) {
-      await options.onProgress?.(spec.key);
-      views[spec.key] = render(spec);
-    }
+    return viewKeys
+      .map((key) => specsByKey.get(key))
+      .filter((spec): spec is ViewCaptureSpec => Boolean(spec))
+      .map((spec) => renderOrthographicSnapshot(renderer, scene, maxDimension, spec));
   } finally {
-    // The renderer is shared; only per-capture GPU resources are released.
     geometry.dispose();
     material.dispose();
   }
-  return views;
 }
 
 function normalizeDirection(direction: [number, number, number]): [number, number, number] {

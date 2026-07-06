@@ -103,6 +103,47 @@ Review whether the rendered views satisfy the requirement. Focus on geometry, mi
 If original reference images are provided, compare the generated model against their subject shape and structure. Ignore color, printed graphics, decals, surface patterns, and photo lighting unless the user explicitly asked for physical raised or engraved geometry.`;
 }
 
+export function buildSliceReviewSystemPrompt(requirement = ""): string {
+  return `You review a real CuraEngine slice of an OpenSCAD-generated 3D-printable model, shown as toolpath renders from a few angles.
+${buildLanguageInstruction(requirement)}
+In the renders, orange lines are support material the slicer had to add; other colors (walls, skin, infill, skirt) print without support.
+A text summary of where support material concentrates (rough Z-height band and XY side of the model) is provided alongside the images and support percentage.
+Return JSON with keys: summary, issues, correctionPrompt, confidence.
+- issues must be an array of strings, each naming a specific overhang or region that needs support.
+- confidence must be 0 to 1, reflecting confidence that the correctionPrompt will reduce support material without breaking the design intent.
+- correctionPrompt must be a concise, user-editable prompt for the text LLM to revise the current OpenSCAD model to need less support: name the affected region (using the provided location bands/sides and any inferable feature name), and suggest a concrete geometry change such as chamfering, sloping an overhang, reorienting a feature, or splitting the part.
+- correctionPrompt must preserve the original requirement and any dimensions or constraints not related to printability.
+- If support usage is already minimal (well under 10%) or concentrated only in unavoidable areas (e.g. a flat base), say so in summary and issues, and correctionPrompt may state that no change is needed.
+- Do not return OpenSCAD code.`;
+}
+
+export function buildSliceReviewUserPrompt(input: {
+  requirement: string;
+  code: string;
+  supportPercent: number;
+  layerCount: number | null;
+  locationSummaries: string[];
+  imageCount: number;
+}): string {
+  return `Original user requirement:
+${input.requirement}
+
+Current OpenSCAD code:
+\`\`\`scad
+${input.code}
+\`\`\`
+
+Slice diagnostics:
+- Support material: ~${input.supportPercent}% of extruded paths
+- Layer count: ${input.layerCount ?? "unknown"}
+- Support location breakdown:
+${input.locationSummaries.map((line) => `  - ${line}`).join("\n") || "  - No support material detected."}
+
+Toolpath renders provided: ${input.imageCount} (orange = support material)
+
+Review whether support usage can be reduced without changing the design intent. Focus on the located overhang regions above.`;
+}
+
 export function buildReferenceImageSystemPrompt(): string {
   return `You draft target-model prompts for AI OpenSCAD from user-provided reference images.
 ${promptFieldJsonSchemaInstruction()}

@@ -628,13 +628,17 @@ test("desktop workbench keeps controls visible", async ({
     "aria-label",
     "Workflow stages"
   );
-  await expect(page.locator(".workflowStage")).toHaveCount(3);
+  await expect(page.locator(".workflowStage")).toHaveCount(5);
   await expect(page.locator(".workflowStage").nth(0)).toContainText("Code generation");
   await expect(page.locator(".workflowStage").nth(1)).toContainText("Model rendering");
   await expect(page.locator(".workflowStage").nth(2)).toContainText("Model review");
+  await expect(page.locator(".workflowStage").nth(3)).toContainText("Slice");
+  await expect(page.locator(".workflowStage").nth(4)).toContainText("Slice review");
   await expect(page.locator(".workflowStage").nth(0)).toContainText("Complete");
   await expect(page.locator(".workflowStage").nth(1)).toContainText("Complete");
   await expect(page.locator(".workflowStage").nth(2)).toContainText("Complete");
+  await expect(page.locator(".workflowStage").nth(3)).toContainText("Waiting");
+  await expect(page.locator(".workflowStage").nth(4)).toContainText("Waiting");
   await expect(page.locator(".topbarActions")).toHaveCount(0);
   await expect(page.locator(".projectTools").getByText("Project files")).toBeVisible();
   await expect(page.locator(".agentComposer").getByText("Draft preview uses low precision")).toBeVisible();

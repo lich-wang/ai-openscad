@@ -12,6 +12,13 @@ export interface VisionReview {
   confidence: number;
 }
 
+export interface SliceMetadata {
+  layerCount: number | null;
+  printTimeSeconds: number | null;
+  filamentVolumeMm3: number | null;
+  supportSegmentRatio: number | null;
+}
+
 export interface RenderEvidence {
   compileStatus: "success" | "failure";
   diagnostics: string;
@@ -42,7 +49,8 @@ export type RunEventKind =
   | "review"
   | "correction-prompt"
   | "revision"
-  | "notice";
+  | "notice"
+  | "slice-review";
 
 export interface RunEvent {
   id: string;
@@ -64,6 +72,7 @@ export type PromptTracePhase =
   | "prompt-optimization"
   | "reference-image-draft"
   | "vision-review"
+  | "slice-review"
   | "revision"
   | "final-export";
 
@@ -88,6 +97,8 @@ export interface ProjectState {
   compilerOutput: string;
   renderEvidence: RenderEvidence | null;
   review: VisionReview | null;
+  sliceMetadata: SliceMetadata | null;
+  sliceReview: VisionReview | null;
   stl: string;
   views: ViewSet;
   referenceImages: string[];
@@ -154,6 +165,8 @@ export function createEmptyProject(): ProjectState {
     compilerOutput: "",
     renderEvidence: null,
     review: null,
+    sliceMetadata: null,
+    sliceReview: null,
     stl: "",
     views: createEmptyViewSet(),
     referenceImages: [],
@@ -347,6 +360,23 @@ function normalizeReview(value: unknown): VisionReview | null {
   };
 }
 
+function normalizeSliceMetadata(value: unknown): SliceMetadata | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  const metadata = value as Partial<SliceMetadata>;
+  return {
+    layerCount: asFiniteNumberOrNull(metadata.layerCount),
+    printTimeSeconds: asFiniteNumberOrNull(metadata.printTimeSeconds),
+    filamentVolumeMm3: asFiniteNumberOrNull(metadata.filamentVolumeMm3),
+    supportSegmentRatio: asFiniteNumberOrNull(metadata.supportSegmentRatio)
+  };
+}
+
+function asFiniteNumberOrNull(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
 function normalizeRenderEvidence(value: unknown): RenderEvidence | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return null;
@@ -464,6 +494,7 @@ const promptTracePhases = new Set<PromptTracePhase>([
   "prompt-optimization",
   "reference-image-draft",
   "vision-review",
+  "slice-review",
   "revision",
   "final-export"
 ]);
@@ -526,6 +557,8 @@ function hydrateProject(
     compilerOutput: asString(source.compilerOutput),
     renderEvidence: normalizeRenderEvidence(source.renderEvidence),
     review: normalizeReview(source.review),
+    sliceMetadata: normalizeSliceMetadata(source.sliceMetadata),
+    sliceReview: normalizeReview(source.sliceReview),
     stl: asString(source.stl),
     views: normalizeViewSet(source.views as Parameters<typeof normalizeViewSet>[0]),
     referenceImages,

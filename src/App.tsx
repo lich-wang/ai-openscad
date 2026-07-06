@@ -4,9 +4,11 @@ import {
   Eye,
   FileUp,
   KeyRound,
+  Layers,
   Play,
   RefreshCw,
   Send,
+  Sparkles,
   WandSparkles
 } from "lucide-react";
 import {
@@ -24,11 +26,14 @@ import {
   generateOpenScad,
   optimizePrompt,
   proposeRevision,
+  reviewSliceForPrintability,
   reviewViews
 } from "./lib/apiClient";
 import {
+  captureToolpathHighlightViews,
   downloadText
 } from "./lib/capture";
+import { describeSupportLocations, parseGcodeToolpath, type GcodeToolpath } from "./lib/gcodeParse";
 import { formatMessage, getBrowserLocale, t, type Locale, type MessageKey } from "./lib/i18n";
 import {
   CODE_MODEL_PRESETS,
@@ -62,8 +67,10 @@ import {
   type RunEvent,
   type RunEventKind,
   type RunEventRole,
-  type RunEventStatus
+  type RunEventStatus,
+  type SliceMetadata
 } from "./lib/project";
+import { sliceStlForPrintability } from "./lib/slice";
 import { createRenderMcp, type RenderMcpStage } from "./lib/render";
 import {
   buildRenderPrecisionInstruction,
@@ -85,8 +92,10 @@ type BusyState =
   | "generating"
   | "compiling"
   | "reviewing"
+  | "slicing"
+  | "sliceReviewing"
   | "exporting";
-type WorkflowStage = "code" | "render" | "review";
+type WorkflowStage = "code" | "render" | "review" | "slice" | "sliceReview";
 type WorkflowStageState = "waiting" | "active" | "complete" | "error";
 type ReferenceImageSelection = {
   id: string;
@@ -325,6 +334,12 @@ export default function App() {
   const [renderStatus, setRenderStatus] = useState("");
   const [autoRunActive, setAutoRunActive] = useState(false);
   const [promptFieldDraft, setPromptFieldDraft] = useState<PromptFieldDraft | null>(null);
+  // The raw G-code/toolpath is ephemeral (not persisted to localStorage,
+  // unlike project.sliceMetadata/sliceReview): a real print's G-code can be
+  // ~20x larger than its STL, which risks blowing the localStorage quota.
+  // Re-slicing is cheap, so it's simply cleared whenever the STL changes.
+  const [sliceGcodeText, setSliceGcodeText] = useState<string | null>(null);
+  const [sliceProgress, setSliceProgress] = useState(0);
   const busyRef = useRef<BusyState>("idle");
   const operationTokenRef = useRef(0);
   const workflowTokenRef = useRef(0);
@@ -346,6 +361,18 @@ export default function App() {
   const controlsLocked = autoRunActive || isBusy;
   const hasRenderedViews = hasCleanRenderedViews(project);
   const hasCurrentReview = Boolean(project.review && hasRenderedViews);
+  const hasSliceMetadata = Boolean(project.sliceMetadata);
+  const hasSliceReview = Boolean(project.sliceReview);
+  const sliceToolpath = useMemo<GcodeToolpath | null>(() => {
+    if (!sliceGcodeText) {
+      return null;
+    }
+    try {
+      return parseGcodeToolpath(sliceGcodeText);
+    } catch {
+      return null;
+    }
+  }, [sliceGcodeText]);
   const hasReviewReadyModel = Boolean(
     project.currentCode.trim() && hasRenderedViews && !hasCurrentReview
   );
@@ -365,7 +392,9 @@ export default function App() {
     errorStage,
     hasCode: Boolean(project.currentCode.trim()),
     hasRenderedViews,
-    hasReview: hasCurrentReview
+    hasReview: hasCurrentReview,
+    hasSlice: hasSliceMetadata,
+    hasSliceReview
   });
   const canUseVisionModelForDraft =
     getModelPreset(project.visionModelId, "vision").provider === "mimo" ||
@@ -414,6 +443,11 @@ export default function App() {
   useEffect(() => {
     projectRef.current = project;
   }, [project]);
+
+  useEffect(() => {
+    setSliceGcodeText(null);
+    setSliceProgress(0);
+  }, [project.id, project.stl]);
 
   // Persisting the workspace serializes every stored project; doing that per
   // streamed token freezes the UI, so writes are throttled with a trailing
@@ -775,6 +809,8 @@ export default function App() {
       compilerOutput: diagnostics,
       renderEvidence: evidence,
       review: null,
+      sliceMetadata: null,
+      sliceReview: null,
       stl: "",
       views: emptyViews(),
       runEvents: canRepairWithText
@@ -920,6 +956,8 @@ export default function App() {
             compilerOutput: "",
             renderEvidence: null,
             review: null,
+            sliceMetadata: null,
+            sliceReview: null,
             stl: "",
             views: emptyViews(),
             referenceImages: imagesAtStart.map((image) => image.dataUrl),
@@ -1008,6 +1046,8 @@ export default function App() {
           compilerOutput: "",
           renderEvidence: null,
           review: null,
+          sliceMetadata: null,
+          sliceReview: null,
           stl: "",
           views: emptyViews(),
           runEvents: [
@@ -1066,6 +1106,8 @@ export default function App() {
               originalRequirement,
               currentCode: "",
               review: null,
+              sliceMetadata: null,
+              sliceReview: null,
               stl: "",
               views: emptyViews(),
               renderEvidence: null,
@@ -1128,6 +1170,8 @@ export default function App() {
               ...current,
               currentCode: code,
               review: null,
+              sliceMetadata: null,
+              sliceReview: null,
               stl: "",
               views: emptyViews(),
               renderEvidence: null,
@@ -1227,6 +1271,8 @@ export default function App() {
               ...current,
               currentCode: finalCode,
               review: null,
+              sliceMetadata: null,
+              sliceReview: null,
               views: rendered.views,
               stl: rendered.stl,
               compilerOutput: `${rendered.diagnostics}\n${tr("compiledDraft")}`,
@@ -1313,6 +1359,8 @@ export default function App() {
               ...current,
               currentCode: finalCode,
               review: null,
+              sliceMetadata: null,
+              sliceReview: null,
               views: rendered.views,
               stl: rendered.stl,
               compilerOutput: `${rendered.diagnostics}\n${tr("compiledDraft")}`,
@@ -1452,6 +1500,8 @@ export default function App() {
               ...current,
               currentCode: code,
               review: null,
+              sliceMetadata: null,
+              sliceReview: null,
               stl: "",
               views: emptyViews(),
               renderEvidence,
@@ -1562,6 +1612,8 @@ export default function App() {
               ...current,
               currentCode: code,
               review: null,
+              sliceMetadata: null,
+              sliceReview: null,
               stl: "",
               views: emptyViews(),
               renderEvidence: null,
@@ -1854,6 +1906,8 @@ export default function App() {
         ...current,
         currentCode: "",
         review: null,
+        sliceMetadata: null,
+        sliceReview: null,
         views: emptyViews(),
         stl: "",
         renderEvidence: null,
@@ -1918,6 +1972,8 @@ export default function App() {
         ...current,
         currentCode: code,
         review: null,
+        sliceMetadata: null,
+        sliceReview: null,
         stl: "",
         views: emptyViews(),
         renderEvidence: null,
@@ -1981,6 +2037,8 @@ export default function App() {
         ...current,
         currentCode: code,
         review: null,
+        sliceMetadata: null,
+        sliceReview: null,
         views: rendered.views,
         stl: rendered.stl,
         compilerOutput: `${rendered.diagnostics}\n${tr("compiledDraft")}`,
@@ -2043,6 +2101,144 @@ export default function App() {
     });
   }
 
+  async function handleRunSliceTest() {
+    await runSafely("slicing", async () => {
+      if (!project.stl.trim()) {
+        throw new Error(tr("compileBeforeReview"));
+      }
+      const workflow = beginWorkflow(projectRef.current.id);
+      setSliceProgress(0);
+      const result = await sliceStlForPrintability(project.stl, {
+        onProgress: setSliceProgress
+      });
+      ensureWorkflowCurrent(workflow);
+      if (!result.ok) {
+        throw new Error(result.reason);
+      }
+      const gcodeText = new TextDecoder().decode(result.gcode);
+      const toolpath = parseGcodeToolpath(gcodeText);
+      const sliceMetadata: SliceMetadata = {
+        layerCount: result.layerCount,
+        printTimeSeconds: result.printTimeSeconds,
+        filamentVolumeMm3: result.filamentVolumeMm3,
+        supportSegmentRatio: toolpath.supportSegmentRatio
+      };
+      setSliceGcodeText(gcodeText);
+      setProject((current) =>
+        workflowIsCurrent(workflow, current)
+          ? {
+              ...current,
+              sliceMetadata,
+              sliceReview: null,
+              runEvents: [
+                ...current.runEvents,
+                createRunEvent({
+                  role: "tool",
+                  title: tr("sliceCompleted"),
+                  content: formatMessage(tr("sliceCompletedSummary"), {
+                    percent: Math.round(toolpath.supportSegmentRatio * 100),
+                    layers: sliceMetadata.layerCount ?? tr("sliceUnknown")
+                  })
+                })
+              ],
+              updatedAt: new Date().toISOString()
+            }
+          : current
+      );
+    });
+  }
+
+  async function handleRunSliceReview() {
+    await runSafely("sliceReviewing", async () => {
+      requireVisionApiKey();
+      if (!sliceToolpath || !project.sliceMetadata) {
+        throw new Error(tr("sliceBeforeReview"));
+      }
+      const originalRequirement = originalRequirementFor(project);
+      const workflow = beginWorkflow(projectRef.current.id);
+      // If the user edits the requirement while the review runs, their text
+      // must survive; only an unchanged baseline is replaced by the
+      // correction prompt (mirrors reviewRenderedDraft's same guard).
+      const baselineRequirement = projectRef.current.requirement;
+      const images = captureToolpathHighlightViews(sliceToolpath);
+      const locationSummaries = describeSupportLocations(sliceToolpath);
+      const supportPercent = Math.round(sliceToolpath.supportSegmentRatio * 100);
+      const startedEventId = crypto.randomUUID();
+      appendRunEvent(createRunEvent({
+        id: startedEventId,
+        role: "review",
+        title: tr("sliceReviewStarted"),
+        content: tr("sliceReviewStarted"),
+        status: "active",
+        kind: "review-started"
+      }));
+      let reviewed: Awaited<ReturnType<typeof reviewSliceForPrintability>>;
+      try {
+        reviewed = await reviewSliceForPrintability({
+          apiKey: visionApiKey,
+          modelId: project.visionModelId,
+          requirement: originalRequirement,
+          code: project.currentCode,
+          toolpathImages: images,
+          supportPercent,
+          layerCount: project.sliceMetadata.layerCount,
+          locationSummaries
+        });
+      } catch (caught) {
+        setProject((current) => ({
+          ...current,
+          runEvents: current.runEvents.map((event) =>
+            event.id === startedEventId ? { ...event, status: "error" as const } : event
+          ),
+          updatedAt: new Date().toISOString()
+        }));
+        throw caught;
+      }
+      const { review, trace } = reviewed;
+      ensureWorkflowCurrent(workflow);
+      setProject((current) => {
+        if (!workflowIsCurrent(workflow, current)) {
+          return current;
+        }
+        return {
+          ...current,
+          sliceReview: review,
+          requirement:
+            current.requirement === baselineRequirement
+              ? review.correctionPrompt || current.requirement
+              : current.requirement,
+          promptTrace: [...current.promptTrace, trace],
+          runEvents: [
+            ...current.runEvents.filter((event) => event.id !== startedEventId),
+            createRunEvent({
+              role: "review",
+              title: tr("sliceReviewComplete"),
+              content: tr("sliceReviewComplete"),
+              status: "complete",
+              kind: "notice"
+            }),
+            createRunEvent({
+              role: "review",
+              title: tr("sliceReviewTitle"),
+              content: review.summary,
+              review,
+              status: "complete",
+              kind: "slice-review"
+            }),
+            createRunEvent({
+              role: "review",
+              title: tr("correctionPrompt"),
+              content: review.correctionPrompt,
+              status: "complete",
+              kind: "correction-prompt"
+            })
+          ],
+          updatedAt: new Date().toISOString()
+        };
+      });
+    });
+  }
+
   async function handleDiagnosticFix() {
     clearPromptFieldDraft();
     await runSafely("generating", async () => {
@@ -2066,6 +2262,8 @@ export default function App() {
         ...current,
         currentCode: "",
         review: null,
+        sliceMetadata: null,
+        sliceReview: null,
         views: emptyViews(),
         stl: "",
         renderEvidence: null,
@@ -2141,6 +2339,8 @@ export default function App() {
               ...current,
               currentCode: code,
               review: null,
+              sliceMetadata: null,
+              sliceReview: null,
               views: emptyViews(),
               stl: "",
               renderEvidence: null,
@@ -2214,6 +2414,8 @@ export default function App() {
               ...current,
               currentCode: finalCode,
               review: null,
+              sliceMetadata: null,
+              sliceReview: null,
               views: rendered.views,
               stl: rendered.stl,
               compilerOutput: `${rendered.diagnostics}\n${tr("compiledDraft")}`,
@@ -2262,6 +2464,8 @@ export default function App() {
         ...current,
         currentCode: "",
         review: null,
+        sliceMetadata: null,
+        sliceReview: null,
         views: emptyViews(),
         stl: "",
         renderEvidence: null,
@@ -2341,6 +2545,8 @@ export default function App() {
               ...current,
               currentCode: code,
               review: null,
+              sliceMetadata: null,
+              sliceReview: null,
               views: emptyViews(),
               stl: "",
               renderEvidence: null,
@@ -2435,6 +2641,8 @@ export default function App() {
               ...current,
               currentCode: finalCode,
               review: null,
+              sliceMetadata: null,
+              sliceReview: null,
               views: rendered.views,
               stl: rendered.stl,
               compilerOutput: `${rendered.diagnostics}\n${tr("compiledDraft")}`,
@@ -2586,6 +2794,8 @@ export default function App() {
       ...current,
       currentCode: code,
       review: null,
+      sliceMetadata: null,
+      sliceReview: null,
       stl: "",
       views: emptyViews(),
       renderEvidence: null,
@@ -2919,6 +3129,20 @@ export default function App() {
                     <Download size={16} />
                     {tr("finalExport")}
                   </button>
+                  <button className="secondaryAction" disabled={isBusy} onClick={handleRunSliceTest}>
+                    <Layers size={16} />
+                    {busy === "slicing" ? `${tr("slicing")} ${sliceProgress}%` : tr("runSliceTest")}
+                  </button>
+                  {hasSliceMetadata ? (
+                    <button
+                      className="secondaryAction"
+                      disabled={isBusy}
+                      onClick={handleRunSliceReview}
+                    >
+                      <Sparkles size={16} />
+                      {tr("runSliceReview")}
+                    </button>
+                  ) : null}
                 </>
               ) : null}
             </div>
@@ -2948,9 +3172,12 @@ export default function App() {
             <h2>{tr("views")}</h2>
           </div>
           <PrintabilityPanel
+            gcodeText={sliceGcodeText}
             locale={locale}
-            onOptimizeForPrintability={handleRequirementInput}
+            sliceMetadata={project.sliceMetadata}
+            sliceReview={project.sliceReview}
             stl={project.stl}
+            toolpath={sliceToolpath}
           />
           <div className="viewGrid">
             {VIEW_KEYS.map((key) => (
@@ -3192,7 +3419,9 @@ function WorkflowStageStrip(props: {
   const labelKeys: Record<WorkflowStage, MessageKey> = {
     code: "stageCode",
     render: "stageRender",
-    review: "stageReview"
+    review: "stageReview",
+    slice: "stageSlice",
+    sliceReview: "stageSliceReview"
   };
   return (
     <ol className="workflowStageStrip arrowPipeline" aria-label={t(props.locale, "workflowStages")}>
@@ -3276,15 +3505,19 @@ function AgentRunPanel(props: {
             event.status === "active" ? true : Boolean(openThinkingEvents[event.id]);
           // Prefer the durable kind field; fall back to localized titles only
           // for events persisted before kinds existed.
-          const isReviewEvent = event.kind
+          const isVisualReviewEvent = event.kind
             ? event.kind === "review"
             : event.title === t(props.locale, "visualReview");
+          const isSliceReviewEvent = event.kind === "slice-review";
+          const isReviewEvent = isVisualReviewEvent || isSliceReviewEvent;
           const isCorrectionPromptEvent = event.kind
             ? event.kind === "correction-prompt"
             : event.title === t(props.locale, "correctionPrompt");
-          const eventReview = isReviewEvent
+          const eventReview = isVisualReviewEvent
             ? event.review ?? props.project.review
-            : null;
+            : isSliceReviewEvent
+              ? event.review ?? props.project.sliceReview
+              : null;
           const showEventContent =
             Boolean(event.content) &&
             !isCorrectionPromptEvent &&
@@ -3393,6 +3626,8 @@ function busyStatusLabel(locale: Locale, busy: Exclude<BusyState, "idle">): stri
     generating: "busyGenerating",
     compiling: "busyCompiling",
     reviewing: "busyReviewing",
+    slicing: "busySlicing",
+    sliceReviewing: "busySliceReviewing",
     exporting: "busyExporting"
   };
   return t(locale, keys[busy]);
@@ -3404,6 +3639,12 @@ function workflowStageForBusy(busy: BusyState): WorkflowStage {
   }
   if (busy === "reviewing") {
     return "review";
+  }
+  if (busy === "slicing") {
+    return "slice";
+  }
+  if (busy === "sliceReviewing") {
+    return "sliceReview";
   }
   return "render";
 }
@@ -3424,6 +3665,8 @@ function buildWorkflowStages(args: {
   hasCode: boolean;
   hasRenderedViews: boolean;
   hasReview: boolean;
+  hasSlice: boolean;
+  hasSliceReview: boolean;
 }): Array<{ id: WorkflowStage; state: WorkflowStageState }> {
   const activeStage = args.busy === "idle" ? "" : workflowStageForBusy(args.busy);
   return [
@@ -3438,6 +3681,14 @@ function buildWorkflowStages(args: {
     {
       id: "review",
       state: workflowStageState("review", args.errorStage, activeStage, args.hasReview)
+    },
+    {
+      id: "slice",
+      state: workflowStageState("slice", args.errorStage, activeStage, args.hasSlice)
+    },
+    {
+      id: "sliceReview",
+      state: workflowStageState("sliceReview", args.errorStage, activeStage, args.hasSliceReview)
     }
   ];
 }

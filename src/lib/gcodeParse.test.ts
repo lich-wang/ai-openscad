@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseGcodeToolpath } from "./gcodeParse";
+import { describeSupportLocations, parseGcodeToolpath } from "./gcodeParse";
 
 const SAMPLE_GCODE = `
 ;LAYER:0
@@ -57,5 +57,58 @@ describe("parseGcodeToolpath", () => {
     const toolpath = parseGcodeToolpath("G1 X1 Y0 E4\nG1 X1 Y0 Z1 E3\n");
     // Only the initial extruding move counts; the Z-hop-with-retraction adds none.
     expect(toolpath.segmentCount).toBe(1);
+  });
+});
+
+describe("describeSupportLocations", () => {
+  it("returns an empty list when there is no support material", () => {
+    const toolpath = parseGcodeToolpath(SAMPLE_GCODE.replace(";TYPE:SUPPORT", ";TYPE:FILL"));
+    expect(describeSupportLocations(toolpath)).toEqual([]);
+  });
+
+  it("buckets support segments by Z-third and XY-quadrant, sorted by share", () => {
+    // Three support moves clustered at the top, +X/+Y side (z~25-27, x~10, y~10),
+    // and one at the bottom, -X/-Y side (z~5, x~-10, y~-10). Each move is
+    // preceded by a non-extruding G0 travel so its start point is exact and
+    // isolated from the previous segment's endpoint. Bounding box spans
+    // Z 5-27, so thirds are roughly [5,12.3], [12.3,19.7], [19.7,27].
+    const gcode = `
+;TYPE:SUPPORT
+G0 X9 Y10 Z25
+G1 X11 Y10 Z25 E1
+G0 X9 Y10 Z26
+G1 X11 Y10 Z26 E2
+G0 X9 Y10 Z27
+G1 X11 Y10 Z27 E3
+G0 X-11 Y-10 Z5
+G1 X-9 Y-10 Z5 E4
+`;
+    const toolpath = parseGcodeToolpath(gcode);
+    expect(toolpath.supportSegmentCount).toBe(4);
+
+    const locations = describeSupportLocations(toolpath);
+    expect(locations).toHaveLength(2);
+    expect(locations[0]).toContain("top third");
+    expect(locations[0]).toContain("+X/+Y side");
+    expect(locations[0]).toContain("~75%");
+    expect(locations[1]).toContain("bottom third");
+    expect(locations[1]).toContain("-X/-Y side");
+    expect(locations[1]).toContain("~25%");
+  });
+
+  it("caps the number of returned buckets at maxBuckets", () => {
+    const gcode = `
+;TYPE:SUPPORT
+G0 X9 Y9 Z1
+G1 X11 Y11 Z1 E1
+G0 X9 Y-11 Z1
+G1 X11 Y-9 Z1 E2
+G0 X-11 Y9 Z9
+G1 X-9 Y11 Z9 E3
+G0 X-11 Y-11 Z9
+G1 X-9 Y-9 Z9 E4
+`;
+    const toolpath = parseGcodeToolpath(gcode);
+    expect(describeSupportLocations(toolpath, 1)).toHaveLength(1);
   });
 });

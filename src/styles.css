@@ -858,16 +858,23 @@ textarea {
 }
 
 .printabilityGeometryCheck,
-.printabilitySliceCheck {
+.printabilitySliceCheck,
+.printabilitySliceReview {
   display: grid;
   gap: 6px;
 }
 
 .printabilityGeometryCheck strong,
-.printabilitySliceCheck strong {
+.printabilitySliceCheck strong,
+.printabilitySliceReview strong {
   color: #475467;
   font-size: 12px;
   font-weight: 700;
+}
+
+.printabilitySliceReview p {
+  font-size: 12px;
+  margin: 0;
 }
 
 .printabilityBadge {

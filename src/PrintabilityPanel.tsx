@@ -3,21 +3,35 @@ import { STLLoader } from "three/examples/jsm/loaders/STLLoader.js";
 import { GcodeSlicePreview } from "./GcodeSlicePreview";
 import { InteractiveStlPreview } from "./InteractiveStlPreview";
 import { downloadText } from "./lib/capture";
-import { parseGcodeToolpath, type GcodeToolpath } from "./lib/gcodeParse";
-import { formatMessage, type Locale, t } from "./lib/i18n";
+import { type GcodeToolpath } from "./lib/gcodeParse";
+import { type Locale, t } from "./lib/i18n";
 import { checkPrintability, type PrintabilityResult } from "./lib/printability";
-import { sliceStlForPrintability, type SliceResult } from "./lib/slice";
+import type { SliceMetadata, VisionReview } from "./lib/project";
 
 interface PrintabilityPanelProps {
   locale: Locale;
   stl: string;
-  onOptimizeForPrintability: (note: string) => void;
+  toolpath: GcodeToolpath | null;
+  gcodeText: string | null;
+  sliceMetadata: SliceMetadata | null;
+  sliceReview: VisionReview | null;
 }
 
-type SliceStatus = "idle" | "slicing" | "done";
 type ViewerTab = "model" | "slice";
 
-export function PrintabilityPanel({ locale, stl, onOptimizeForPrintability }: PrintabilityPanelProps) {
+// A pure viewer: all slicing/review business logic (running the slice test,
+// running the vision-driven slice review) lives in App.tsx, which owns the
+// busy-state machine, the persisted project.sliceMetadata/sliceReview, and
+// the buttons that trigger them (next to Rerender/Review/Iterate). This
+// component only displays what's already been computed.
+export function PrintabilityPanel({
+  locale,
+  stl,
+  toolpath,
+  gcodeText,
+  sliceMetadata,
+  sliceReview
+}: PrintabilityPanelProps) {
   const tr = (key: Parameters<typeof t>[1]) => t(locale, key);
 
   const geometryResult = useMemo<PrintabilityResult | null>(() => {
@@ -37,54 +51,19 @@ export function PrintabilityPanel({ locale, stl, onOptimizeForPrintability }: Pr
     }
   }, [stl]);
 
-  const [sliceStatus, setSliceStatus] = useState<SliceStatus>("idle");
-  const [sliceProgress, setSliceProgress] = useState(0);
-  const [sliceResult, setSliceResult] = useState<SliceResult | null>(null);
   const [activeTab, setActiveTab] = useState<ViewerTab>("model");
 
   useEffect(() => {
-    setSliceStatus("idle");
-    setSliceProgress(0);
-    setSliceResult(null);
     setActiveTab("model");
   }, [stl]);
 
-  const toolpath = useMemo<GcodeToolpath | null>(() => {
-    if (!sliceResult?.ok) {
-      return null;
-    }
-    try {
-      return parseGcodeToolpath(new TextDecoder().decode(sliceResult.gcode));
-    } catch {
-      return null;
-    }
-  }, [sliceResult]);
-
-  async function handleRunSliceTest() {
-    setSliceStatus("slicing");
-    setSliceProgress(0);
-    setSliceResult(null);
-    const result = await sliceStlForPrintability(stl, {
-      onProgress: setSliceProgress
-    });
-    setSliceResult(result);
-    setSliceStatus("done");
-    if (result.ok) {
-      setActiveTab("slice");
-    }
-  }
-
-  function handleOptimizeForPrintability() {
+  useEffect(() => {
     if (!toolpath) {
-      return;
+      setActiveTab("model");
     }
-    const supportPercent = Math.round(toolpath.supportSegmentRatio * 100);
-    onOptimizeForPrintability(
-      formatMessage(tr("optimizeForPrintabilityNoteTemplate"), { percent: supportPercent })
-    );
-  }
+  }, [toolpath]);
 
-  const supportRatio = toolpath?.supportSegmentRatio ?? null;
+  const supportRatio = sliceMetadata?.supportSegmentRatio ?? toolpath?.supportSegmentRatio ?? null;
   const supportPercentLabel = supportRatio != null ? Math.round(supportRatio * 100) : null;
 
   return (
@@ -145,65 +124,62 @@ export function PrintabilityPanel({ locale, stl, onOptimizeForPrintability }: Pr
         <GcodeSlicePreview label={tr("sliceTab")} locale={locale} toolpath={toolpath} />
       )}
 
-      <div className="printabilitySliceCheck">
-        <strong>{tr("sliceSectionTitle")}</strong>
-        <button disabled={!stl.trim() || sliceStatus === "slicing"} onClick={handleRunSliceTest} type="button">
-          {sliceStatus === "slicing" ? `${tr("slicing")} ${sliceProgress}%` : tr("runSliceTest")}
-        </button>
-
-        {sliceStatus === "done" && sliceResult ? (
-          sliceResult.ok ? (
-            <div className="printabilitySliceResult" data-outcome="success">
-              <PrintabilityBadge ok label={tr("sliceSuccess")} />
-              {supportPercentLabel != null ? (
-                <PrintabilityBadge
-                  ok={supportPercentLabel === 0}
-                  label={
-                    supportPercentLabel === 0
-                      ? tr("sliceNoSupportNeeded")
-                      : `${tr("sliceSupportNeeded")} (~${supportPercentLabel}%)`
-                  }
-                />
-              ) : null}
-              <ul className="printabilityStats">
-                <li>
-                  {tr("sliceLayerCount")}: {sliceResult.layerCount ?? tr("sliceUnknown")}
-                </li>
-                <li>
-                  {tr("slicePrintTime")}: {formatSeconds(sliceResult.printTimeSeconds)}
-                </li>
-                <li>
-                  {tr("sliceFilamentVolume")}: {formatVolume(sliceResult.filamentVolumeMm3)}
-                </li>
-              </ul>
+      {sliceMetadata ? (
+        <div className="printabilitySliceCheck">
+          <strong>{tr("sliceSectionTitle")}</strong>
+          <div className="printabilitySliceResult" data-outcome="success">
+            <PrintabilityBadge ok label={tr("sliceSuccess")} />
+            {supportPercentLabel != null ? (
+              <PrintabilityBadge
+                ok={supportPercentLabel === 0}
+                label={
+                  supportPercentLabel === 0
+                    ? tr("sliceNoSupportNeeded")
+                    : `${tr("sliceSupportNeeded")} (~${supportPercentLabel}%)`
+                }
+              />
+            ) : null}
+            <ul className="printabilityStats">
+              <li>
+                {tr("sliceLayerCount")}: {sliceMetadata.layerCount ?? tr("sliceUnknown")}
+              </li>
+              <li>
+                {tr("slicePrintTime")}: {formatSeconds(sliceMetadata.printTimeSeconds)}
+              </li>
+              <li>
+                {tr("sliceFilamentVolume")}: {formatVolume(sliceMetadata.filamentVolumeMm3)}
+              </li>
+            </ul>
+            {gcodeText ? (
               <div className="printabilitySliceActions">
                 <button
                   onClick={() =>
-                    downloadText(
-                      "ai-openscad-model.gcode",
-                      new TextDecoder().decode(sliceResult.gcode),
-                      "text/x-gcode;charset=utf-8"
-                    )
+                    downloadText("ai-openscad-model.gcode", gcodeText, "text/x-gcode;charset=utf-8")
                   }
                   type="button"
                 >
                   {tr("downloadGcode")}
                 </button>
-                {supportPercentLabel ? (
-                  <button onClick={handleOptimizeForPrintability} type="button">
-                    {tr("optimizeForPrintability")}
-                  </button>
-                ) : null}
               </div>
-            </div>
-          ) : (
-            <div className="printabilitySliceResult" data-outcome="failure">
-              <PrintabilityBadge ok={false} label={tr("sliceFailure")} />
-              <p className="printabilitySliceReason">{sliceResult.reason}</p>
-            </div>
-          )
-        ) : null}
-      </div>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
+
+      {sliceReview ? (
+        <div className="printabilitySliceReview">
+          <strong>{tr("sliceReviewTitle")}</strong>
+          <p>{sliceReview.summary}</p>
+          <ul className="printabilityStats">
+            {sliceReview.issues.map((issue, index) => (
+              <li key={index}>{issue}</li>
+            ))}
+          </ul>
+          <p className="confidence">
+            {tr("confidence")} {Math.round(sliceReview.confidence * 100)}%
+          </p>
+        </div>
+      ) : null}
     </section>
   );
 }
