@@ -108,7 +108,7 @@ export function PrintabilityPanel({ locale, stl }: PrintabilityPanelProps) {
                   {tr("slicePrintTime")}: {formatSeconds(sliceResult.printTimeSeconds)}
                 </li>
                 <li>
-                  {tr("sliceFilamentLength")}: {formatMillimeters(sliceResult.filamentLengthMm)}
+                  {tr("sliceFilamentVolume")}: {formatVolume(sliceResult.filamentVolumeMm3)}
                 </li>
               </ul>
               <button
@@ -153,9 +153,9 @@ function formatSeconds(seconds: number | null): string {
   return hours > 0 ? `${hours}h ${minutes}m` : `${minutes}m`;
 }
 
-function formatMillimeters(millimeters: number | null): string {
-  if (millimeters == null) {
+function formatVolume(cubicMillimeters: number | null): string {
+  if (cubicMillimeters == null) {
     return "—";
   }
-  return `${millimeters.toFixed(0)} mm`;
+  return `${cubicMillimeters.toFixed(0)} mm³`;
 }

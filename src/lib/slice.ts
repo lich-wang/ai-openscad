@@ -22,7 +22,7 @@ export interface SliceSuccess {
   gcode: ArrayBuffer;
   layerCount: number | null;
   printTimeSeconds: number | null;
-  filamentLengthMm: number | null;
+  filamentVolumeMm3: number | null;
 }
 
 export interface SliceFailure {
@@ -67,15 +67,20 @@ export async function sliceStlForPrintability(
       import("cura-wasm-definitions")
     ]);
 
-    slicer = new CuraWASM({
+    // Overrides intentionally omit `scope`: cura-wasm's CLI builder turns any
+    // non-null scope into a `-<scope>` flag meant for extruder/group-level
+    // settings (e.g. `-e0`); machine-wide settings must stay unscoped or
+    // CuraEngine rejects the whole argument list (`Unknown option: -machine`).
+    const config = {
       definition: resolveDefinition("ultimaker2"),
       overrides: [
-        { scope: "machine", key: "machine_gcode_flavor", value: "Marlin" },
-        { scope: "machine", key: "machine_width", value: String(bedSize.x) },
-        { scope: "machine", key: "machine_depth", value: String(bedSize.y) },
-        { scope: "machine", key: "machine_height", value: String(bedSize.z) }
+        { key: "machine_gcode_flavor", value: "Marlin" },
+        { key: "machine_width", value: String(bedSize.x) },
+        { key: "machine_depth", value: String(bedSize.y) },
+        { key: "machine_height", value: String(bedSize.z) }
       ]
-    }) as unknown as CuraSlicerHandle;
+    };
+    slicer = new CuraWASM(config as never) as unknown as CuraSlicerHandle;
 
     if (options.onProgress) {
       slicer.on("progress", options.onProgress);
@@ -93,7 +98,7 @@ export async function sliceStlForPrintability(
       gcode,
       layerCount: countGcodeLayers(gcode),
       printTimeSeconds: metadata?.printTime ?? null,
-      filamentLengthMm: metadata?.filamentUsage ?? null
+      filamentVolumeMm3: metadata?.filamentUsage ?? null
     };
   } catch (error) {
     return {
