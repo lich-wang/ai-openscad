@@ -836,6 +836,81 @@ textarea {
   overflow-wrap: anywhere;
 }
 
+.printabilityPanel {
+  border: 1px solid #e4e9f0;
+  border-radius: 8px;
+  display: grid;
+  flex: 0 0 auto;
+  gap: 10px;
+  padding: 10px;
+}
+
+.printabilityPanel > span {
+  color: #344054;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.printabilityEmpty {
+  color: #667085;
+  font-size: 12px;
+  margin: 0;
+}
+
+.printabilityGeometryCheck,
+.printabilitySliceCheck {
+  display: grid;
+  gap: 6px;
+}
+
+.printabilityGeometryCheck strong,
+.printabilitySliceCheck strong {
+  color: #475467;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.printabilityBadge {
+  border-radius: 999px;
+  display: inline-flex;
+  font-size: 12px;
+  font-weight: 700;
+  padding: 3px 10px;
+  width: fit-content;
+}
+
+.printabilityBadge[data-ok="true"] {
+  background: #e3f6ef;
+  color: #1f7a6d;
+}
+
+.printabilityBadge[data-ok="false"] {
+  background: #fdecec;
+  color: #b3261e;
+}
+
+.printabilityStats {
+  color: #475467;
+  display: grid;
+  font-size: 12px;
+  gap: 2px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.printabilitySliceResult {
+  display: grid;
+  gap: 6px;
+}
+
+.printabilitySliceReason {
+  color: #b3261e;
+  font-size: 12px;
+  margin: 0;
+  white-space: pre-wrap;
+}
+
 .smallButton {
   background: #475467;
   min-height: 32px;

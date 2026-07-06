@@ -18,6 +18,8 @@
   },
   "dependencies": {
     "@vitejs/plugin-react": "^4.5.2",
+    "cura-wasm": "^1.5.2",
+    "cura-wasm-definitions": "^1.5.1",
     "lucide-react": "^0.468.0",
     "openscad-wasm": "^0.0.4",
     "react": "^18.3.1",

@@ -19,6 +19,7 @@ import {
   useState
 } from "react";
 import { InteractiveStlPreview } from "./InteractiveStlPreview";
+import { PrintabilityPanel } from "./PrintabilityPanel";
 import {
   describeReferenceImages,
   generateOpenScad,
@@ -2960,6 +2961,7 @@ export default function App() {
             label={tr("interactiveStlPreview")}
             stl={project.stl}
           />
+          <PrintabilityPanel locale={locale} stl={project.stl} />
           <div className="viewGrid">
             {VIEW_KEYS.map((key) => (
               <ViewImage key={key} label={tr(VIEW_LABEL_KEYS[key])} src={project.views[key]} />

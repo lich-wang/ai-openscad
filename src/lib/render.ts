@@ -379,7 +379,7 @@ function meaningfulOpenScadLogs(logs: readonly string[]): string[] {
   return meaningful.slice(-12);
 }
 
-function withTimeout<T>(
+export function withTimeout<T>(
   promise: Promise<T>,
   timeoutMs: number,
   message: string
