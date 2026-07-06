@@ -49,8 +49,7 @@ export type RunEventKind =
   | "review"
   | "correction-prompt"
   | "revision"
-  | "notice"
-  | "slice-review";
+  | "notice";
 
 export interface RunEvent {
   id: string;
@@ -72,7 +71,6 @@ export type PromptTracePhase =
   | "prompt-optimization"
   | "reference-image-draft"
   | "vision-review"
-  | "slice-review"
   | "revision"
   | "final-export";
 
@@ -98,7 +96,6 @@ export interface ProjectState {
   renderEvidence: RenderEvidence | null;
   review: VisionReview | null;
   sliceMetadata: SliceMetadata | null;
-  sliceReview: VisionReview | null;
   stl: string;
   views: ViewSet;
   referenceImages: string[];
@@ -166,7 +163,6 @@ export function createEmptyProject(): ProjectState {
     renderEvidence: null,
     review: null,
     sliceMetadata: null,
-    sliceReview: null,
     stl: "",
     views: createEmptyViewSet(),
     referenceImages: [],
@@ -494,7 +490,6 @@ const promptTracePhases = new Set<PromptTracePhase>([
   "prompt-optimization",
   "reference-image-draft",
   "vision-review",
-  "slice-review",
   "revision",
   "final-export"
 ]);
@@ -558,7 +553,6 @@ function hydrateProject(
     renderEvidence: normalizeRenderEvidence(source.renderEvidence),
     review: normalizeReview(source.review),
     sliceMetadata: normalizeSliceMetadata(source.sliceMetadata),
-    sliceReview: normalizeReview(source.sliceReview),
     stl: asString(source.stl),
     views: normalizeViewSet(source.views as Parameters<typeof normalizeViewSet>[0]),
     referenceImages,

@@ -67,10 +67,21 @@ ${formatRenderEvidence(input.renderEvidence)}
 Return the complete revised OpenSCAD code only.`;
 }
 
-export function buildVisionSystemPrompt(requirement = ""): string {
+export interface SliceDiagnostics {
+  supportPercent: number;
+  layerCount: number | null;
+  locationSummaries: string[];
+  toolpathImageCount: number;
+}
+
+const SLICE_DIAGNOSTICS_SYSTEM_ADDENDUM = `
+After the rendered views (and any reference images), additional images may show a real CuraEngine slice of this model as toolpath renders from a few angles, where orange lines are support material the slicer had to add; other colors print without support. A text summary of support location (rough Z-height band and XY side) and support percentage is also provided.
+When slice diagnostics are present, fold print-support findings into the SAME issues/correctionPrompt as the geometry review below — do not produce separate output. If support usage is already minimal (well under 10%) or concentrated only in unavoidable areas (e.g. a flat base), do not treat it as an issue.`;
+
+export function buildVisionSystemPrompt(requirement = "", hasSliceDiagnostics = false): string {
   return `You review OpenSCAD-generated 3D models from these 14 views in order: ${VIEW_KEYS.join(", ")}.
 ${buildLanguageInstruction(requirement)}
-Rendered model views are always provided first. If original reference images are also provided after the 14 rendered views, use them only to compare the subject model's physical shape and structure.
+Rendered model views are always provided first. If original reference images are also provided after the 14 rendered views, use them only to compare the subject model's physical shape and structure.${hasSliceDiagnostics ? SLICE_DIAGNOSTICS_SYSTEM_ADDENDUM : ""}
 Return JSON with keys: summary, issues, correctionPrompt, confidence.
 - issues must be an array of strings.
 - confidence must be 0 to 1.
@@ -84,7 +95,8 @@ export function buildVisionUserPrompt(
   requirement: string,
   code: string,
   renderEvidence?: RenderEvidence | null,
-  referenceImageCount = 0
+  referenceImageCount = 0,
+  sliceDiagnostics?: SliceDiagnostics | null
 ): string {
   return `Original user requirement:
 ${requirement}
@@ -100,48 +112,22 @@ Rendered model views: ${VIEW_KEYS.length}
 Original reference images: ${referenceImageCount}
 
 Review whether the rendered views satisfy the requirement. Focus on geometry, missing features, proportions, and obvious modeling defects.
-If original reference images are provided, compare the generated model against their subject shape and structure. Ignore color, printed graphics, decals, surface patterns, and photo lighting unless the user explicitly asked for physical raised or engraved geometry.`;
+If original reference images are provided, compare the generated model against their subject shape and structure. Ignore color, printed graphics, decals, surface patterns, and photo lighting unless the user explicitly asked for physical raised or engraved geometry.
+${formatSliceDiagnostics(sliceDiagnostics)}`;
 }
 
-export function buildSliceReviewSystemPrompt(requirement = ""): string {
-  return `You review a real CuraEngine slice of an OpenSCAD-generated 3D-printable model, shown as toolpath renders from a few angles.
-${buildLanguageInstruction(requirement)}
-In the renders, orange lines are support material the slicer had to add; other colors (walls, skin, infill, skirt) print without support.
-A text summary of where support material concentrates (rough Z-height band and XY side of the model) is provided alongside the images and support percentage.
-Return JSON with keys: summary, issues, correctionPrompt, confidence.
-- issues must be an array of strings, each naming a specific overhang or region that needs support.
-- confidence must be 0 to 1, reflecting confidence that the correctionPrompt will reduce support material without breaking the design intent.
-- correctionPrompt must be a concise, user-editable prompt for the text LLM to revise the current OpenSCAD model to need less support: name the affected region (using the provided location bands/sides and any inferable feature name), and suggest a concrete geometry change such as chamfering, sloping an overhang, reorienting a feature, or splitting the part.
-- correctionPrompt must preserve the original requirement and any dimensions or constraints not related to printability.
-- If support usage is already minimal (well under 10%) or concentrated only in unavoidable areas (e.g. a flat base), say so in summary and issues, and correctionPrompt may state that no change is needed.
-- Do not return OpenSCAD code.`;
-}
-
-export function buildSliceReviewUserPrompt(input: {
-  requirement: string;
-  code: string;
-  supportPercent: number;
-  layerCount: number | null;
-  locationSummaries: string[];
-  imageCount: number;
-}): string {
-  return `Original user requirement:
-${input.requirement}
-
-Current OpenSCAD code:
-\`\`\`scad
-${input.code}
-\`\`\`
-
+function formatSliceDiagnostics(diagnostics?: SliceDiagnostics | null): string {
+  if (!diagnostics || diagnostics.toolpathImageCount === 0) {
+    return "";
+  }
+  return `
 Slice diagnostics:
-- Support material: ~${input.supportPercent}% of extruded paths
-- Layer count: ${input.layerCount ?? "unknown"}
+- Support material: ~${diagnostics.supportPercent}% of extruded paths
+- Layer count: ${diagnostics.layerCount ?? "unknown"}
 - Support location breakdown:
-${input.locationSummaries.map((line) => `  - ${line}`).join("\n") || "  - No support material detected."}
+${diagnostics.locationSummaries.map((line) => `  - ${line}`).join("\n") || "  - No support material detected."}
 
-Toolpath renders provided: ${input.imageCount} (orange = support material)
-
-Review whether support usage can be reduced without changing the design intent. Focus on the located overhang regions above.`;
+Toolpath renders provided: ${diagnostics.toolpathImageCount} (orange = support material). Review these alongside the mesh views for print-support issues, and fold any findings into the same issues/correctionPrompt above.`;
 }
 
 export function buildReferenceImageSystemPrompt(): string {

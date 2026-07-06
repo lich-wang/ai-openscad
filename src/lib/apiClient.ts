@@ -6,10 +6,9 @@ import {
   buildReferenceImageSystemPrompt,
   buildReferenceImageUserPrompt,
   buildRevisionPrompt,
-  buildSliceReviewSystemPrompt,
-  buildSliceReviewUserPrompt,
   buildVisionSystemPrompt,
-  buildVisionUserPrompt
+  buildVisionUserPrompt,
+  type SliceDiagnostics
 } from "./openscadSkills";
 import {
   normalizePromptFieldsResponse,
@@ -28,8 +27,7 @@ const MAX_VISION_PAYLOAD_BYTES = 7_500_000;
 type VisionPayloadContext =
   | "review"
   | "retained-reference-review"
-  | "selected-reference-draft"
-  | "slice-review";
+  | "selected-reference-draft";
 
 export async function generateOpenScad(input: {
   apiKey: string;
@@ -75,14 +73,18 @@ export async function reviewViews(input: {
   referenceImages?: string[];
   renderEvidence?: RenderEvidence | null;
   strictConfidence?: boolean;
+  toolpathImages?: string[];
+  sliceDiagnostics?: SliceDiagnostics | null;
 }): Promise<{ review: VisionReview; trace: PromptTraceEntry }> {
   const referenceImages = input.referenceImages ?? [];
-  const systemPrompt = buildVisionSystemPrompt(input.requirement);
+  const toolpathImages = input.toolpathImages ?? [];
+  const systemPrompt = buildVisionSystemPrompt(input.requirement, toolpathImages.length > 0);
   const userPrompt = buildVisionUserPrompt(
     input.requirement,
     input.code,
     input.renderEvidence,
-    referenceImages.length
+    referenceImages.length,
+    input.sliceDiagnostics
   );
   const request = createModelRequest({
     apiKey: input.apiKey,
@@ -90,7 +92,7 @@ export async function reviewViews(input: {
     mode: "vision",
     systemPrompt,
     userPrompt,
-    images: [...input.renderedImages, ...referenceImages],
+    images: [...input.renderedImages, ...referenceImages, ...toolpathImages],
     responseFormat: "json"
   });
   const payloadContext =
@@ -112,50 +114,6 @@ export async function reviewViews(input: {
     review,
     trace: createPromptTraceEntry({
       phase: "vision-review",
-      modelId: input.modelId,
-      systemPrompt,
-      userPrompt,
-      response: content,
-      apiKey: input.apiKey
-    })
-  };
-}
-
-export async function reviewSliceForPrintability(input: {
-  apiKey: string;
-  modelId: string;
-  requirement: string;
-  code: string;
-  toolpathImages: string[];
-  supportPercent: number;
-  layerCount: number | null;
-  locationSummaries: string[];
-}): Promise<{ review: VisionReview; trace: PromptTraceEntry }> {
-  const systemPrompt = buildSliceReviewSystemPrompt(input.requirement);
-  const userPrompt = buildSliceReviewUserPrompt({
-    requirement: input.requirement,
-    code: input.code,
-    supportPercent: input.supportPercent,
-    layerCount: input.layerCount,
-    locationSummaries: input.locationSummaries,
-    imageCount: input.toolpathImages.length
-  });
-  const request = createModelRequest({
-    apiKey: input.apiKey,
-    modelId: input.modelId,
-    mode: "vision",
-    systemPrompt,
-    userPrompt,
-    images: input.toolpathImages,
-    responseFormat: "json"
-  });
-  assertVisionPayloadWithinBudget(request, "slice-review");
-  const content = await sendGatewayRequest(request);
-  const review = parseReview(content, input.requirement, false);
-  return {
-    review,
-    trace: createPromptTraceEntry({
-      phase: "slice-review",
       modelId: input.modelId,
       systemPrompt,
       userPrompt,
@@ -402,9 +360,6 @@ function visionPayloadTooLargeMessage(
   }
   if (context === "selected-reference-draft") {
     return `Selected reference images are too large to analyze (${sizeText}). Choose smaller reference images and try again.`;
-  }
-  if (context === "slice-review") {
-    return `Slice toolpath renders are too large for review (${sizeText}). This shouldn't normally happen with the default view count; try slicing again.`;
   }
   return `Vision payload is too large for review (${sizeText}). Rerender with bounded captures before reviewing.`;
 }

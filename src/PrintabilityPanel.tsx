@@ -6,7 +6,7 @@ import { downloadText } from "./lib/capture";
 import { type GcodeToolpath } from "./lib/gcodeParse";
 import { type Locale, t } from "./lib/i18n";
 import { checkPrintability, type PrintabilityResult } from "./lib/printability";
-import type { SliceMetadata, VisionReview } from "./lib/project";
+import type { SliceMetadata } from "./lib/project";
 
 interface PrintabilityPanelProps {
   locale: Locale;
@@ -14,23 +14,20 @@ interface PrintabilityPanelProps {
   toolpath: GcodeToolpath | null;
   gcodeText: string | null;
   sliceMetadata: SliceMetadata | null;
-  sliceReview: VisionReview | null;
 }
 
 type ViewerTab = "model" | "slice";
 
-// A pure viewer: all slicing/review business logic (running the slice test,
-// running the vision-driven slice review) lives in App.tsx, which owns the
-// busy-state machine, the persisted project.sliceMetadata/sliceReview, and
-// the buttons that trigger them (next to Rerender/Review/Iterate). This
-// component only displays what's already been computed.
+// A pure viewer: slicing is now automatic (App.tsx runs it as part of every
+// draft render and its findings ride along in the same vision review — see
+// compileDraftCode/reviewRenderedDraft), so this component only displays
+// what's already been computed, with no buttons of its own.
 export function PrintabilityPanel({
   locale,
   stl,
   toolpath,
   gcodeText,
-  sliceMetadata,
-  sliceReview
+  sliceMetadata
 }: PrintabilityPanelProps) {
   const tr = (key: Parameters<typeof t>[1]) => t(locale, key);
 
@@ -163,21 +160,6 @@ export function PrintabilityPanel({
               </div>
             ) : null}
           </div>
-        </div>
-      ) : null}
-
-      {sliceReview ? (
-        <div className="printabilitySliceReview">
-          <strong>{tr("sliceReviewTitle")}</strong>
-          <p>{sliceReview.summary}</p>
-          <ul className="printabilityStats">
-            {sliceReview.issues.map((issue, index) => (
-              <li key={index}>{issue}</li>
-            ))}
-          </ul>
-          <p className="confidence">
-            {tr("confidence")} {Math.round(sliceReview.confidence * 100)}%
-          </p>
         </div>
       ) : null}
     </section>

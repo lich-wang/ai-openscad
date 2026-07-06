@@ -4,11 +4,9 @@ import {
   Eye,
   FileUp,
   KeyRound,
-  Layers,
   Play,
   RefreshCw,
   Send,
-  Sparkles,
   WandSparkles
 } from "lucide-react";
 import {
@@ -26,9 +24,9 @@ import {
   generateOpenScad,
   optimizePrompt,
   proposeRevision,
-  reviewSliceForPrintability,
   reviewViews
 } from "./lib/apiClient";
+import type { SliceDiagnostics } from "./lib/openscadSkills";
 import {
   captureToolpathHighlightViews,
   downloadText
@@ -93,9 +91,8 @@ type BusyState =
   | "compiling"
   | "reviewing"
   | "slicing"
-  | "sliceReviewing"
   | "exporting";
-type WorkflowStage = "code" | "render" | "review" | "slice" | "sliceReview";
+type WorkflowStage = "code" | "render" | "review";
 type WorkflowStageState = "waiting" | "active" | "complete" | "error";
 type ReferenceImageSelection = {
   id: string;
@@ -113,6 +110,7 @@ type DraftCompileSuccess = {
   trace: PromptTraceEntry;
   views: ProjectState["views"];
   stl: string;
+  sliceMetadata: SliceMetadata | null;
 };
 type DraftCompileFailure = {
   ok: false;
@@ -335,11 +333,11 @@ export default function App() {
   const [autoRunActive, setAutoRunActive] = useState(false);
   const [promptFieldDraft, setPromptFieldDraft] = useState<PromptFieldDraft | null>(null);
   // The raw G-code/toolpath is ephemeral (not persisted to localStorage,
-  // unlike project.sliceMetadata/sliceReview): a real print's G-code can be
-  // ~20x larger than its STL, which risks blowing the localStorage quota.
-  // Re-slicing is cheap, so it's simply cleared whenever the STL changes.
+  // unlike project.sliceMetadata): a real print's G-code can be ~20x
+  // larger than its STL, which risks blowing the localStorage quota.
+  // Re-slicing is cheap (it reruns automatically on every render), so
+  // this is simply cleared whenever the STL changes.
   const [sliceGcodeText, setSliceGcodeText] = useState<string | null>(null);
-  const [sliceProgress, setSliceProgress] = useState(0);
   const busyRef = useRef<BusyState>("idle");
   const operationTokenRef = useRef(0);
   const workflowTokenRef = useRef(0);
@@ -361,8 +359,6 @@ export default function App() {
   const controlsLocked = autoRunActive || isBusy;
   const hasRenderedViews = hasCleanRenderedViews(project);
   const hasCurrentReview = Boolean(project.review && hasRenderedViews);
-  const hasSliceMetadata = Boolean(project.sliceMetadata);
-  const hasSliceReview = Boolean(project.sliceReview);
   const sliceToolpath = useMemo<GcodeToolpath | null>(() => {
     if (!sliceGcodeText) {
       return null;
@@ -392,9 +388,7 @@ export default function App() {
     errorStage,
     hasCode: Boolean(project.currentCode.trim()),
     hasRenderedViews,
-    hasReview: hasCurrentReview,
-    hasSlice: hasSliceMetadata,
-    hasSliceReview
+    hasReview: hasCurrentReview
   });
   const canUseVisionModelForDraft =
     getModelPreset(project.visionModelId, "vision").provider === "mimo" ||
@@ -446,7 +440,6 @@ export default function App() {
 
   useEffect(() => {
     setSliceGcodeText(null);
-    setSliceProgress(0);
   }, [project.id, project.stl]);
 
   // Persisting the workspace serializes every stored project; doing that per
@@ -810,7 +803,6 @@ export default function App() {
       renderEvidence: evidence,
       review: null,
       sliceMetadata: null,
-      sliceReview: null,
       stl: "",
       views: emptyViews(),
       runEvents: canRepairWithText
@@ -957,7 +949,6 @@ export default function App() {
             renderEvidence: null,
             review: null,
             sliceMetadata: null,
-            sliceReview: null,
             stl: "",
             views: emptyViews(),
             referenceImages: imagesAtStart.map((image) => image.dataUrl),
@@ -1047,7 +1038,6 @@ export default function App() {
           renderEvidence: null,
           review: null,
           sliceMetadata: null,
-          sliceReview: null,
           stl: "",
           views: emptyViews(),
           runEvents: [
@@ -1107,7 +1097,6 @@ export default function App() {
               currentCode: "",
               review: null,
               sliceMetadata: null,
-              sliceReview: null,
               stl: "",
               views: emptyViews(),
               renderEvidence: null,
@@ -1171,7 +1160,6 @@ export default function App() {
               currentCode: code,
               review: null,
               sliceMetadata: null,
-              sliceReview: null,
               stl: "",
               views: emptyViews(),
               renderEvidence: null,
@@ -1271,8 +1259,7 @@ export default function App() {
               ...current,
               currentCode: finalCode,
               review: null,
-              sliceMetadata: null,
-              sliceReview: null,
+              sliceMetadata: rendered.sliceMetadata,
               views: rendered.views,
               stl: rendered.stl,
               compilerOutput: `${rendered.diagnostics}\n${tr("compiledDraft")}`,
@@ -1359,8 +1346,7 @@ export default function App() {
               ...current,
               currentCode: finalCode,
               review: null,
-              sliceMetadata: null,
-              sliceReview: null,
+              sliceMetadata: rendered.sliceMetadata,
               views: rendered.views,
               stl: rendered.stl,
               compilerOutput: `${rendered.diagnostics}\n${tr("compiledDraft")}`,
@@ -1444,14 +1430,51 @@ export default function App() {
         stl: null
       };
     }
+    const sliceMetadata = await sliceDraftStl(result.stl, autoRunToken, workflow);
     return {
       ok: true,
       diagnostics,
       evidence,
       trace,
       views: result.views,
-      stl: result.stl
+      stl: result.stl,
+      sliceMetadata
     };
+  }
+
+  // Slicing is folded into every draft render (fully automatic, per user
+  // request) instead of being a separate manual step. A slicing failure
+  // must never fail the render itself — CuraEngine is less forgiving of
+  // edge-case geometry than the OpenSCAD render pipeline, and a successful
+  // render should never be blocked by a slicer quirk. The raw G-code stays
+  // out of DraftCompileResult (same size reasoning as project.sliceMetadata
+  // not persisting it) and is stashed directly via setSliceGcodeText.
+  async function sliceDraftStl(
+    stl: string,
+    autoRunToken?: number,
+    workflow?: WorkflowIdentity
+  ): Promise<SliceMetadata | null> {
+    try {
+      await updateRenderStatus("slicing", autoRunToken, workflow);
+      const result = await sliceStlForPrintability(stl);
+      ensureWorkflowCurrent(workflow);
+      if (!result.ok) {
+        setSliceGcodeText(null);
+        return null;
+      }
+      const gcodeText = new TextDecoder().decode(result.gcode);
+      const toolpath = parseGcodeToolpath(gcodeText);
+      setSliceGcodeText(gcodeText);
+      return {
+        layerCount: result.layerCount,
+        printTimeSeconds: result.printTimeSeconds,
+        filamentVolumeMm3: result.filamentVolumeMm3,
+        supportSegmentRatio: toolpath.supportSegmentRatio
+      };
+    } catch {
+      setSliceGcodeText(null);
+      return null;
+    }
   }
 
   async function repairDraftCompileIfPossible(input: {
@@ -1501,7 +1524,6 @@ export default function App() {
               currentCode: code,
               review: null,
               sliceMetadata: null,
-              sliceReview: null,
               stl: "",
               views: emptyViews(),
               renderEvidence,
@@ -1613,7 +1635,6 @@ export default function App() {
               currentCode: code,
               review: null,
               sliceMetadata: null,
-              sliceReview: null,
               stl: "",
               views: emptyViews(),
               renderEvidence: null,
@@ -1689,6 +1710,20 @@ export default function App() {
       status: "active",
       kind: "review-started"
     }));
+    // Slice diagnostics (from the automatic post-render slice) ride along
+    // in the same review call instead of a separate slice-review pass, so
+    // the model produces one unified correctionPrompt covering both
+    // geometry and printability.
+    const toolpathImages = sliceToolpath ? captureToolpathHighlightViews(sliceToolpath) : [];
+    const sliceDiagnostics: SliceDiagnostics | null =
+      sliceToolpath && toolpathImages.length > 0
+        ? {
+            supportPercent: Math.round(sliceToolpath.supportSegmentRatio * 100),
+            layerCount: projectRef.current.sliceMetadata?.layerCount ?? null,
+            locationSummaries: describeSupportLocations(sliceToolpath),
+            toolpathImageCount: toolpathImages.length
+          }
+        : null;
     let reviewed: Awaited<ReturnType<typeof reviewViews>>;
     try {
       const currentProject = projectRef.current;
@@ -1700,7 +1735,9 @@ export default function App() {
         renderedImages: viewImagesInOrder(input.views),
         referenceImages: currentProject.referenceImages,
         renderEvidence: input.renderEvidence,
-        strictConfidence: input.strictConfidence
+        strictConfidence: input.strictConfidence,
+        toolpathImages,
+        sliceDiagnostics
       });
     } catch (caught) {
       setProject((current) => ({
@@ -1907,7 +1944,6 @@ export default function App() {
         currentCode: "",
         review: null,
         sliceMetadata: null,
-        sliceReview: null,
         views: emptyViews(),
         stl: "",
         renderEvidence: null,
@@ -1973,7 +2009,6 @@ export default function App() {
         currentCode: code,
         review: null,
         sliceMetadata: null,
-        sliceReview: null,
         stl: "",
         views: emptyViews(),
         renderEvidence: null,
@@ -2037,8 +2072,7 @@ export default function App() {
         ...current,
         currentCode: code,
         review: null,
-        sliceMetadata: null,
-        sliceReview: null,
+        sliceMetadata: rendered.sliceMetadata,
         views: rendered.views,
         stl: rendered.stl,
         compilerOutput: `${rendered.diagnostics}\n${tr("compiledDraft")}`,
@@ -2101,144 +2135,6 @@ export default function App() {
     });
   }
 
-  async function handleRunSliceTest() {
-    await runSafely("slicing", async () => {
-      if (!project.stl.trim()) {
-        throw new Error(tr("compileBeforeReview"));
-      }
-      const workflow = beginWorkflow(projectRef.current.id);
-      setSliceProgress(0);
-      const result = await sliceStlForPrintability(project.stl, {
-        onProgress: setSliceProgress
-      });
-      ensureWorkflowCurrent(workflow);
-      if (!result.ok) {
-        throw new Error(result.reason);
-      }
-      const gcodeText = new TextDecoder().decode(result.gcode);
-      const toolpath = parseGcodeToolpath(gcodeText);
-      const sliceMetadata: SliceMetadata = {
-        layerCount: result.layerCount,
-        printTimeSeconds: result.printTimeSeconds,
-        filamentVolumeMm3: result.filamentVolumeMm3,
-        supportSegmentRatio: toolpath.supportSegmentRatio
-      };
-      setSliceGcodeText(gcodeText);
-      setProject((current) =>
-        workflowIsCurrent(workflow, current)
-          ? {
-              ...current,
-              sliceMetadata,
-              sliceReview: null,
-              runEvents: [
-                ...current.runEvents,
-                createRunEvent({
-                  role: "tool",
-                  title: tr("sliceCompleted"),
-                  content: formatMessage(tr("sliceCompletedSummary"), {
-                    percent: Math.round(toolpath.supportSegmentRatio * 100),
-                    layers: sliceMetadata.layerCount ?? tr("sliceUnknown")
-                  })
-                })
-              ],
-              updatedAt: new Date().toISOString()
-            }
-          : current
-      );
-    });
-  }
-
-  async function handleRunSliceReview() {
-    await runSafely("sliceReviewing", async () => {
-      requireVisionApiKey();
-      if (!sliceToolpath || !project.sliceMetadata) {
-        throw new Error(tr("sliceBeforeReview"));
-      }
-      const originalRequirement = originalRequirementFor(project);
-      const workflow = beginWorkflow(projectRef.current.id);
-      // If the user edits the requirement while the review runs, their text
-      // must survive; only an unchanged baseline is replaced by the
-      // correction prompt (mirrors reviewRenderedDraft's same guard).
-      const baselineRequirement = projectRef.current.requirement;
-      const images = captureToolpathHighlightViews(sliceToolpath);
-      const locationSummaries = describeSupportLocations(sliceToolpath);
-      const supportPercent = Math.round(sliceToolpath.supportSegmentRatio * 100);
-      const startedEventId = crypto.randomUUID();
-      appendRunEvent(createRunEvent({
-        id: startedEventId,
-        role: "review",
-        title: tr("sliceReviewStarted"),
-        content: tr("sliceReviewStarted"),
-        status: "active",
-        kind: "review-started"
-      }));
-      let reviewed: Awaited<ReturnType<typeof reviewSliceForPrintability>>;
-      try {
-        reviewed = await reviewSliceForPrintability({
-          apiKey: visionApiKey,
-          modelId: project.visionModelId,
-          requirement: originalRequirement,
-          code: project.currentCode,
-          toolpathImages: images,
-          supportPercent,
-          layerCount: project.sliceMetadata.layerCount,
-          locationSummaries
-        });
-      } catch (caught) {
-        setProject((current) => ({
-          ...current,
-          runEvents: current.runEvents.map((event) =>
-            event.id === startedEventId ? { ...event, status: "error" as const } : event
-          ),
-          updatedAt: new Date().toISOString()
-        }));
-        throw caught;
-      }
-      const { review, trace } = reviewed;
-      ensureWorkflowCurrent(workflow);
-      setProject((current) => {
-        if (!workflowIsCurrent(workflow, current)) {
-          return current;
-        }
-        return {
-          ...current,
-          sliceReview: review,
-          requirement:
-            current.requirement === baselineRequirement
-              ? review.correctionPrompt || current.requirement
-              : current.requirement,
-          promptTrace: [...current.promptTrace, trace],
-          runEvents: [
-            ...current.runEvents.filter((event) => event.id !== startedEventId),
-            createRunEvent({
-              role: "review",
-              title: tr("sliceReviewComplete"),
-              content: tr("sliceReviewComplete"),
-              status: "complete",
-              kind: "notice"
-            }),
-            createRunEvent({
-              role: "review",
-              title: tr("sliceReviewTitle"),
-              content: review.summary,
-              review,
-              status: "complete",
-              kind: "slice-review"
-            }),
-            createRunEvent({
-              role: "review",
-              title: tr("correctionPrompt"),
-              content: review.correctionPrompt,
-              status: "complete",
-              kind: "correction-prompt"
-            })
-          ],
-          updatedAt: new Date().toISOString()
-        };
-      });
-    });
-  }
-
   async function handleDiagnosticFix() {
     clearPromptFieldDraft();
     await runSafely("generating", async () => {
@@ -2263,7 +2159,6 @@ export default function App() {
         currentCode: "",
         review: null,
         sliceMetadata: null,
-        sliceReview: null,
         views: emptyViews(),
         stl: "",
         renderEvidence: null,
@@ -2340,7 +2235,6 @@ export default function App() {
               currentCode: code,
               review: null,
               sliceMetadata: null,
-              sliceReview: null,
               views: emptyViews(),
               stl: "",
               renderEvidence: null,
@@ -2414,8 +2308,7 @@ export default function App() {
               ...current,
               currentCode: finalCode,
               review: null,
-              sliceMetadata: null,
-              sliceReview: null,
+              sliceMetadata: rendered.sliceMetadata,
               views: rendered.views,
               stl: rendered.stl,
               compilerOutput: `${rendered.diagnostics}\n${tr("compiledDraft")}`,
@@ -2465,7 +2358,6 @@ export default function App() {
         currentCode: "",
         review: null,
         sliceMetadata: null,
-        sliceReview: null,
         views: emptyViews(),
         stl: "",
         renderEvidence: null,
@@ -2546,7 +2438,6 @@ export default function App() {
               currentCode: code,
               review: null,
               sliceMetadata: null,
-              sliceReview: null,
               views: emptyViews(),
               stl: "",
               renderEvidence: null,
@@ -2641,8 +2532,7 @@ export default function App() {
               ...current,
               currentCode: finalCode,
               review: null,
-              sliceMetadata: null,
-              sliceReview: null,
+              sliceMetadata: rendered.sliceMetadata,
               views: rendered.views,
               stl: rendered.stl,
               compilerOutput: `${rendered.diagnostics}\n${tr("compiledDraft")}`,
@@ -2795,7 +2685,6 @@ export default function App() {
       currentCode: code,
       review: null,
       sliceMetadata: null,
-      sliceReview: null,
       stl: "",
       views: emptyViews(),
       renderEvidence: null,
@@ -3129,20 +3018,6 @@ export default function App() {
                     <Download size={16} />
                     {tr("finalExport")}
                   </button>
-                  <button className="secondaryAction" disabled={isBusy} onClick={handleRunSliceTest}>
-                    <Layers size={16} />
-                    {busy === "slicing" ? `${tr("slicing")} ${sliceProgress}%` : tr("runSliceTest")}
-                  </button>
-                  {hasSliceMetadata ? (
-                    <button
-                      className="secondaryAction"
-                      disabled={isBusy}
-                      onClick={handleRunSliceReview}
-                    >
-                      <Sparkles size={16} />
-                      {tr("runSliceReview")}
-                    </button>
-                  ) : null}
                 </>
               ) : null}
             </div>
@@ -3175,7 +3050,6 @@ export default function App() {
             gcodeText={sliceGcodeText}
             locale={locale}
             sliceMetadata={project.sliceMetadata}
-            sliceReview={project.sliceReview}
             stl={project.stl}
             toolpath={sliceToolpath}
           />
@@ -3419,9 +3293,7 @@ function WorkflowStageStrip(props: {
   const labelKeys: Record<WorkflowStage, MessageKey> = {
     code: "stageCode",
     render: "stageRender",
-    review: "stageReview",
-    slice: "stageSlice",
-    sliceReview: "stageSliceReview"
+    review: "stageReview"
   };
   return (
     <ol className="workflowStageStrip arrowPipeline" aria-label={t(props.locale, "workflowStages")}>
@@ -3505,19 +3377,15 @@ function AgentRunPanel(props: {
             event.status === "active" ? true : Boolean(openThinkingEvents[event.id]);
           // Prefer the durable kind field; fall back to localized titles only
           // for events persisted before kinds existed.
-          const isVisualReviewEvent = event.kind
+          const isReviewEvent = event.kind
             ? event.kind === "review"
             : event.title === t(props.locale, "visualReview");
-          const isSliceReviewEvent = event.kind === "slice-review";
-          const isReviewEvent = isVisualReviewEvent || isSliceReviewEvent;
           const isCorrectionPromptEvent = event.kind
             ? event.kind === "correction-prompt"
             : event.title === t(props.locale, "correctionPrompt");
-          const eventReview = isVisualReviewEvent
+          const eventReview = isReviewEvent
             ? event.review ?? props.project.review
-            : isSliceReviewEvent
-              ? event.review ?? props.project.sliceReview
-              : null;
+            : null;
           const showEventContent =
             Boolean(event.content) &&
             !isCorrectionPromptEvent &&
@@ -3627,7 +3495,6 @@ function busyStatusLabel(locale: Locale, busy: Exclude<BusyState, "idle">): stri
     compiling: "busyCompiling",
     reviewing: "busyReviewing",
     slicing: "busySlicing",
-    sliceReviewing: "busySliceReviewing",
     exporting: "busyExporting"
   };
   return t(locale, keys[busy]);
@@ -3640,12 +3507,8 @@ function workflowStageForBusy(busy: BusyState): WorkflowStage {
   if (busy === "reviewing") {
     return "review";
   }
-  if (busy === "slicing") {
-    return "slice";
-  }
-  if (busy === "sliceReviewing") {
-    return "sliceReview";
-  }
+  // Slicing is folded into the render step (it runs automatically right
+  // after a successful compile), so it stays under the "render" stage.
   return "render";
 }
 
@@ -3665,8 +3528,6 @@ function buildWorkflowStages(args: {
   hasCode: boolean;
   hasRenderedViews: boolean;
   hasReview: boolean;
-  hasSlice: boolean;
-  hasSliceReview: boolean;
 }): Array<{ id: WorkflowStage; state: WorkflowStageState }> {
   const activeStage = args.busy === "idle" ? "" : workflowStageForBusy(args.busy);
   return [
@@ -3681,14 +3542,6 @@ function buildWorkflowStages(args: {
     {
       id: "review",
       state: workflowStageState("review", args.errorStage, activeStage, args.hasReview)
-    },
-    {
-      id: "slice",
-      state: workflowStageState("slice", args.errorStage, activeStage, args.hasSlice)
-    },
-    {
-      id: "sliceReview",
-      state: workflowStageState("sliceReview", args.errorStage, activeStage, args.hasSliceReview)
     }
   ];
 }
