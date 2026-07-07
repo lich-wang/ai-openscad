@@ -3905,6 +3905,10 @@ test("manual code edits clear stale views before automatic rerender repair", asy
 });
 
 test("wavy cup draft generation stays low complexity and renders views", async ({ page }) => {
+  // Generation now also runs an automatic CuraEngine slice plus nine
+  // stage-view captures after the render, so this heavy wavy-cup model
+  // needs more than the default 30s on slower CI hardware.
+  test.setTimeout(90_000);
   const wavyCupCode = `
 height = 200;
 outer_d_bottom = 65;
