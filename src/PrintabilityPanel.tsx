@@ -2,11 +2,12 @@ import { useEffect, useMemo, useState } from "react";
 import { STLLoader } from "three/examples/jsm/loaders/STLLoader.js";
 import { GcodeSlicePreview } from "./GcodeSlicePreview";
 import { InteractiveStlPreview } from "./InteractiveStlPreview";
-import { downloadText } from "./lib/capture";
+import { downloadText, type SliceStage } from "./lib/capture";
 import { type GcodeToolpath } from "./lib/gcodeParse";
-import { type Locale, t } from "./lib/i18n";
+import { type Locale, t, type MessageKey } from "./lib/i18n";
 import { checkPrintability, type PrintabilityResult } from "./lib/printability";
-import type { SliceMetadata } from "./lib/project";
+import type { SliceMetadata, SliceStageViews } from "./lib/project";
+import { VIEW_KEYS, type ViewKey, type ViewSet } from "./lib/viewSpecs";
 
 interface PrintabilityPanelProps {
   locale: Locale;
@@ -14,9 +15,41 @@ interface PrintabilityPanelProps {
   toolpath: GcodeToolpath | null;
   gcodeText: string | null;
   sliceMetadata: SliceMetadata | null;
+  sliceStageViews: SliceStageViews | null;
+  views: ViewSet;
 }
 
 type ViewerTab = "model" | "slice";
+
+const VIEW_LABEL_KEYS: Record<ViewKey, MessageKey> = {
+  front: "front",
+  back: "back",
+  left: "left",
+  right: "right",
+  top: "top",
+  bottom: "bottom",
+  isoFrontRightTop: "isoFrontRightTop",
+  isoFrontLeftTop: "isoFrontLeftTop",
+  isoBackRightTop: "isoBackRightTop",
+  isoBackLeftTop: "isoBackLeftTop",
+  isoFrontRightBottom: "isoFrontRightBottom",
+  isoFrontLeftBottom: "isoFrontLeftBottom",
+  isoBackRightBottom: "isoBackRightBottom",
+  isoBackLeftBottom: "isoBackLeftBottom"
+};
+
+const SLICE_STAGE_LABEL_KEYS: Record<"support" | "print", Record<SliceStage, MessageKey>> = {
+  support: {
+    start: "sliceStageSupportStart",
+    middle: "sliceStageSupportMiddle",
+    end: "sliceStageSupportEnd"
+  },
+  print: {
+    start: "sliceStagePrintStart",
+    middle: "sliceStagePrintMiddle",
+    end: "sliceStagePrintEnd"
+  }
+};
 
 // A pure viewer: slicing is now automatic (App.tsx runs it as part of every
 // draft render and its findings ride along in the same vision review — see
@@ -27,7 +60,9 @@ export function PrintabilityPanel({
   stl,
   toolpath,
   gcodeText,
-  sliceMetadata
+  sliceMetadata,
+  sliceStageViews,
+  views
 }: PrintabilityPanelProps) {
   const tr = (key: Parameters<typeof t>[1]) => t(locale, key);
 
@@ -62,6 +97,7 @@ export function PrintabilityPanel({
 
   const supportRatio = sliceMetadata?.supportSegmentRatio ?? toolpath?.supportSegmentRatio ?? null;
   const supportPercentLabel = supportRatio != null ? Math.round(supportRatio * 100) : null;
+  const stageNoun = sliceStageViews?.usedSupportRange ? "support" : "print";
 
   return (
     <section className="printabilityPanel" aria-label={tr("printability")}>
@@ -116,9 +152,32 @@ export function PrintabilityPanel({
       </div>
 
       {activeTab === "model" ? (
-        <InteractiveStlPreview label={tr("interactiveStlPreview")} stl={stl} />
+        <>
+          <InteractiveStlPreview label={tr("interactiveStlPreview")} stl={stl} />
+          <div className="viewGrid">
+            {VIEW_KEYS.map((key) => (
+              <ViewImage key={key} label={tr(VIEW_LABEL_KEYS[key])} src={views[key]} />
+            ))}
+          </div>
+        </>
       ) : (
-        <GcodeSlicePreview label={tr("sliceTab")} locale={locale} toolpath={toolpath} />
+        <>
+          <GcodeSlicePreview label={tr("sliceTab")} locale={locale} toolpath={toolpath} />
+          {sliceStageViews && sliceStageViews.images.length > 0 ? (
+            <div className="sliceViewGrid">
+              {sliceStageViews.images.map((image, index) => (
+                <ViewImage
+                  className="sliceViewTile"
+                  key={index}
+                  label={`${tr(SLICE_STAGE_LABEL_KEYS[stageNoun][image.stage])} · ${tr(VIEW_LABEL_KEYS[image.viewKey])}`}
+                  src={image.dataUrl}
+                />
+              ))}
+            </div>
+          ) : (
+            <p className="printabilityEmpty">{tr("sliceNoGcode")}</p>
+          )}
+        </>
       )}
 
       {sliceMetadata ? (
@@ -171,6 +230,15 @@ function PrintabilityBadge({ ok, label }: { ok: boolean; label: string }) {
     <span className="printabilityBadge" data-ok={ok}>
       {label}
     </span>
+  );
+}
+
+function ViewImage(props: { label: string; src: string; className?: string }) {
+  return (
+    <figure className={props.className ?? "viewTile"}>
+      {props.src ? <img alt={props.label} src={props.src} /> : <div />}
+      <figcaption>{props.label}</figcaption>
+    </figure>
   );
 }
 

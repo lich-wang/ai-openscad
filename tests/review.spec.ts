@@ -2202,8 +2202,11 @@ test("generation streams code and automatically renders draft views", async ({
   expect(reviewRequirement).toContain("生成一个30ML的杯子模型");
   expect(reviewRequirement).not.toContain("Thinking through the cup proportions");
   expect(reviewRequirement).not.toContain("Keeping the draft geometry simple");
-  expect(reviewImageUrls).toHaveLength(14);
-  expect(reviewImageUrls).toEqual(renderedImageUrlsBeforePreviewDrag);
+  // The review payload always leads with the 14 mesh views in order;
+  // additional slice-diagnostic toolpath images (from the automatic
+  // post-render slice) may follow, so only the leading 14 are compared.
+  expect(reviewImageUrls.length).toBeGreaterThanOrEqual(14);
+  expect(reviewImageUrls.slice(0, 14)).toEqual(renderedImageUrlsBeforePreviewDrag);
   expect(storedAfterFirstReview.originalRequirement).toBe("生成一个30ML的杯子模型");
   expect(storedAfterFirstReview.requirement).toContain("增加杯口倒角");
   expect(JSON.stringify(storedAfterFirstReview.promptTrace)).not.toContain(
@@ -2770,8 +2773,10 @@ test("generate bounded confidence run stops after target confidence and omits co
   await expect(page.getByRole("button", { name: /Iterate Again/i })).toBeVisible();
   expect(llmBodies).toHaveLength(2);
   expect(visionImageBatches).toHaveLength(2);
-  expect(visionImageBatches[0]).toHaveLength(14);
-  expect(visionImageBatches[1]).toHaveLength(14);
+  // The 14 mesh views always lead; additional slice-diagnostic toolpath
+  // images (from the automatic post-render slice) may follow.
+  expect(visionImageBatches[0].length).toBeGreaterThanOrEqual(14);
+  expect(visionImageBatches[1].length).toBeGreaterThanOrEqual(14);
   await expect(page.locator(".agentRun")).toContainText(/Auto iteration 1 of 2/i);
   expect(llmBodies[1]).toContain("Draft is still missing the handle depth.");
   expect(llmBodies[1]).not.toMatch(/confidence/i);
@@ -2840,7 +2845,9 @@ test("bounded confidence run rolls back when a follow-up lowers confidence", asy
     visionBodies.push(bodyText);
     visionImageBatches.push(imageUrls);
     expect(visionBodies.length, "unexpected extra /api/vision request").toBeLessThanOrEqual(4);
-    expect(imageUrls).toHaveLength(14);
+    // The 14 mesh views always lead; additional slice-diagnostic toolpath
+    // images (from the automatic post-render slice) may follow.
+    expect(imageUrls.length).toBeGreaterThanOrEqual(14);
     expect(bodyText).toContain("compileStatus: success");
     expect(bodyText).toContain("viewCount: 14");
     const responses = [
@@ -2907,8 +2914,10 @@ test("bounded confidence run rolls back when a follow-up lowers confidence", asy
   expect(llmBodies).toHaveLength(3);
   expect(visionBodies).toHaveLength(4);
   expect(visionImageBatches).toHaveLength(4);
+  // The 14 mesh views always lead; additional slice-diagnostic toolpath
+  // images (from the automatic post-render slice) may follow.
   for (const imageBatch of visionImageBatches) {
-    expect(imageBatch).toHaveLength(14);
+    expect(imageBatch.length).toBeGreaterThanOrEqual(14);
   }
   expect(visionImageBatches[2]).toEqual(visionImageBatches[0]);
   expect(visionImageBatches[2]).not.toEqual(visionImageBatches[1]);

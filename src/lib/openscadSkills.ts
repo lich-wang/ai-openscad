@@ -67,15 +67,21 @@ ${formatRenderEvidence(input.renderEvidence)}
 Return the complete revised OpenSCAD code only.`;
 }
 
+export interface SliceStageImageDescriptor {
+  stage: "start" | "middle" | "end";
+  viewKey: string;
+}
+
 export interface SliceDiagnostics {
   supportPercent: number;
   layerCount: number | null;
   locationSummaries: string[];
-  toolpathImageCount: number;
+  usedSupportRange: boolean;
+  stageImages: SliceStageImageDescriptor[];
 }
 
 const SLICE_DIAGNOSTICS_SYSTEM_ADDENDUM = `
-After the rendered views (and any reference images), additional images may show a real CuraEngine slice of this model as toolpath renders from a few angles, where orange lines are support material the slicer had to add; other colors print without support. A text summary of support location (rough Z-height band and XY side) and support percentage is also provided.
+After the rendered views (and any reference images), additional images may show a real CuraEngine slice of this model as toolpath renders, where orange lines are support material the slicer had to add; other colors print without support. These are grouped into three print-progress stages (support start/middle/end, or overall print start/middle/end when the model needs no support), each shown from a few angles, so you can see support material appear and grow (or the print simply progress) across the sequence. A text summary of support location (rough Z-height band and XY side) and support percentage is also provided.
 When slice diagnostics are present, fold print-support findings into the SAME issues/correctionPrompt as the geometry review below — do not produce separate output. If support usage is already minimal (well under 10%) or concentrated only in unavoidable areas (e.g. a flat base), do not treat it as an issue.`;
 
 export function buildVisionSystemPrompt(requirement = "", hasSliceDiagnostics = false): string {
@@ -117,9 +123,13 @@ ${formatSliceDiagnostics(sliceDiagnostics)}`;
 }
 
 function formatSliceDiagnostics(diagnostics?: SliceDiagnostics | null): string {
-  if (!diagnostics || diagnostics.toolpathImageCount === 0) {
+  if (!diagnostics || diagnostics.stageImages.length === 0) {
     return "";
   }
+  const stageNoun = diagnostics.usedSupportRange ? "support" : "print";
+  const imageList = diagnostics.stageImages
+    .map((image, index) => `  ${index + 1}. ${stageNoun} ${image.stage} - ${image.viewKey}`)
+    .join("\n");
   return `
 Slice diagnostics:
 - Support material: ~${diagnostics.supportPercent}% of extruded paths
@@ -127,7 +137,9 @@ Slice diagnostics:
 - Support location breakdown:
 ${diagnostics.locationSummaries.map((line) => `  - ${line}`).join("\n") || "  - No support material detected."}
 
-Toolpath renders provided: ${diagnostics.toolpathImageCount} (orange = support material). Review these alongside the mesh views for print-support issues, and fold any findings into the same issues/correctionPrompt above.`;
+Toolpath renders provided: ${diagnostics.stageImages.length}, in this exact order (orange = support material; each stage shows the print built up cumulatively through that point, not an isolated layer):
+${imageList}
+Review these alongside the mesh views for print-support issues, referencing specific stages when helpful (e.g. "at the ${stageNoun} end stage..."), and fold any findings into the same issues/correctionPrompt above.`;
 }
 
 export function buildReferenceImageSystemPrompt(): string {

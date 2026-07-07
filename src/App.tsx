@@ -28,10 +28,15 @@ import {
 } from "./lib/apiClient";
 import type { SliceDiagnostics } from "./lib/openscadSkills";
 import {
-  captureToolpathHighlightViews,
+  captureSliceStageViews,
   downloadText
 } from "./lib/capture";
-import { describeSupportLocations, parseGcodeToolpath, type GcodeToolpath } from "./lib/gcodeParse";
+import {
+  describeSupportLocations,
+  findSliceProgressStages,
+  parseGcodeToolpath,
+  type GcodeToolpath
+} from "./lib/gcodeParse";
 import { formatMessage, getBrowserLocale, t, type Locale, type MessageKey } from "./lib/i18n";
 import {
   CODE_MODEL_PRESETS,
@@ -66,7 +71,8 @@ import {
   type RunEventKind,
   type RunEventRole,
   type RunEventStatus,
-  type SliceMetadata
+  type SliceMetadata,
+  type SliceStageViews
 } from "./lib/project";
 import { sliceStlForPrintability } from "./lib/slice";
 import { createRenderMcp, type RenderMcpStage } from "./lib/render";
@@ -111,6 +117,8 @@ type DraftCompileSuccess = {
   views: ProjectState["views"];
   stl: string;
   sliceMetadata: SliceMetadata | null;
+  sliceStageViews: SliceStageViews | null;
+  sliceToolpath: GcodeToolpath | null;
 };
 type DraftCompileFailure = {
   ok: false;
@@ -128,6 +136,16 @@ type AutoRunCheckpoint = {
   stl: string;
   renderEvidence: RenderEvidence;
   review: NonNullable<ProjectState["review"]>;
+  sliceMetadata: SliceMetadata | null;
+  sliceStageViews: SliceStageViews | null;
+  sliceToolpath: GcodeToolpath | null;
+  // Unlike project.sliceMetadata/sliceStageViews (persisted to
+  // localStorage), this checkpoint only ever lives in memory for the
+  // duration of one auto-run loop, so the size concern that keeps raw
+  // G-code out of persisted state doesn't apply here — restored on
+  // rollback purely so the UI (toolpath viewer/download button) matches
+  // the restored code; the review logic itself uses sliceToolpath above.
+  sliceGcodeText: string | null;
 };
 type PromptFieldDraft = {
   fields: PromptFields;
@@ -143,22 +161,6 @@ const MAX_TARGET_CONFIDENCE_PERCENT = 100;
 const DEFAULT_AUTO_ITERATION_LIMIT = 0;
 const MIN_AUTO_ITERATION_LIMIT = 0;
 const MAX_AUTO_ITERATION_LIMIT = 5;
-const VIEW_LABEL_KEYS: Record<ViewKey, MessageKey> = {
-  front: "front",
-  back: "back",
-  left: "left",
-  right: "right",
-  top: "top",
-  bottom: "bottom",
-  isoFrontRightTop: "isoFrontRightTop",
-  isoFrontLeftTop: "isoFrontLeftTop",
-  isoBackRightTop: "isoBackRightTop",
-  isoBackLeftTop: "isoBackLeftTop",
-  isoFrontRightBottom: "isoFrontRightBottom",
-  isoFrontLeftBottom: "isoFrontLeftBottom",
-  isoBackRightBottom: "isoBackRightBottom",
-  isoBackLeftBottom: "isoBackLeftBottom"
-};
 const VIEW_DOWNLOAD_KEYS: Record<ViewKey, MessageKey> = {
   front: "downloadFrontPng",
   back: "downloadBackPng",
@@ -338,6 +340,12 @@ export default function App() {
   // Re-slicing is cheap (it reruns automatically on every render), so
   // this is simply cleared whenever the STL changes.
   const [sliceGcodeText, setSliceGcodeText] = useState<string | null>(null);
+  // Long-running async loops (the auto-confidence loop) are kicked off from
+  // one render's closure and keep executing across many subsequent state
+  // updates; reading `sliceGcodeText` directly inside them would see a
+  // stale snapshot from whenever the loop started, the same reason
+  // `projectRef` exists below instead of reading `project` directly.
+  const sliceGcodeTextRef = useRef(sliceGcodeText);
   const busyRef = useRef<BusyState>("idle");
   const operationTokenRef = useRef(0);
   const workflowTokenRef = useRef(0);
@@ -437,6 +445,10 @@ export default function App() {
   useEffect(() => {
     projectRef.current = project;
   }, [project]);
+
+  useEffect(() => {
+    sliceGcodeTextRef.current = sliceGcodeText;
+  }, [sliceGcodeText]);
 
   useEffect(() => {
     setSliceGcodeText(null);
@@ -803,6 +815,7 @@ export default function App() {
       renderEvidence: evidence,
       review: null,
       sliceMetadata: null,
+      sliceStageViews: null,
       stl: "",
       views: emptyViews(),
       runEvents: canRepairWithText
@@ -949,6 +962,7 @@ export default function App() {
             renderEvidence: null,
             review: null,
             sliceMetadata: null,
+            sliceStageViews: null,
             stl: "",
             views: emptyViews(),
             referenceImages: imagesAtStart.map((image) => image.dataUrl),
@@ -1038,6 +1052,7 @@ export default function App() {
           renderEvidence: null,
           review: null,
           sliceMetadata: null,
+          sliceStageViews: null,
           stl: "",
           views: emptyViews(),
           runEvents: [
@@ -1097,6 +1112,7 @@ export default function App() {
               currentCode: "",
               review: null,
               sliceMetadata: null,
+              sliceStageViews: null,
               stl: "",
               views: emptyViews(),
               renderEvidence: null,
@@ -1160,6 +1176,7 @@ export default function App() {
               currentCode: code,
               review: null,
               sliceMetadata: null,
+              sliceStageViews: null,
               stl: "",
               views: emptyViews(),
               renderEvidence: null,
@@ -1260,6 +1277,7 @@ export default function App() {
               currentCode: finalCode,
               review: null,
               sliceMetadata: rendered.sliceMetadata,
+              sliceStageViews: rendered.sliceStageViews,
               views: rendered.views,
               stl: rendered.stl,
               compilerOutput: `${rendered.diagnostics}\n${tr("compiledDraft")}`,
@@ -1288,7 +1306,10 @@ export default function App() {
           code: finalCode,
           views: rendered.views,
           stl: rendered.stl,
-          renderEvidence: rendered.evidence
+          renderEvidence: rendered.evidence,
+          sliceMetadata: rendered.sliceMetadata,
+          sliceStageViews: rendered.sliceStageViews,
+          sliceToolpath: rendered.sliceToolpath
         });
       }
     });
@@ -1347,6 +1368,7 @@ export default function App() {
               currentCode: finalCode,
               review: null,
               sliceMetadata: rendered.sliceMetadata,
+              sliceStageViews: rendered.sliceStageViews,
               views: rendered.views,
               stl: rendered.stl,
               compilerOutput: `${rendered.diagnostics}\n${tr("compiledDraft")}`,
@@ -1430,7 +1452,7 @@ export default function App() {
         stl: null
       };
     }
-    const sliceMetadata = await sliceDraftStl(result.stl, autoRunToken, workflow);
+    const sliced = await sliceDraftStl(result.stl, autoRunToken, workflow);
     return {
       ok: true,
       diagnostics,
@@ -1438,7 +1460,9 @@ export default function App() {
       trace,
       views: result.views,
       stl: result.stl,
-      sliceMetadata
+      sliceMetadata: sliced.sliceMetadata,
+      sliceStageViews: sliced.sliceStageViews,
+      sliceToolpath: sliced.sliceToolpath
     };
   }
 
@@ -1448,32 +1472,51 @@ export default function App() {
   // edge-case geometry than the OpenSCAD render pipeline, and a successful
   // render should never be blocked by a slicer quirk. The raw G-code stays
   // out of DraftCompileResult (same size reasoning as project.sliceMetadata
-  // not persisting it) and is stashed directly via setSliceGcodeText.
+  // not persisting it) and is stashed directly via setSliceGcodeText; the
+  // rendered stage screenshots are small PNGs though (same size class as
+  // the persisted mesh views), so those do travel through the result and
+  // get persisted onto the project.
   async function sliceDraftStl(
     stl: string,
     autoRunToken?: number,
     workflow?: WorkflowIdentity
-  ): Promise<SliceMetadata | null> {
+  ): Promise<{
+    sliceMetadata: SliceMetadata | null;
+    sliceStageViews: SliceStageViews | null;
+    sliceToolpath: GcodeToolpath | null;
+  }> {
     try {
       await updateRenderStatus("slicing", autoRunToken, workflow);
       const result = await sliceStlForPrintability(stl);
       ensureWorkflowCurrent(workflow);
       if (!result.ok) {
         setSliceGcodeText(null);
-        return null;
+        return { sliceMetadata: null, sliceStageViews: null, sliceToolpath: null };
       }
       const gcodeText = new TextDecoder().decode(result.gcode);
       const toolpath = parseGcodeToolpath(gcodeText);
       setSliceGcodeText(gcodeText);
+      const stages = findSliceProgressStages(toolpath);
+      const images = captureSliceStageViews(toolpath, stages);
       return {
-        layerCount: result.layerCount,
-        printTimeSeconds: result.printTimeSeconds,
-        filamentVolumeMm3: result.filamentVolumeMm3,
-        supportSegmentRatio: toolpath.supportSegmentRatio
+        sliceMetadata: {
+          layerCount: result.layerCount,
+          printTimeSeconds: result.printTimeSeconds,
+          filamentVolumeMm3: result.filamentVolumeMm3,
+          supportSegmentRatio: toolpath.supportSegmentRatio
+        },
+        sliceStageViews: {
+          usedSupportRange: stages.usedSupportRange,
+          images
+        },
+        // Returned directly (not read back later via a ref/state lookup) so
+        // reviewRenderedDraft can use the exact toolpath that matches this
+        // exact compile, instead of racing React's state-commit timing.
+        sliceToolpath: toolpath
       };
     } catch {
       setSliceGcodeText(null);
-      return null;
+      return { sliceMetadata: null, sliceStageViews: null, sliceToolpath: null };
     }
   }
 
@@ -1524,6 +1567,7 @@ export default function App() {
               currentCode: code,
               review: null,
               sliceMetadata: null,
+              sliceStageViews: null,
               stl: "",
               views: emptyViews(),
               renderEvidence,
@@ -1635,6 +1679,7 @@ export default function App() {
               currentCode: code,
               review: null,
               sliceMetadata: null,
+              sliceStageViews: null,
               stl: "",
               views: emptyViews(),
               renderEvidence: null,
@@ -1692,6 +1737,9 @@ export default function App() {
     strictConfidence: boolean;
     autoRunToken?: number;
     workflow?: WorkflowIdentity;
+    sliceMetadata: SliceMetadata | null;
+    sliceStageViews: SliceStageViews | null;
+    sliceToolpath: GcodeToolpath | null;
   }) {
     if (!allViewsRendered(input.views) || !renderEvidenceIsClean(input.renderEvidence)) {
       throw new Error(tr("compileBeforeReview"));
@@ -1713,15 +1761,27 @@ export default function App() {
     // Slice diagnostics (from the automatic post-render slice) ride along
     // in the same review call instead of a separate slice-review pass, so
     // the model produces one unified correctionPrompt covering both
-    // geometry and printability.
-    const toolpathImages = sliceToolpath ? captureToolpathHighlightViews(sliceToolpath) : [];
+    // geometry and printability. The stage screenshots were already
+    // captured and persisted at render time (see sliceDraftStl) — reused
+    // as-is here so the images reviewed match the images shown in the
+    // panel, instead of capturing a fresh (and differently framed) set.
+    // These all arrive as explicit parameters (not read back via a ref or
+    // `projectRef.current`) because this function is called from inside
+    // the long-lived auto-confidence loop, where a ref synced only by a
+    // `useEffect` can still be a render behind by the time it's read here.
+    const stageViews = input.sliceStageViews;
+    const toolpathImages = stageViews?.images.map((image) => image.dataUrl) ?? [];
     const sliceDiagnostics: SliceDiagnostics | null =
-      sliceToolpath && toolpathImages.length > 0
+      input.sliceToolpath && stageViews && stageViews.images.length > 0
         ? {
-            supportPercent: Math.round(sliceToolpath.supportSegmentRatio * 100),
-            layerCount: projectRef.current.sliceMetadata?.layerCount ?? null,
-            locationSummaries: describeSupportLocations(sliceToolpath),
-            toolpathImageCount: toolpathImages.length
+            supportPercent: Math.round(input.sliceToolpath.supportSegmentRatio * 100),
+            layerCount: input.sliceMetadata?.layerCount ?? null,
+            locationSummaries: describeSupportLocations(input.sliceToolpath),
+            usedSupportRange: stageViews.usedSupportRange,
+            stageImages: stageViews.images.map((image) => ({
+              stage: image.stage,
+              viewKey: image.viewKey
+            }))
           }
         : null;
     let reviewed: Awaited<ReturnType<typeof reviewViews>>;
@@ -1823,11 +1883,17 @@ export default function App() {
     views: ProjectState["views"];
     stl: string;
     renderEvidence: RenderEvidence;
+    sliceMetadata: SliceMetadata | null;
+    sliceStageViews: SliceStageViews | null;
+    sliceToolpath: GcodeToolpath | null;
   }) {
     let code = input.code;
     let views = input.views;
     let stl = input.stl;
     let renderEvidence: RenderEvidence | null = input.renderEvidence;
+    let sliceMetadata = input.sliceMetadata;
+    let sliceStageViews = input.sliceStageViews;
+    let sliceToolpath = input.sliceToolpath;
     let pendingCheckpoint: AutoRunCheckpoint | null = null;
     let usedAutoIterations = 0;
     const targetConfidence = targetConfidencePercentRef.current / 100;
@@ -1844,7 +1910,10 @@ export default function App() {
           views,
           renderEvidence,
           strictConfidence: true,
-          autoRunToken: input.autoRunToken
+          autoRunToken: input.autoRunToken,
+          sliceMetadata,
+          sliceStageViews,
+          sliceToolpath
         });
       } catch (caught) {
         if (caught instanceof AutoRunCanceledError) {
@@ -1864,6 +1933,13 @@ export default function App() {
         views = checkpoint.views;
         stl = checkpoint.stl;
         renderEvidence = checkpoint.renderEvidence;
+        sliceMetadata = checkpoint.sliceMetadata;
+        sliceStageViews = checkpoint.sliceStageViews;
+        sliceToolpath = checkpoint.sliceToolpath;
+        // UI-only restore (toolpath viewer/download button); the review
+        // call below uses the sliceToolpath variable above directly, not
+        // this state, so it isn't affected by React's commit timing.
+        setSliceGcodeText(checkpoint.sliceGcodeText);
         setProject((current) => ({
           ...current,
           currentCode: checkpoint.code,
@@ -1872,6 +1948,8 @@ export default function App() {
           views: checkpoint.views,
           stl: checkpoint.stl,
           renderEvidence: checkpoint.renderEvidence,
+          sliceMetadata: checkpoint.sliceMetadata,
+          sliceStageViews: checkpoint.sliceStageViews,
           compilerOutput: `${checkpoint.renderEvidence.diagnostics}\n${tr("compiledDraft")}`,
           runEvents: [
             ...current.runEvents,
@@ -1891,7 +1969,10 @@ export default function App() {
             views,
             renderEvidence,
             strictConfidence: true,
-            autoRunToken: input.autoRunToken
+            autoRunToken: input.autoRunToken,
+            sliceMetadata,
+            sliceStageViews,
+            sliceToolpath
           });
         } catch (caught) {
           if (caught instanceof AutoRunCanceledError) {
@@ -1924,7 +2005,11 @@ export default function App() {
         views,
         stl,
         renderEvidence,
-        review
+        review,
+        sliceMetadata,
+        sliceStageViews,
+        sliceToolpath,
+        sliceGcodeText: sliceGcodeTextRef.current
       };
       usedAutoIterations += 1;
       const autoIterationTitle = formatMessage(tr("autoIterationProgress"), {
@@ -1944,6 +2029,7 @@ export default function App() {
         currentCode: "",
         review: null,
         sliceMetadata: null,
+        sliceStageViews: null,
         views: emptyViews(),
         stl: "",
         renderEvidence: null,
@@ -2009,6 +2095,7 @@ export default function App() {
         currentCode: code,
         review: null,
         sliceMetadata: null,
+        sliceStageViews: null,
         stl: "",
         views: emptyViews(),
         renderEvidence: null,
@@ -2073,6 +2160,7 @@ export default function App() {
         currentCode: code,
         review: null,
         sliceMetadata: rendered.sliceMetadata,
+        sliceStageViews: rendered.sliceStageViews,
         views: rendered.views,
         stl: rendered.stl,
         compilerOutput: `${rendered.diagnostics}\n${tr("compiledDraft")}`,
@@ -2094,6 +2182,9 @@ export default function App() {
       views = rendered.views;
       stl = rendered.stl;
       renderEvidence = rendered.evidence;
+      sliceMetadata = rendered.sliceMetadata;
+      sliceStageViews = rendered.sliceStageViews;
+      sliceToolpath = rendered.sliceToolpath;
     }
   }
 
@@ -2130,7 +2221,10 @@ export default function App() {
         views: project.views,
         renderEvidence: project.renderEvidence,
         strictConfidence: false,
-        workflow
+        workflow,
+        sliceMetadata: project.sliceMetadata,
+        sliceStageViews: project.sliceStageViews,
+        sliceToolpath
       });
     });
   }
@@ -2159,6 +2253,7 @@ export default function App() {
         currentCode: "",
         review: null,
         sliceMetadata: null,
+        sliceStageViews: null,
         views: emptyViews(),
         stl: "",
         renderEvidence: null,
@@ -2235,6 +2330,7 @@ export default function App() {
               currentCode: code,
               review: null,
               sliceMetadata: null,
+              sliceStageViews: null,
               views: emptyViews(),
               stl: "",
               renderEvidence: null,
@@ -2309,6 +2405,7 @@ export default function App() {
               currentCode: finalCode,
               review: null,
               sliceMetadata: rendered.sliceMetadata,
+              sliceStageViews: rendered.sliceStageViews,
               views: rendered.views,
               stl: rendered.stl,
               compilerOutput: `${rendered.diagnostics}\n${tr("compiledDraft")}`,
@@ -2358,6 +2455,7 @@ export default function App() {
         currentCode: "",
         review: null,
         sliceMetadata: null,
+        sliceStageViews: null,
         views: emptyViews(),
         stl: "",
         renderEvidence: null,
@@ -2438,6 +2536,7 @@ export default function App() {
               currentCode: code,
               review: null,
               sliceMetadata: null,
+              sliceStageViews: null,
               views: emptyViews(),
               stl: "",
               renderEvidence: null,
@@ -2533,6 +2632,7 @@ export default function App() {
               currentCode: finalCode,
               review: null,
               sliceMetadata: rendered.sliceMetadata,
+              sliceStageViews: rendered.sliceStageViews,
               views: rendered.views,
               stl: rendered.stl,
               compilerOutput: `${rendered.diagnostics}\n${tr("compiledDraft")}`,
@@ -2561,7 +2661,10 @@ export default function App() {
           code: finalCode,
           views: rendered.views,
           stl: rendered.stl,
-          renderEvidence: rendered.evidence
+          renderEvidence: rendered.evidence,
+          sliceMetadata: rendered.sliceMetadata,
+          sliceStageViews: rendered.sliceStageViews,
+          sliceToolpath: rendered.sliceToolpath
         });
       }
     });
@@ -2685,6 +2788,7 @@ export default function App() {
       currentCode: code,
       review: null,
       sliceMetadata: null,
+      sliceStageViews: null,
       stl: "",
       views: emptyViews(),
       renderEvidence: null,
@@ -3050,14 +3154,11 @@ export default function App() {
             gcodeText={sliceGcodeText}
             locale={locale}
             sliceMetadata={project.sliceMetadata}
+            sliceStageViews={project.sliceStageViews}
             stl={project.stl}
             toolpath={sliceToolpath}
+            views={project.views}
           />
-          <div className="viewGrid">
-            {VIEW_KEYS.map((key) => (
-              <ViewImage key={key} label={tr(VIEW_LABEL_KEYS[key])} src={project.views[key]} />
-            ))}
-          </div>
 
           {hasRenderedViews || project.stl || project.currentCode.trim() ? (
             <section className="renderAssetPanel" aria-label={tr("renderOutputs")}>
@@ -3567,15 +3668,6 @@ function projectTitle(project: ProjectState, fallback: string): string {
     return fallback;
   }
   return requirement.length > 28 ? `${requirement.slice(0, 28)}...` : requirement;
-}
-
-function ViewImage(props: { label: string; src: string }) {
-  return (
-    <figure className="viewTile">
-      {props.src ? <img alt={props.label} src={props.src} /> : <div />}
-      <figcaption>{props.label}</figcaption>
-    </figure>
-  );
 }
 
 function renderMcpStageMessageKey(stage: RenderMcpStage): MessageKey {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { describeSupportLocations, parseGcodeToolpath } from "./gcodeParse";
+import { describeSupportLocations, findSliceProgressStages, parseGcodeToolpath } from "./gcodeParse";
 
 const SAMPLE_GCODE = `
 ;LAYER:0
@@ -110,5 +110,74 @@ G1 X-9 Y-9 Z9 E4
 `;
     const toolpath = parseGcodeToolpath(gcode);
     expect(describeSupportLocations(toolpath, 1)).toHaveLength(1);
+  });
+});
+
+describe("findSliceProgressStages", () => {
+  it("returns all-zero, non-support stages for an empty toolpath", () => {
+    const toolpath = parseGcodeToolpath("");
+    expect(findSliceProgressStages(toolpath)).toEqual({
+      usedSupportRange: false,
+      startLayer: 0,
+      middleLayer: 0,
+      endLayer: 0
+    });
+  });
+
+  it("locates the first, middle, and last layer containing support material", () => {
+    // 6 layers (0-5); support appears on layers 1, 3, and 4 only.
+    const gcode = `
+;LAYER:0
+;TYPE:FILL
+G1 X1 Y0 E1
+;LAYER:1
+;TYPE:SUPPORT
+G1 X1 Y1 E2
+;LAYER:2
+;TYPE:FILL
+G1 X1 Y2 E3
+;LAYER:3
+;TYPE:SUPPORT
+G1 X1 Y3 E4
+;LAYER:4
+;TYPE:SUPPORT
+G1 X1 Y4 E5
+;LAYER:5
+;TYPE:FILL
+G1 X1 Y5 E6
+`;
+    const toolpath = parseGcodeToolpath(gcode);
+    expect(toolpath.layerCount).toBe(6);
+    expect(findSliceProgressStages(toolpath)).toEqual({
+      usedSupportRange: true,
+      startLayer: 2, // 0-indexed layer 1 -> 1-based
+      middleLayer: 4, // round((1 + 4) / 2) = 3 (0-indexed) -> 1-based
+      endLayer: 5 // 0-indexed layer 4 -> 1-based
+    });
+  });
+
+  it("falls back to overall print progress when there is no support material", () => {
+    const gcode = `
+;LAYER:0
+;TYPE:FILL
+G1 X1 Y0 E1
+;LAYER:1
+;TYPE:FILL
+G1 X1 Y1 E2
+;LAYER:2
+;TYPE:FILL
+G1 X1 Y2 E3
+;LAYER:3
+;TYPE:FILL
+G1 X1 Y3 E4
+`;
+    const toolpath = parseGcodeToolpath(gcode);
+    expect(toolpath.layerCount).toBe(4);
+    expect(findSliceProgressStages(toolpath)).toEqual({
+      usedSupportRange: false,
+      startLayer: 1,
+      middleLayer: 2,
+      endLayer: 4
+    });
   });
 });

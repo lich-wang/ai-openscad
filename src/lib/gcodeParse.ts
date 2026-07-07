@@ -203,3 +203,58 @@ export function describeSupportLocations(toolpath: GcodeToolpath, maxBuckets = 3
       return `${label}: ~${percent}% of support material`;
     });
 }
+
+export interface SliceProgressStages {
+  usedSupportRange: boolean;
+  // 1-based layer numbers, matching the "up to layer N" convention used by
+  // layerEndSegment/the interactive layer slider (N=layerCount reveals
+  // everything).
+  startLayer: number;
+  middleLayer: number;
+  endLayer: number;
+}
+
+// Finds the layer range worth screenshotting: the first/middle/last layer
+// that actually contains support material, so a viewer can see support
+// begin, peak, and finish. Falls back to the whole print's start/middle/end
+// when there's no support at all, so the concept still applies.
+export function findSliceProgressStages(toolpath: GcodeToolpath): SliceProgressStages {
+  if (toolpath.layerCount === 0) {
+    return { usedSupportRange: false, startLayer: 0, middleLayer: 0, endLayer: 0 };
+  }
+
+  if (toolpath.supportSegmentCount > 0) {
+    let firstSupportLayer: number | null = null;
+    let lastSupportLayer: number | null = null;
+    let segmentStart = 0;
+    for (let layer = 0; layer < toolpath.layerCount; layer += 1) {
+      const segmentEnd = toolpath.layerEndSegment[layer];
+      for (let segment = segmentStart; segment < segmentEnd; segment += 1) {
+        if (toolpath.segmentTypes[segment] === SUPPORT_TYPE_CODE) {
+          if (firstSupportLayer === null) {
+            firstSupportLayer = layer;
+          }
+          lastSupportLayer = layer;
+          break;
+        }
+      }
+      segmentStart = segmentEnd;
+    }
+    if (firstSupportLayer !== null && lastSupportLayer !== null) {
+      const middleSupportLayer = Math.round((firstSupportLayer + lastSupportLayer) / 2);
+      return {
+        usedSupportRange: true,
+        startLayer: firstSupportLayer + 1,
+        middleLayer: middleSupportLayer + 1,
+        endLayer: lastSupportLayer + 1
+      };
+    }
+  }
+
+  return {
+    usedSupportRange: false,
+    startLayer: 1,
+    middleLayer: Math.max(1, Math.round(toolpath.layerCount / 2)),
+    endLayer: toolpath.layerCount
+  };
+}

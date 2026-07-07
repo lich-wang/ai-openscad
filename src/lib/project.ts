@@ -1,7 +1,9 @@
+import type { SliceStage, SliceStageImage } from "./capture";
 import { CODE_MODEL_PRESETS, VISION_MODEL_PRESETS } from "./models";
 import {
   createEmptyViewSet,
   normalizeViewSet,
+  VIEW_KEYS,
   type ViewSet
 } from "./viewSpecs";
 
@@ -17,6 +19,11 @@ export interface SliceMetadata {
   printTimeSeconds: number | null;
   filamentVolumeMm3: number | null;
   supportSegmentRatio: number | null;
+}
+
+export interface SliceStageViews {
+  usedSupportRange: boolean;
+  images: SliceStageImage[];
 }
 
 export interface RenderEvidence {
@@ -96,6 +103,7 @@ export interface ProjectState {
   renderEvidence: RenderEvidence | null;
   review: VisionReview | null;
   sliceMetadata: SliceMetadata | null;
+  sliceStageViews: SliceStageViews | null;
   stl: string;
   views: ViewSet;
   referenceImages: string[];
@@ -163,6 +171,7 @@ export function createEmptyProject(): ProjectState {
     renderEvidence: null,
     review: null,
     sliceMetadata: null,
+    sliceStageViews: null,
     stl: "",
     views: createEmptyViewSet(),
     referenceImages: [],
@@ -373,6 +382,43 @@ function asFiniteNumberOrNull(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
+const SLICE_STAGES = new Set<SliceStage>(["start", "middle", "end"]);
+const VIEW_KEY_SET = new Set(VIEW_KEYS);
+
+function normalizeSliceStageViews(value: unknown): SliceStageViews | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  const stageViews = value as Partial<SliceStageViews>;
+  if (!Array.isArray(stageViews.images)) {
+    return null;
+  }
+  const images: SliceStageImage[] = [];
+  for (const item of stageViews.images) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) {
+      continue;
+    }
+    const image = item as Partial<SliceStageImage>;
+    if (
+      !SLICE_STAGES.has(image.stage as SliceStage) ||
+      typeof image.viewKey !== "string" ||
+      !VIEW_KEY_SET.has(image.viewKey as (typeof VIEW_KEYS)[number]) ||
+      typeof image.dataUrl !== "string"
+    ) {
+      continue;
+    }
+    images.push({
+      stage: image.stage as SliceStage,
+      viewKey: image.viewKey as SliceStageImage["viewKey"],
+      dataUrl: image.dataUrl
+    });
+  }
+  return {
+    usedSupportRange: stageViews.usedSupportRange === true,
+    images
+  };
+}
+
 function normalizeRenderEvidence(value: unknown): RenderEvidence | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return null;
@@ -553,6 +599,7 @@ function hydrateProject(
     renderEvidence: normalizeRenderEvidence(source.renderEvidence),
     review: normalizeReview(source.review),
     sliceMetadata: normalizeSliceMetadata(source.sliceMetadata),
+    sliceStageViews: normalizeSliceStageViews(source.sliceStageViews),
     stl: asString(source.stl),
     views: normalizeViewSet(source.views as Parameters<typeof normalizeViewSet>[0]),
     referenceImages,

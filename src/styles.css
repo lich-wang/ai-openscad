@@ -1548,6 +1548,47 @@ textarea {
   text-align: center;
 }
 
+.sliceViewGrid {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-auto-rows: minmax(96px, 116px);
+  flex: 0 0 auto;
+  min-height: 0;
+}
+
+.sliceViewTile {
+  border: 1px solid #d7dee8;
+  border-radius: 6px;
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.sliceViewTile img,
+.sliceViewTile div {
+  background: #f8fafc;
+  display: block;
+  flex: 1;
+  height: 100%;
+  min-height: 0;
+  object-fit: contain;
+  width: 100%;
+}
+
+.sliceViewTile figcaption {
+  background: #f3f6f8;
+  color: #475467;
+  font-size: 11px;
+  line-height: 1.2;
+  min-height: 28px;
+  overflow-wrap: anywhere;
+  padding: 4px 6px;
+  text-align: center;
+}
+
 .confidence {
   color: #1f7a6d;
   font-weight: 700;
@@ -1584,7 +1625,8 @@ textarea {
   }
 
   .buttonGrid,
-  .viewGrid {
+  .viewGrid,
+  .sliceViewGrid {
     grid-template-columns: 1fr;
     grid-template-rows: none;
   }

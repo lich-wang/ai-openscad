@@ -1,6 +1,6 @@
 import * as THREE from "three";
 import { STLLoader } from "three/examples/jsm/loaders/STLLoader.js";
-import type { GcodeToolpath } from "./gcodeParse";
+import type { GcodeToolpath, SliceProgressStages } from "./gcodeParse";
 import {
   createEmptyViewSet,
   type ViewKey,
@@ -130,15 +130,28 @@ function renderOrthographicSnapshot(
   return renderer.domElement.toDataURL("image/png");
 }
 
-// Renders a subset of the standard view directions for the support-colored
-// toolpath (see gcodeParse.ts) instead of the mesh, so the vision-review
-// model can be shown where support material concentrates. Only a few views
-// are captured (not all 14) to keep the review payload small.
-export function captureToolpathHighlightViews(
+export type SliceStage = "start" | "middle" | "end";
+
+export interface SliceStageImage {
+  stage: SliceStage;
+  viewKey: ViewKey;
+  dataUrl: string;
+}
+
+const SLICE_STAGE_VIEW_KEYS: ViewKey[] = ["front", "right", "isoFrontRightTop"];
+
+// Renders the support-colored toolpath (see gcodeParse.ts) at three
+// print-progress moments — the layer where support starts, a middle layer,
+// and the layer where it ends (or, when there's no support, the same three
+// stages framed as overall print progress; see findSliceProgressStages) —
+// each from a few angles, so the vision-review model can see support
+// material appear and grow instead of just a single fully-drawn toolpath.
+export function captureSliceStageViews(
   toolpath: GcodeToolpath,
-  viewKeys: ViewKey[] = ["front", "right", "isoFrontRightTop"]
-): string[] {
-  if (toolpath.segmentCount === 0) {
+  stages: SliceProgressStages,
+  viewKeys: ViewKey[] = SLICE_STAGE_VIEW_KEYS
+): SliceStageImage[] {
+  if (toolpath.segmentCount === 0 || stages.endLayer === 0) {
     return [];
   }
 
@@ -158,14 +171,35 @@ export function captureToolpathHighlightViews(
   const material = new THREE.LineBasicMaterial({ vertexColors: true });
   scene.add(new THREE.LineSegments(geometry, material));
 
+  // Bounding box (and thus camera framing) is computed from the full
+  // toolpath above, before any draw-range changes, so all three stages
+  // share the same scale/position for visual comparison.
   const maxDimension = Math.max(size.x, size.y, size.z, 20);
   const specsByKey = new Map(VIEW_CAPTURE_SPECS.map((spec) => [spec.key, spec]));
+  const resolvedViewSpecs = viewKeys
+    .map((key) => specsByKey.get(key))
+    .filter((spec): spec is ViewCaptureSpec => Boolean(spec));
+  const stageLayers: Array<{ stage: SliceStage; layer: number }> = [
+    { stage: "start", layer: stages.startLayer },
+    { stage: "middle", layer: stages.middleLayer },
+    { stage: "end", layer: stages.endLayer }
+  ];
 
   try {
-    return viewKeys
-      .map((key) => specsByKey.get(key))
-      .filter((spec): spec is ViewCaptureSpec => Boolean(spec))
-      .map((spec) => renderOrthographicSnapshot(renderer, scene, maxDimension, spec));
+    const images: SliceStageImage[] = [];
+    for (const { stage, layer } of stageLayers) {
+      const clampedLayer = Math.min(Math.max(layer, 0), toolpath.layerCount);
+      const vertexCount = clampedLayer > 0 ? 2 * toolpath.layerEndSegment[clampedLayer - 1] : 0;
+      geometry.setDrawRange(0, vertexCount);
+      for (const spec of resolvedViewSpecs) {
+        images.push({
+          stage,
+          viewKey: spec.key,
+          dataUrl: renderOrthographicSnapshot(renderer, scene, maxDimension, spec)
+        });
+      }
+    }
+    return images;
   } finally {
     geometry.dispose();
     material.dispose();
