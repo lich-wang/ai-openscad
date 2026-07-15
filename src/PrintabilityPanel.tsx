@@ -90,7 +90,11 @@ export function PrintabilityPanel({
   }, [stl]);
 
   useEffect(() => {
-    if (!toolpath) {
+    if (toolpath) {
+      // Auto-switch to slice tab when slicing completes so the user
+      // immediately sees the toolpath preview and support analysis.
+      setActiveTab("slice");
+    } else {
       setActiveTab("model");
     }
   }, [toolpath]);
