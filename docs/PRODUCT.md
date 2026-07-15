@@ -629,6 +629,51 @@ Workbench acceptance criteria:
 - Models in millimeters.
 - Requests named parameters, stable CSG, clear module boundaries, and printable
   geometry.
+- Generated OpenSCAD must conform to the MakerWorld Parametric Model Maker (PMM)
+  authoring rules so a published listing can expose a working Customize UI where
+  end users tweak parameters and download a print-ready file:
+  - Target the official OpenSCAD 2021 release; do not rely on development-only
+    syntax or features.
+  - Use only libraries MakerWorld preloads. BOSL2 is the primary library
+    (`include <BOSL2/std.scad>`). Do not include unknown external libraries or
+    reference unknown external asset files.
+  - Expose every user-tunable value as a top-level variable annotated with
+    OpenSCAD Customizer magic comments so PMM renders real controls: sliders
+    (`// [min:max]` or `// [min:step:max]`), dropdowns (`// [a, b]` or
+    `// [value:Label]`), boolean checkboxes, text fields (with an optional
+    `// [maxlength]`) for personalized names/labels, and the MakerWorld PMM
+    extensions `// color` and `// font`. Group related parameters with
+    `/* [Group] */` and place internal-only values in the top block under a
+    `/* [Hidden] */` header.
+  - Make the customizer usable: give parameters descriptive, human-readable
+    names (the widget label is derived from the variable name), add a short
+    description comment on the line above each user-facing parameter, and choose
+    realistic bounded ranges, sensible steps, and good default values so the
+    default render is already a valid model.
+  - A one-off model with no meaningful tunable values may expose few or no
+    parameters; the PMM annotations apply where tunable values exist rather than
+    forcing artificial controls.
+- BOSL2-first modeling: BOSL2 is the preferred toolbox. Prefer BOSL2 primitives,
+  attachables, and operations (`cuboid()`, `cyl()`, `spheroid()`,
+  `rounded_prism()`, `attach()`, `linear_sweep()`, threading, hinges, etc.) over
+  hand-written geometry, and do not re-implement shapes, transforms, rounding,
+  threading, or hinges that BOSL2 already provides. MakerWorld preloads BOSL2, so
+  published models rely on it directly.
+- Preview renderer bundles BOSL2: so BOSL2-first code renders in the same local
+  render -> visual review -> iterate loop, the in-browser `openscad-wasm` preview
+  ships the BOSL2 library and mounts it into the wasm filesystem under `/BOSL2`
+  before each compile, so `include <BOSL2/std.scad>` resolves locally exactly as
+  it does on MakerWorld. The bundled set is the include-closure of
+  `include <BOSL2/std.scad>` plus the BOSL2 sub-libraries the modeling skill
+  directs the model to use (currently `hinges.scad`, `threading.scad`, and
+  `screws.scad`). If the modeling skill ever references another BOSL2
+  sub-library, its closure must be added to the bundle so the preview keeps
+  resolving what the prompt asks the model to include.
+- All parameters and named constants are declared once in a single block at the
+  very top of the file (including any values kept under `/* [Hidden] */`). Code
+  after that block (modules and the final assembly) must not introduce new
+  top-level constants or parameters; it consumes the top-level parameters and
+  may only compute derived values as locals inside modules or functions.
 - Draft-generation prompts include a browser render complexity budget: generated
   code should avoid many-layer stacked extrusions, dense decorative arrays,
   per-layer boolean operations, and high segment counts during normal

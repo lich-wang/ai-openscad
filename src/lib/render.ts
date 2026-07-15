@@ -268,6 +268,34 @@ export async function renderOpenScadToStl(
   return (await renderOpenScadToStlWithBackend(instance, code)).stl;
 }
 
+// openscad-wasm creates a fresh Module per compile, so track which instances
+// already have BOSL2 mounted to avoid rewriting the library on worker reuse.
+const bosl2MountedInstances = new WeakSet<object>();
+
+// MakerWorld preloads BOSL2 and generated models are BOSL2-first, so mount the
+// bundled std-closure into the wasm filesystem. OpenSCAD resolves an
+// `include <BOSL2/std.scad>` against the directory of the main file (`/`, where
+// `/input.scad` lives), so writing the library under `/BOSL2` makes the include
+// resolve locally exactly as it does on MakerWorld.
+async function mountBosl2Library(openscadFs: {
+  mkdirTree?: (path: string) => void;
+  writeFile: (path: string, contents: string) => void;
+}): Promise<void> {
+  if (bosl2MountedInstances.has(openscadFs)) {
+    return;
+  }
+  const { BOSL2_FILES } = await import("./bosl2Assets");
+  try {
+    openscadFs.mkdirTree?.("/BOSL2");
+  } catch {
+    // Directory may already exist on a reused runtime; writes below still apply.
+  }
+  for (const [name, contents] of Object.entries(BOSL2_FILES)) {
+    openscadFs.writeFile(`/BOSL2/${name}`, contents);
+  }
+  bosl2MountedInstances.add(openscadFs);
+}
+
 export async function renderOpenScadToStlWithBackend(
   instance: OpenSCADInstance,
   code: string
@@ -281,6 +309,7 @@ export async function renderOpenScadToStlWithBackend(
   }
 
   try {
+    await mountBosl2Library(openscad.FS);
     openscad.FS.writeFile("/input.scad", code);
     const exitCode = openscad.callMain([
       "/input.scad",

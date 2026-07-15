@@ -284,6 +284,62 @@ describe("WebRenderMcpAdapter", () => {
     ]);
   });
 
+  it("mounts the bundled BOSL2 library into the wasm filesystem before compiling", async () => {
+    const files = new Map<string, string>();
+    const madeDirs: string[] = [];
+    const instance = {
+      renderToStl: async () => {
+        throw new Error("default backend should not run");
+      },
+      getInstance: () => ({
+        callMain: () => {
+          files.set("/output.stl", "solid bosl2\nendsolid bosl2");
+          return 0;
+        },
+        FS: {
+          mkdirTree: (path: string) => {
+            madeDirs.push(path);
+          },
+          writeFile: (path: string, contents: string) => files.set(path, contents),
+          readFile: (path: string) => files.get(path) ?? "",
+          unlink: (path: string) => files.delete(path)
+        }
+      })
+    };
+
+    await renderOpenScadToStlWithBackend(
+      instance as never,
+      "include <BOSL2/std.scad>\ncuboid(10);"
+    );
+
+    // The /BOSL2 directory must be created before files are written (real
+    // emscripten FS.writeFile throws ENOENT otherwise).
+    expect(madeDirs).toContain("/BOSL2");
+    // The std-closure must be mounted under /BOSL2 so the include resolves.
+    expect(files.has("/BOSL2/std.scad")).toBe(true);
+    expect(files.get("/BOSL2/std.scad")).toContain("LibFile: std.scad");
+    expect(files.has("/BOSL2/version.scad")).toBe(true);
+    expect(files.has("/BOSL2/shapes3d.scad")).toBe(true);
+  });
+
+  it("resolves include <BOSL2/std.scad> against the real wasm build", async () => {
+    const errors: string[] = [];
+    const instance = await createOpenSCAD({
+      printErr: (text) => errors.push(text)
+    });
+
+    const stl = await renderOpenScadToStl(
+      instance,
+      "include <BOSL2/std.scad>\ncuboid([10, 10, 10]);"
+    );
+
+    expect(stl).toContain("solid");
+    expect(stl).toContain("endsolid");
+    const joined = errors.join("\n");
+    expect(joined).not.toContain("Can't open include file");
+    expect(joined).not.toContain("Ignoring unknown module");
+  }, 30_000);
+
   it("falls back to the default backend when Manifold rendering fails", async () => {
     const instance = {
       renderToStl: async () => "solid fallback\nendsolid fallback",

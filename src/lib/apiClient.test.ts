@@ -143,6 +143,22 @@ describe("apiClient prompt assembly", () => {
     expect(systemPrompt).toContain("knuckle_hinge");
   });
 
+  it("makes generation prompts MakerWorld PMM + BOSL2-first with top parameters", () => {
+    const request = buildGenerationRequest({
+      apiKey: "sk-user",
+      modelId: "mimo-v2.5",
+      requirement: "生成一个可定制的姓名钥匙扣",
+      precision: "draft"
+    });
+
+    const systemPrompt = String(request.body.messages[0].content);
+    expect(systemPrompt).toContain("MakerWorld Parametric Model Maker");
+    expect(systemPrompt).toContain("include <BOSL2/std.scad>");
+    expect(systemPrompt).toContain("[min:max]");
+    expect(systemPrompt).toContain("/* [Hidden] */");
+    expect(systemPrompt).toContain("at the very top");
+  });
+
   it("adds the draft render complexity budget to generation prompts", () => {
     const request = buildGenerationRequest({
       apiKey: "sk-user",
@@ -448,6 +464,9 @@ describe("apiClient prompt assembly", () => {
     expect(systemPrompt).toContain("wall thickness");
     expect(systemPrompt).toContain("assembly clearance");
     expect(systemPrompt).toContain("BOSL2");
+    // Revision requests must keep the MakerWorld PMM conformance rules.
+    expect(systemPrompt).toContain("MakerWorld Parametric Model Maker");
+    expect(systemPrompt).toContain("include <BOSL2/std.scad>");
   });
 
   it("asks the vision model for a correction prompt instead of revised code", () => {
