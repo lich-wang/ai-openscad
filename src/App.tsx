@@ -1,6 +1,7 @@
 import {
   Code2,
   Download,
+  ExternalLink,
   Eye,
   FileUp,
   KeyRound,
@@ -2796,6 +2797,24 @@ export default function App() {
     }));
   }
 
+  function handleOpenInMakerLab() {
+    const scadCode = projectRef.current.currentCode;
+    if (!scadCode.trim()) {
+      return;
+    }
+    const MAKERLAB_URL =
+      "https://makerworld.com.cn/zh/makerlab/parametricModelMaker?pageType=home&from=makerlab";
+    navigator.clipboard.writeText(scadCode).then(
+      () => {
+        window.open(MAKERLAB_URL, "_blank", "noopener,noreferrer");
+      },
+      () => {
+        // Clipboard write may fail in insecure contexts; still open MakerLab.
+        window.open(MAKERLAB_URL, "_blank", "noopener,noreferrer");
+      }
+    );
+  }
+
   function handleImport(event: ChangeEvent<HTMLInputElement>) {
     cancelActiveAutoRun();
     cancelWorkflows();
@@ -3203,6 +3222,15 @@ export default function App() {
                 >
                   <Download size={14} />
                   <span>{tr("downloadStl")}</span>
+                </button>
+                <button
+                  disabled={!project.currentCode.trim()}
+                  onClick={handleOpenInMakerLab}
+                  title={tr("makerlabHint")}
+                  type="button"
+                >
+                  <ExternalLink size={14} />
+                  <span>{tr("openInMakerLab")}</span>
                 </button>
               </div>
             </section>
