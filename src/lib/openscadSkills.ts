@@ -1,5 +1,6 @@
 import { buildModelingInstruction } from "./modelSkill";
 import { buildLanguageInstruction } from "./languageSkill";
+import { buildBosl2SkillInstruction } from "./bosl2Skill";
 import {
   buildRenderPrecisionInstruction,
   type RenderPrecision
@@ -23,8 +24,9 @@ export function buildCodeSystemPrompt(
   return `${OPENSCAD_SKILL_CONTEXT}
 ${buildLanguageInstruction(sourceText)}
 ${buildModelingInstruction()}
+${buildBosl2SkillInstruction()}
 ${buildRenderPrecisionInstruction(precision)}
-
+ 
 Output requirements:
 - Produce valid OpenSCAD.
 - Include concise comments for key modules.
@@ -43,6 +45,7 @@ export function buildRevisionPrompt(input: {
 }): string {
   return `Revise this OpenSCAD model after visual review.
 ${buildRenderPrecisionInstruction(input.precision ?? "draft")}
+${buildBosl2SkillInstruction()}
 ${buildLanguageInstruction(`${input.requirement}\n${input.userNotes ?? ""}`)}
 
 Original requirement:
