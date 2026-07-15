@@ -2803,7 +2803,7 @@ export default function App() {
       return;
     }
     const MAKERLAB_URL =
-      "https://makerworld.com.cn/zh/makerlab/parametricModelMaker?pageType=home&from=makerlab";
+      "https://makerworld.com.cn/zh/makerlab/parametricModelMaker?pageType=generator";
     navigator.clipboard.writeText(scadCode).then(
       () => {
         window.open(MAKERLAB_URL, "_blank", "noopener,noreferrer");
